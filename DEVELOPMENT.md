@@ -7,48 +7,74 @@ and its current status, see [README.md](./README.md).
 
 ### Node.js
 
-Managed by [mise](https://mise.jdx.dev/). `mise.toml` pins Node 24, which is
-also the version CI uses for lint, type check, build and release.
+Provisioned by pnpm, not by mise. `pnpm-workspace.yaml` sets
+`useNodeVersion: 24.20.0`; `pnpm install` downloads that Node and puts it on
+PATH for every `pnpm run` and `pnpm exec`, which is every gate.
+
+Nothing else in the repository provisions a Node, so **reach it through pnpm**.
+A bare `node` runs whatever your shell already had — possibly nothing, and
+possibly a different version than the one the gates use. `pnpm exec node`,
+`pnpm exec vitest` and `pnpm run <script>` all get 24.20.0.
+
+`useNodeVersion` takes an exact version and rejects ranges: `24` crashes pnpm
+inside its own version check, and `24.x` and `lts` are rejected as invalid. So
+the patch version is written out, and unlike the `node = "24"` it replaces it
+does **not** follow 24.x on its own — bumping it is a deliberate edit to
+`pnpm-workspace.yaml`, and no update tool watches it.
 
 `package.json` declares `"engines": { "node": ">=22" }` and CI runs the test
 suite on Node 22, 24 and 26, so a change that only works on 24 will fail there.
-The matrix reaches those versions by setting `MISE_NODE_VERSION` per job, which
-overrides the pin; passing `node@22` to `mise install` does not, because
-`mise.toml` outranks it.
+pnpm 10 exposes no environment variable for `useNodeVersion`, only a
+per-invocation flag, so each matrix job resolves its major to an exact version
+and passes it to every pnpm command it runs. Do the same to try another version
+locally:
 
-If you do not use mise, install Node 24 yourself; nothing else in the
-repository depends on mise.
+```sh
+pnpm --config.use-node-version="$(pnpm env list --remote 22 | tail -1)" run test
+```
+
+If you do not use mise, install pnpm 10.34.5 yourself; nothing else in the
+repository depends on mise, and Node follows from pnpm either way.
 
 ### pnpm
 
-pnpm is the only supported package manager, and mise provisions it alongside
-Node.
+pnpm is the only supported package manager, and the only tool mise provisions.
 
 - `mise.toml` pins the version under `[tools]`, so `pnpm` is on PATH for
-  anyone — and any CI job — with a mise-managed toolchain.
+  anyone — and any CI job — with a mise-managed toolchain. This is not circular
+  with Node coming from pnpm: the pnpm mise installs is a standalone executable
+  with Node.js linked into it, so it runs on a machine that has no `node`,
+  `npm` or `npx` at all.
 - The same version is declared in `package.json`'s `packageManager` field, with
   a hex integrity hash over the pnpm tarball. pnpm reads the field itself and
   re-downloads if the running version disagrees, so **the two have to be bumped
   together**. Regenerate the hash with `corepack use pnpm@<version>` rather
   than writing one by hand; the base64 digest npm publishes as `dist.integrity`
   is the same bytes in an encoding corepack rejects.
-- `preinstall` runs `npx only-allow pnpm`, which aborts the install if it was
-  started by npm or Yarn. This produces a hard error, not a warning.
+- `preinstall` runs `only-allow pnpm`, which aborts the install if it was
+  started by npm or Yarn. This produces a hard error, not a warning. It is
+  resolved from `node_modules/.bin` rather than through `npx`, because the Node
+  pnpm provisions is a single `node` binary — there is no npm or npx beside it.
 
 [Corepack](https://nodejs.org/api/corepack.html) is deliberately not part of
 the setup. Node stopped bundling it after 24, so `corepack enable` means
 something different on each Node version in the test matrix and cannot be
-relied on to put `pnpm` anywhere in particular.
+relied on to put `pnpm` anywhere in particular. It is also not reachable from
+the toolchain any more: the Node pnpm installs ships neither corepack nor npm.
+Running `corepack use` to regenerate the `packageManager` hash therefore needs
+a Node of your own, outside this project.
 
 ## Setup
 
 ```sh
-mise install     # provisions Node and pnpm
-pnpm install     # also runs `prepare` -> `lefthook install`
+mise install     # provisions pnpm
+pnpm install     # provisions Node, and runs `prepare` -> `lefthook install`
 ```
 
 `pnpm install` installs the git hooks through the `prepare` lifecycle script,
-so no separate hook-installation step is needed.
+so no separate hook-installation step is needed. It also downloads the Node
+from `useNodeVersion` on first run, so the first install is slower than later
+ones.
 
 ## Scripts
 
@@ -159,8 +185,9 @@ that a compromised publish has a window to be caught and unpublished.
 - `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320` (4320 minutes = 3 days).
   pnpm reads only auth and registry settings from `.npmrc`, so this has to live
   here. See [pnpm settings](https://pnpm.io/settings#minimumreleaseage).
-- `.npmrc` sets `min-release-age=3` (days), which covers npm — used by the
-  release workflow and by anything a contributor runs through `npx`. See the
+- `.npmrc` sets `min-release-age=3` (days), which covers npm. The release
+  workflow is the one place npm runs; the toolchain here provides no npm or
+  npx, so the setting only applies if you bring your own. See the
   [npm config reference](https://docs.npmjs.com/cli/v11/using-npm/config#min-release-age).
 
 **Consequence:** a dependency version published less than 3 days ago will not
@@ -189,6 +216,20 @@ targeting `main`, and as a reusable workflow called by the release. Four jobs:
 | `build`      | `pnpm build`, then imports `dist/index.js` in a real Node process and asserts the entry loads and `dist/index.d.ts` exists. |
 | `test`       | `pnpm test` on a Node 22 / 24 / 26 matrix, `fail-fast: false`. Each job asserts that the Node major it actually got is the one it advertises. |
 
+Node comes from `useNodeVersion` in every job, so `lint`, `typecheck` and
+`build` run on the same 24.20.0 a contributor gets. The `test` matrix overrides
+it per job: it resolves the major to an exact version with
+`pnpm env list --remote <major>` and passes `--config.use-node-version` to each
+pnpm command, because pnpm 10 has no environment variable that would set it
+once for the whole job. A command that forgets the flag silently runs 24.20.0
+instead, which is what the assertion catches — it fails both when a job did not
+get the major it is named after and when the version that ran is not the one
+that was resolved.
+
+Nothing in CI calls a bare `node`. The runner images ship their own, and it
+would quietly service any step that asked for it, so the build job's smoke test
+goes through `pnpm exec node`.
+
 Installs use `pnpm install --frozen-lockfile`, so `pnpm-lock.yaml` must be
 committed alongside any `package.json` change.
 
@@ -210,7 +251,10 @@ What it does:
    committed back.
 3. Builds.
 4. Upgrades to the latest npm (Trusted Publishing needs the OIDC support added
-   in npm 11.5.1, which is newer than the npm bundled with Node 24).
+   in npm 11.5.1, which is newer than the npm bundled with Node 24). The
+   publish job is the only one that needs an npm at all, and gets it from
+   `actions/setup-node`; the build in that job still runs on the Node pnpm
+   provisions.
 5. `npm publish --provenance --access public`, authenticated by
    [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers) via
    GitHub OIDC (`id-token: write`) — there is no npm token anywhere in the

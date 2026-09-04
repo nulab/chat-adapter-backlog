@@ -38,6 +38,10 @@ pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
   `esm-only` profile. Touching `exports`, `files` or the build config means
   running the build, not just the type check.
 - The test matrix is Node 22 / 24 / 26. Do not use APIs newer than Node 22.
+- Node comes from pnpm (`useNodeVersion` in `pnpm-workspace.yaml`), not from
+  mise and not from the machine. A bare `node` is not the project's Node and
+  may not exist at all; run it as `pnpm exec node`. To check another major:
+  `pnpm --config.use-node-version="$(pnpm env list --remote 22 | tail -1)" run test`.
 
 ## Chat SDK adapter contract
 
