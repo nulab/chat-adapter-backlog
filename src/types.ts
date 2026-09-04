@@ -184,6 +184,23 @@ export interface BacklogInstallation {
 }
 
 /**
+ * One configured Backlog installation after shape A/B resolution and
+ * validation (docs/specs/adapter.md §3.2): a fully-formed `BacklogInstallation`
+ * with its host lowercased and exactly one of `apiKey`/`accessToken` present.
+ * `createApi` receives this, not the raw config, so a test seam or a future
+ * `backlog-js`-backed port never has to re-derive validation the constructor
+ * already did.
+ */
+export interface ResolvedInstallation {
+  host: string;
+  apiKey?: Resolvable;
+  accessToken?: Resolvable;
+  botUserId: number;
+  botUserName: string;
+  webhookSecret?: string;
+}
+
+/**
  * Constructor config for `BacklogAdapter` / `createBacklogAdapter`
  * (docs/specs/adapter.md §3.2). Shape A (single space, every field falling
  * back to an environment variable) and shape B (`installations`) are
@@ -207,4 +224,13 @@ export interface BacklogAdapterConfig {
   logger?: Logger;
   rateLimit?: { maxWaitMs?: number; maxRetries?: number };
   maxWebhookBodyBytes?: number;
+  /**
+   * Test seam / escape hatch: receives the resolved installation and returns
+   * the Backlog API port. Typed as `unknown` here rather than the real
+   * `BacklogApi` because the client port (`src/client/**`,
+   * docs/plans/adapter-implementation.md P1) lands in a separate, parallel PR
+   * and does not exist in this one — a later PR narrows this to `BacklogApi`
+   * once the port is in place.
+   */
+  createApi?: (installation: ResolvedInstallation) => unknown;
 }
