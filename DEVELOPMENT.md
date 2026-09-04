@@ -18,19 +18,29 @@ repository depends on mise.
 
 ### pnpm
 
-pnpm is the only supported package manager.
+pnpm is the only supported package manager, and mise provisions it alongside
+Node.
 
-- The exact version lives in the `packageManager` field
-  (`pnpm@10.34.5`, with an integrity hash). [Corepack](https://nodejs.org/api/corepack.html)
-  reads it and provisions that version — mise's `postinstall` hook runs
-  `npx corepack enable`, so a mise-managed toolchain gets this for free.
+- `mise.toml` pins the version under `[tools]`, so `pnpm` is on PATH for
+  anyone — and any CI job — with a mise-managed toolchain.
+- The same version is declared in `package.json`'s `packageManager` field, with
+  a hex integrity hash over the pnpm tarball. pnpm reads the field itself and
+  re-downloads if the running version disagrees, so **the two have to be bumped
+  together**. Regenerate the hash with `corepack use pnpm@<version>` rather
+  than writing one by hand; the base64 digest npm publishes as `dist.integrity`
+  is the same bytes in an encoding corepack rejects.
 - `preinstall` runs `npx only-allow pnpm`, which aborts the install if it was
   started by npm or Yarn. This produces a hard error, not a warning.
+
+[Corepack](https://nodejs.org/api/corepack.html) is deliberately not part of
+the setup. Node stopped bundling it after 24, so `corepack enable` means
+something different on each Node version in the test matrix and cannot be
+relied on to put `pnpm` anywhere in particular.
 
 ## Setup
 
 ```sh
-mise install     # provisions Node and enables corepack
+mise install     # provisions Node and pnpm
 pnpm install     # also runs `prepare` -> `lefthook install`
 ```
 

@@ -1,8 +1,6 @@
 [tools]
 node = "24"
-
-[hooks]
-postinstall = "npx corepack enable"
-
-[settings]
-experimental = true
+# Kept in lockstep with package.json's `packageManager`. Bump both together:
+# mise puts pnpm on PATH, while `packageManager` is what pnpm itself and any
+# corepack-based toolchain read, and a mismatch makes pnpm re-download.
+pnpm = "10.34.5"
