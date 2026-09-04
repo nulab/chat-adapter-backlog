@@ -12,6 +12,9 @@ also the version CI uses for lint, type check, build and release.
 
 `package.json` declares `"engines": { "node": ">=22" }` and CI runs the test
 suite on Node 22, 24 and 26, so a change that only works on 24 will fail there.
+The matrix reaches those versions by setting `MISE_NODE_VERSION` per job, which
+overrides the pin; passing `node@22` to `mise install` does not, because
+`mise.toml` outranks it.
 
 If you do not use mise, install Node 24 yourself; nothing else in the
 repository depends on mise.
@@ -184,7 +187,7 @@ targeting `main`, and as a reusable workflow called by the release. Four jobs:
 | `lint`       | `pnpm lint` then `pnpm format:check`.                                              |
 | `typecheck`  | `pnpm typecheck`.                                                                  |
 | `build`      | `pnpm build`, then imports `dist/index.js` in a real Node process and asserts the entry loads and `dist/index.d.ts` exists. |
-| `test`       | `pnpm test` on a Node 22 / 24 / 26 matrix, `fail-fast: false`.                      |
+| `test`       | `pnpm test` on a Node 22 / 24 / 26 matrix, `fail-fast: false`. Each job asserts that the Node major it actually got is the one it advertises. |
 
 Installs use `pnpm install --frozen-lockfile`, so `pnpm-lock.yaml` must be
 committed alongside any `package.json` change.

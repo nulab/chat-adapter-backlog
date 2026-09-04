@@ -75,12 +75,32 @@ jobs:
 
     name: Test (Node ${{ matrix.node-version }})
 
+    # `install_args: node@22` does not change which Node the job runs:
+    # mise.toml's own `node = "24"` outranks an argument to `mise install`, so
+    # the matrix installed the requested version and then executed 24 anyway.
+    # MISE_NODE_VERSION is an override rather than an extra request.
+    env:
+      MISE_NODE_VERSION: ${{ matrix.node-version }}
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          install_args: node@${{ matrix.node-version }}
+          # Each entry provisions a different toolchain, so they must not share
+          # one cache entry.
+          cache_key_prefix: mise-node${{ matrix.node-version }}
+
+      # Asserted rather than echoed: a matrix that quietly tests one version
+      # three times still reports three green checks, and `engines.node` is
+      # only meaningfully covered while this holds.
+      - name: Verify the provisioned Node
+        env:
+          EXPECTED_NODE_MAJOR: ${{ matrix.node-version }}
+        run: |
+          node -v
+          pnpm --version
+          test "$(node -p 'process.versions.node.split(".")[0]')" = "$EXPECTED_NODE_MAJOR"
 
       - run: pnpm install --frozen-lockfile
 
