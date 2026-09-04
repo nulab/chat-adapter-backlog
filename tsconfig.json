@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    // Nothing here emits -- tsdown builds, and the `typecheck` script is
+    // `tsc --noEmit`. These two are read by tsdown's declaration pass: with
+    // `sourcemap` on it writes a `sourceMappingURL` into every `.d.ts` and
+    // only emits the matching `.d.ts.map` when `declarationMap` is set, so
+    // dropping them leaves the published types pointing at missing files.
+    "declaration": true,
+    "declarationMap": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*", "tsdown.config.ts", "vitest.config.ts"],
+  "exclude": ["node_modules", "dist", "coverage"]
+}

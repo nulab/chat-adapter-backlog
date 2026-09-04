@@ -1,0 +1,11 @@
+# pnpm reads only auth and registry settings from `.npmrc`; everything else
+# belongs here. `minimum-release-age` happened to work from there in 10.34.4
+# and `minimum-release-age-exclude` did not, which left the delay on with its
+# exemption silently off.
+#
+# 4320 minutes (3 days) matches nulab/backlog-mcp-server and the
+# `min-release-age=3` that nulab/backlog-js sets for npm.
+minimumReleaseAge: 4320
+
+onlyBuiltDependencies:
+  - lefthook

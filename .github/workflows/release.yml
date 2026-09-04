@@ -1,0 +1,102 @@
+name: Release
+run-name: 'Release: ${{ inputs.newversion }}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      newversion:
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        description: New version
+        default: patch
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  publish:
+    needs: [ci]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      NEW_VERSION_TYPE: ${{ inputs.newversion }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Get the latest tag
+        id: get_latest_tag
+        run: |
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "latest_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version
+        id: bump_version
+        env:
+          LATEST_TAG: ${{ steps.get_latest_tag.outputs.latest_tag }}
+        run: |
+          # package.json stays at 0.0.0 on main; git tags are the version of
+          # record. `npm version` only bumps relative to the current value, so
+          # the tag has to be written in before the bump.
+          npm version "$LATEST_TAG" --no-git-tag-version --allow-same-version
+          npm version "$NEW_VERSION_TYPE" --no-git-tag-version
+
+          new_version=$(node -p "require('./package.json').version")
+          echo "new_tag=v${new_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: pnpm run build
+
+      # Trusted Publishing needs the OIDC support added in npm 11.5.1; the npm
+      # bundled with Node 24 predates it and falls back to asking for a token.
+      - name: Update npm for Trusted Publishing
+        run: npm install -g npm@latest
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+
+      - name: Push version tag
+        env:
+          NEW_TAG: ${{ steps.bump_version.outputs.new_tag }}
+        run: |
+          git tag "${NEW_TAG}"
+          git push origin "${NEW_TAG}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_TAG: ${{ steps.bump_version.outputs.new_tag }}
+          PREVIOUS_TAG: ${{ steps.get_latest_tag.outputs.latest_tag }}
+        run: |
+          flags="--generate-notes"
+          if git tag --list | grep -qx "$PREVIOUS_TAG"; then
+            flags="$flags --notes-start-tag $PREVIOUS_TAG"
+          fi
+          gh release create "$NEW_TAG" $flags
