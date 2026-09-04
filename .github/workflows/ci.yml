@@ -73,9 +73,9 @@ jobs:
       # condition or an unresolvable import in the bundle is invisible to every
       # other job.
       #
-      # Through `pnpm exec`, not a bare `node`: the runner image ships its own
-      # Node and would service this step with a version nothing in the
-      # repository selected.
+      # Through `pnpm exec`, not a bare `node`: this job installs the runtime,
+      # so `pnpm exec` reaches the Node the lockfile pins instead of whatever
+      # the runner image happens to ship.
       - name: Smoke test the built entry
         run: |
           pnpm exec node -e "import('./dist/index.js').then((m) => { if (m.ADAPTER_ID !== 'backlog') { throw new Error('esm entry is broken'); } })"
@@ -83,47 +83,61 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    name: Test
+    name: Test (Node ${{ matrix.node }})
+
+    strategy:
+      # One unsupported major should report itself, not hide behind the first
+      # job that fails.
+      fail-fast: false
+      matrix:
+        # The majors `engines.node` claims to support. `devEngines.runtime` is
+        # the one version development happens on; this is the range the
+        # published package promises, and it is only a promise if something
+        # runs on all of it.
+        node: [20, 22, 24, 26]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           standalone: true
 
-      - run: pnpm install --frozen-lockfile
+      # `--no-runtime` is what makes this a matrix at all. Every other job
+      # installs the Node that `devEngines.runtime` pins, which lands a
+      # `node_modules/.bin/node` that shadows PATH for every `pnpm run` and
+      # `pnpm exec` — no flag, environment variable or setting overrides it,
+      # so a matrix without this would run Node 26 four times. The flag skips
+      # fetching and linking the runtime and leaves the rest of the install
+      # alone, so the lockfile still verifies under `--frozen-lockfile` and
+      # the Node this job asked for is the only one on PATH.
+      - run: pnpm install --frozen-lockfile --no-runtime
 
-      # `pnpm exec node` exits 0 even when nothing provisioned a runtime: with
-      # no `node_modules/.bin/node` to shadow it, the runner image's own Node
-      # services the step and the suite silently passes on a version the
-      # repository never selected. The range is read out of `package.json` so
-      # that bumping `devEngines.runtime` does not need this file edited too.
+      # Without this the matrix can go green while testing one version four
+      # times, which is exactly what it did before `--no-runtime`: a linked
+      # runtime silently serviced every job. Both halves are load-bearing —
+      # the major has to match, and it has to come from outside node_modules.
       #
       # Asserted inside the Node process rather than by capturing its output:
       # pnpm writes its own progress to stdout, which would make the captured
       # version a value with an unpredictable preamble.
-      - name: Verify the provisioned Node satisfies devEngines.runtime
+      - name: Verify the running Node is the one this job asked for
+        env:
+          EXPECTED_MAJOR: ${{ matrix.node }}
         run: |
           pnpm exec node -e '
-            const { devEngines } = require("./package.json");
-            const { version: provisioned } = require("./node_modules/node/package.json");
-            const range = devEngines.runtime.version;
+            const expected = process.env.EXPECTED_MAJOR;
             const actual = process.versions.node;
             console.log(`node ${actual} from ${process.execPath}`);
-            if (actual !== provisioned) {
-              throw new Error(`ran Node ${actual}, not the ${provisioned} pnpm provisioned`);
-            }
-            // Comparing majors is the whole of the range check only because
-            // the range is a caret: every 24.x satisfies ^24.0.0. Rather than
-            // hand-roll semver for shapes that are not in use, a range in any
-            // other shape is rejected here instead of waved through.
-            const expected = /^\^(\d+)\./.exec(range)?.[1];
-            if (!expected) {
-              throw new Error(`this check only understands a caret range, not ${range}`);
+            if (process.execPath.includes("node_modules")) {
+              throw new Error(`ran a pnpm-linked runtime at ${process.execPath}, not the Node ${expected} this job asked for`);
             }
             if (actual.split(".")[0] !== expected) {
-              throw new Error(`ran Node ${actual}, which does not satisfy devEngines.runtime ${range}`);
+              throw new Error(`ran Node ${actual}, not the Node ${expected} this job asked for`);
             }
           '
           pnpm --version
