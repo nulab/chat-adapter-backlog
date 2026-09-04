@@ -7,14 +7,12 @@ and its current status, see [README.md](./README.md).
 
 ### Node.js
 
-Two Nodes are involved, and only one of them runs your code.
-
-The **runtime** — the one every gate executes on — comes from pnpm.
-`package.json` declares it as a range:
+One Node runs everything, and pnpm provisions it. `package.json` declares it as
+a range:
 
 ```json
 "devEngines": {
-  "runtime": { "name": "node", "version": "^24.0.0", "onFail": "download" }
+  "runtime": { "name": "node", "version": "^26.0.0", "onFail": "download" }
 }
 ```
 
@@ -26,67 +24,81 @@ gets bytes that were pinned rather than whatever nodejs.org serves that day.
 
 **Reach it through pnpm.** `pnpm exec node`, `pnpm exec vitest`,
 `pnpm run <script>` and a bare `node` inside a script all resolve
-`node_modules/.bin` first and get the pinned runtime.
+`node_modules/.bin` first and get the pinned runtime. A bare `node` in your own
+shell is *not* this Node, and on a machine set up only for this repository it
+does not exist at all — that is expected, not a broken setup.
 
-The other Node is a **bootstrap**: `mise.toml` also installs `node = "24"`, and
-that is what a bare `node` in your own shell is. Same major, not necessarily
-the same patch, and not what any gate runs — it exists because pnpm 10.34.5
-cannot install this repository from `devEngines.runtime` alone on a machine
-with no Node at all. It runs dependency install scripts before it links the
-runtime's bin, so lefthook's `postinstall` dies on `node: command not found`
-([pnpm/pnpm#14358](https://github.com/pnpm/pnpm/issues/14358), fixed in pnpm 12
-and never in 10.x); and it checks dependency `engines` against the Node 20
-linked into the standalone pnpm binary, which silently drops the platform
-packages oxlint, oxfmt and rolldown load their native bindings from — a green
-install followed by a broken `pnpm lint`. `mise.toml` carries the same note.
+You do not need a Node to get a Node. `pnpm install` bootstraps from nothing
+but pnpm itself, because the standalone pnpm build has Node.js linked into the
+binary. This did not work on pnpm 10, which ran dependency install scripts
+before linking the runtime's bin — lefthook's `postinstall` died on
+`node: command not found`
+([pnpm/pnpm#14358](https://github.com/pnpm/pnpm/issues/14358)) — and which
+checked dependency `engines` against the old Node linked into pnpm itself,
+silently dropping the platform packages oxlint, oxfmt and rolldown load their
+native bindings from. Both are fixed as of the pnpm this repository pins, which
+is why there is no longer a `mise.toml` provisioning a second Node to bootstrap
+with.
 
-So the bootstrap Node goes away when this repository moves to pnpm 12, and not
-before.
-
-The range follows 24.x on its own: a new patch or minor arrives on the next
+The range follows 26.x on its own: a new patch or minor arrives on the next
 unfrozen `pnpm install` and shows up as a lockfile change. Moving to another
-major means editing `devEngines.runtime.version` and `mise.toml`'s `node`
-together — they name the same major twice.
+major means editing `devEngines.runtime.version` — one place now.
 
-`@types/node` is held on the same major (`^24`), so `pnpm typecheck` checks
-against the API surface that exists at run time. Bumping it ahead of the
-runtime does not fail anything — it just quietly lets the type checker approve
-APIs the runtime does not have. Move the two together.
+`@types/node` tracks the same major (`^26`), so `pnpm typecheck` checks against
+the API surface that exists at run time. Holding it behind the runtime hides
+APIs you can use; running it ahead quietly lets the type checker approve APIs
+the runtime does not have. Move the two together.
 
-There is no per-invocation override. Because pnpm installs Node as a real
-dependency, `node_modules/.bin/node` shadows everything else, and both
-`--use-node-version` and `pnpm-workspace.yaml`'s `useNodeVersion` are accepted
-and then silently ignored — checked against the pinned 10.34.5. The
-`runtimeOnFail` setting that would reintroduce an override is documented for
-pnpm 11 and later, not for 10.x. To run the suite on another major, edit the
-range.
+There is still no per-invocation override of the runtime. Because pnpm installs
+Node as a real dependency, `node_modules/.bin/node` shadows everything else:
+`--config.useNodeVersion` and `PNPM_SHIM_BYPASS` are both accepted and then
+ignored. What does work is **`pnpm install --no-runtime`**, which skips
+fetching and linking the runtime and leaves the rest of the install alone — so
+whatever Node is on PATH is the one that runs. That flag, not an override
+setting, is how the CI test matrix reaches four majors from one lockfile. Use
+it the same way locally:
 
-`package.json` also declares `"engines": { "node": ">=22" }`. That is the range
-the published package supports, deliberately wider than the one version
-developed against — but nothing tests it: **no job exercises Node 22 or 26.**
-The Node test matrix that used to cover them was dropped when the runtime moved
-to `devEngines`, so a change that only works on 24 will pass CI.
+```sh
+pnpm install --frozen-lockfile --no-runtime   # then PATH's node runs the gates
+pnpm install                                  # restores the pinned runtime
+```
 
-If you do not use mise, install pnpm yourself — 10.14 or newer, which is where
-`devEngines.runtime` landed; 10.34.5 is what this repository pins — and have
-some Node 24 on PATH for the install, for the reasons above. Nothing else in
-the repository depends on mise, and the runtime follows from pnpm either way.
+`package.json` also declares `"engines": { "node": ">=20" }`. That is the range
+the published package supports — it matches the `engines.node` of the `chat`
+core package, so the adapter does not narrow what its own peer accepts — and
+unlike before, **it is backed by jobs**: the test matrix runs the suite on Node
+20, 22, 24 and 26. Note that the *toolchain* is stricter than the package:
+oxlint, oxfmt, rolldown and vite need Node 20.19 or newer, and tsdown needs
+22.18 or newer, so the build never runs on 20. Consumers on Node 20 are
+unaffected — they install neither.
 
 ### pnpm
 
-pnpm is the only supported package manager.
+pnpm is the only supported package manager, and it is now the only thing you
+have to install by hand.
 
-- `mise.toml` pins the version under `[tools]`, so `pnpm` is on PATH for
-  anyone — and any CI job — with a mise-managed toolchain. This is not circular
-  with mise also installing the bootstrap Node: the pnpm mise installs is a
-  standalone executable with Node.js linked into it, so pnpm itself runs on a
-  machine that has no `node`, `npm` or `npx` at all.
-- The same version is declared in `package.json`'s `packageManager` field, with
-  a hex integrity hash over the pnpm tarball. pnpm reads the field itself and
-  re-downloads if the running version disagrees, so **the two have to be bumped
-  together**. Regenerate the hash with `corepack use pnpm@<version>` rather
-  than writing one by hand; the base64 digest npm publishes as `dist.integrity`
-  is the same bytes in an encoding corepack rejects.
+Get it any way that yields the version in `packageManager` — the
+[standalone install script](https://pnpm.io/installation) is the one that needs
+nothing else present:
+
+```sh
+curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=12.2.1 sh -
+```
+
+- `package.json`'s `packageManager` field is the single place the version is
+  written down, carrying a hex integrity hash over the pnpm tarball. pnpm reads
+  the field itself and re-downloads if the running version disagrees, so a
+  mismatch costs a download rather than silently using the wrong pnpm. CI reads
+  the same field.
+- Regenerate the hash with `corepack use pnpm@<version>` rather than writing
+  one by hand; the base64 digest npm publishes as `dist.integrity` is the same
+  bytes in an encoding corepack rejects. Cross-check by base64-decoding
+  `npm view pnpm@<version> dist.integrity` to hex — it must equal what corepack
+  wrote.
+- The pinned version is deliberately **not** the newest pnpm on npm. `latest`
+  means the newest release that is at least three days old, the same quarantine
+  `minimumReleaseAge` applies to every other dependency, and pnpm ships several
+  patches a week. Bumping it is a normal dependency bump, not a special case.
 - `preinstall` runs `only-allow pnpm`, which aborts the install if it was
   started by npm or Yarn. This produces a hard error, not a warning. It is
   resolved from `node_modules/.bin` rather than through `npx`, because the Node
@@ -94,18 +106,19 @@ pnpm is the only supported package manager.
 
 [Corepack](https://nodejs.org/api/corepack.html) is deliberately not part of
 the setup. Node stopped bundling it after 24, so `corepack enable` cannot be
-relied on to put `pnpm` anywhere in particular. It is also not reachable from
-the toolchain's runtime: the Node pnpm installs is a single binary, with
-neither corepack nor npm beside it. The bootstrap Node from `mise.toml` is a
-full Node 24 and does still ship both, so that is where `corepack use` can be
-run to regenerate the `packageManager` hash.
+relied on to put `pnpm` anywhere in particular, and it is not reachable from
+the toolchain's runtime either: the Node pnpm installs is a single binary, with
+neither corepack nor npm beside it. Regenerating the `packageManager` hash is
+the one job it still has, and that needs a Node from **outside** this
+repository — any Node that still ships corepack, or `npm install -g corepack`.
 
 ## Setup
 
 ```sh
-mise install     # provisions pnpm, and a Node to bootstrap the install with
 pnpm install     # provisions the runtime, and runs `prepare` -> `lefthook install`
 ```
+
+That is the whole bootstrap, on a machine with nothing but pnpm on PATH.
 
 `pnpm install` installs the git hooks through the `prepare` lifecycle script,
 so no separate hook-installation step is needed. It also downloads the Node
@@ -233,16 +246,21 @@ intended — wait it out rather than lowering the threshold. If a fresh version
 is genuinely required, raise it in the PR instead of changing the setting
 quietly.
 
-`pnpm-workspace.yaml` also sets `onlyBuiltDependencies: [lefthook]`: lefthook is
-the only dependency allowed to run install scripts.
+`pnpm-workspace.yaml` also sets `allowBuilds: { lefthook: true }`: lefthook is
+the only dependency allowed to run install scripts. Nothing builds by default,
+and an install script from a package that is not listed there fails the install
+rather than being skipped quietly. (This replaced `onlyBuiltDependencies`,
+which pnpm 11 removed.)
 
 The Node runtime is covered by the same lockfile guarantee as any dependency,
 because `devEngines.runtime` makes pnpm install it as one — see
 [Node.js](#nodejs) above.
 
 Dependabot (`.github/dependabot.yml`) opens weekly grouped npm and
-GitHub Actions updates with its own cooldown — 7 days for any update, 30 for
-majors.
+GitHub Actions updates with its own cooldown — 3 days for any update, 7 for
+majors. The default matches `minimumReleaseAge`, so a release becomes
+installable and eligible for a PR at the same moment; a longer cooldown would
+only hold the update back after it was already safe to take.
 
 ## CI
 
@@ -254,19 +272,31 @@ targeting `main`, and as a reusable workflow called by the release. Four jobs:
 | `lint`       | `pnpm lint` then `pnpm format:check`.                                              |
 | `typecheck`  | `pnpm typecheck`.                                                                  |
 | `build`      | `pnpm build`, then imports `dist/index.js` in a real Node process and asserts the entry loads and `dist/index.d.ts` exists. |
-| `test`       | Asserts the running Node is the runtime `devEngines.runtime` pins, then `pnpm test`. |
+| `test`       | Matrix over Node 20, 22, 24 and 26. Asserts the running Node is the major the job asked for, then `pnpm test`. |
 
-Every job gets its Node exactly the way a contributor does — `mise install`
-puts pnpm and the bootstrap Node on PATH, `pnpm install --frozen-lockfile`
-installs the runtime the lockfile pins — so no job carries a Node version of
-its own. There is no test matrix: CI exercises the one Node in the lockfile,
-and `engines.node: ">=22"` is not backed by a job.
+Every job provisions pnpm with `pnpm/action-setup` and `standalone: true`,
+which installs the pnpm build with Node.js linked in and reads the version from
+`packageManager`. That ordering is not optional: Node is a lockfile dependency
+that `pnpm install` provisions, so nothing in CI may assume a Node on PATH
+before pnpm has run.
 
-Only `test` asserts the result, because `pnpm exec node` exits 0 either way. If
-the runtime were not installed, nothing would shadow the runner image's own
-Node, it would service the step and the suite would pass on a version nothing
-here selected. The assertion reads the range out of `package.json`, so bumping
-`devEngines.runtime` does not mean editing `ci.yml` as well.
+`lint`, `typecheck` and `build` then run `pnpm install --frozen-lockfile` and
+get the runtime the lockfile pins, exactly like a contributor — no job carries
+a Node version of its own.
+
+`test` is the exception, and the only job that names Node versions.
+`actions/setup-node` puts the major under test on PATH and the install adds
+`--no-runtime`, so no linked runtime shadows it. That flag is what makes a
+matrix possible at all: with the runtime linked, `node_modules/.bin/node` wins
+over PATH for every `pnpm run` and `pnpm exec`, and no flag or setting
+overrides it — the matrix would run the pinned Node four times and report four
+green checks.
+
+Which is why `test` asserts, and asserts two things: that the running Node's
+major is the one the job asked for, and that its `execPath` is not inside
+`node_modules`. The second half is the one that catches a silently linked
+runtime. An earlier matrix went green while testing a single version, and this
+assertion is the only guard against that recurring.
 
 Nothing in CI calls a bare `node`. The runner images ship their own, and it
 would quietly service any step that asked for it, so the build job's smoke test
@@ -293,7 +323,7 @@ What it does:
    committed back.
 3. Builds.
 4. Upgrades to the latest npm (Trusted Publishing needs the OIDC support added
-   in npm 11.5.1, which is newer than the npm bundled with Node 24). The
+   in npm 11.5.1, which is newer than the npm bundled with Node 26). The
    publish job is the only one that needs an npm at all, and gets it from
    `actions/setup-node`; the build in that job still runs on the Node pnpm
    provisions.
