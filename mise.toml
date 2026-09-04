@@ -1,8 +1,8 @@
 [tools]
 # The only tool mise provisions. Node.js comes from pnpm itself
-# (`useNodeVersion` in pnpm-workspace.yaml), which is not circular: the pnpm
-# mise installs is a standalone executable with Node.js linked in, so it runs
-# with nothing else on PATH.
+# (`devEngines.runtime` in package.json), which is not circular: the pnpm mise
+# installs is a standalone executable with Node.js linked in, so it runs with
+# nothing else on PATH.
 #
 # Kept in lockstep with package.json's `packageManager`. Bump both together:
 # mise puts pnpm on PATH, while `packageManager` is what pnpm itself and any
