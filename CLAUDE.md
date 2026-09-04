@@ -37,11 +37,22 @@ pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
 - `pnpm build` fails on `publint` problems and on `attw` problems at the
   `esm-only` profile. Touching `exports`, `files` or the build config means
   running the build, not just the type check.
-- The test matrix is Node 22 / 24 / 26. Do not use APIs newer than Node 22.
-- Node comes from pnpm (`useNodeVersion` in `pnpm-workspace.yaml`), not from
-  mise and not from the machine. A bare `node` is not the project's Node and
-  may not exist at all; run it as `pnpm exec node`. To check another major:
-  `pnpm --config.use-node-version="$(pnpm env list --remote 22 | tail -1)" run test`.
+- `engines.node` is `">=22"`, so do not use APIs newer than Node 22. Nothing
+  enforces this: there is no test matrix, and every job runs the single Node
+  the lockfile pins (24.x). A 24-only API passes CI and breaks a consumer on 22.
+- Two Nodes exist and only one runs the gates. The runtime comes from pnpm
+  (`devEngines.runtime` in `package.json`, pinned with a checksum in
+  `pnpm-lock.yaml`); `pnpm exec node`, `pnpm run <script>` and a bare `node`
+  inside a script all get it. `mise.toml`'s `node = "24"` is a bootstrap for
+  `pnpm install` only — same major, possibly a different patch — and it is what
+  a bare `node` in your own shell is. Do not delete it; see the comment in
+  `mise.toml` for what breaks (pnpm/pnpm#14358, fixed only in pnpm 12).
+- There is no per-invocation override — `--use-node-version` and
+  `useNodeVersion` are both ignored while `devEngines.runtime` is set — so
+  trying another major means editing the range, `mise.toml` and the lockfile.
+- `@types/node` is held at the runtime's major on purpose. Raising it past the
+  runtime makes `pnpm typecheck` accept APIs that do not exist at run time, and
+  no gate catches that.
 
 ## Chat SDK adapter contract
 
