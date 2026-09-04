@@ -4,8 +4,14 @@
 # exemption silently off.
 #
 # 4320 minutes (3 days) matches nulab/backlog-mcp-server and the
-# `min-release-age=3` that nulab/backlog-js sets for npm.
+# `min-release-age=3` that nulab/backlog-js sets for npm. It is also what
+# "latest" means for every tool this repository depends on: the newest release
+# that is at least three days old, not the newest release.
 minimumReleaseAge: 4320
 
-onlyBuiltDependencies:
-  - lefthook
+# Replaces `onlyBuiltDependencies`, which pnpm 11 removed along with
+# `neverBuiltDependencies` and `ignoredBuiltDependencies`. Nothing builds by
+# default, and an install script from a package that is not listed here fails
+# the install rather than being skipped quietly.
+allowBuilds:
+  lefthook: true

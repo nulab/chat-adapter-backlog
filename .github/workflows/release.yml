@@ -42,12 +42,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Publishing is the one thing here that needs npm rather than pnpm, and
+      # npm comes with a Node from outside the project: the Node that
+      # `pnpm install` provisions is installed without npm, npx or corepack.
+      # Same major as `devEngines.runtime` so the two do not drift.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          standalone: true
 
       - run: pnpm install --frozen-lockfile
 
