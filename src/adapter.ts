@@ -4,7 +4,7 @@ import {
   ResourceNotFoundError,
   ValidationError,
 } from '@chat-adapter/shared';
-import { ConsoleLogger } from 'chat';
+import { ConsoleLogger, Message as MessageCtor } from 'chat';
 
 import { createBacklogJsApi } from './client/backlog-js';
 import type {
@@ -12,10 +12,12 @@ import type {
   BacklogCredentials,
   RateLimitSnapshots,
   RetryOptions,
+  TextFormattingRule,
 } from './client/port';
 import {
   channelIdFromThreadId as decodeChannelIdFromThreadId,
   decodeThreadId as decodeThreadIdString,
+  encodeMessageId,
   encodeThreadId as encodeThreadIdStruct,
 } from './ids';
 import type {
@@ -23,9 +25,17 @@ import type {
   BacklogInstallation,
   BacklogRawMessage,
   BacklogThreadId,
+  BacklogWebhookPayload,
   Resolvable,
   ResolvedInstallation,
 } from './types';
+import { buildInboundMessage } from './webhook/inbound';
+import {
+  DISPATCHED_ACTIVITY_TYPES,
+  parseActivity,
+  parseEnvelope,
+} from './webhook/payload';
+import { verifyWebhookRequest } from './webhook/verify';
 import type {
   Adapter,
   AdapterPostableMessage,
@@ -399,6 +409,15 @@ export class BacklogAdapter implements Adapter<
     webhookVerifier: BacklogAdapterConfig['webhookVerifier'];
   };
   private readonly apiCache = new Map<string, BacklogApi>();
+  /**
+   * `channelId -> TextFormattingRule` (docs/specs/adapter.md §9.1, D14):
+   * populated by one Get Project per channel and cached forever;
+   * `fetchChannelInfo` (P6) is the documented way to replace an entry. Keyed
+   * on the channel id string rather than `{host, projectId}` so the same map
+   * serves `ensureFormattingRule`, `renderFormatted` and `parseMessage`
+   * without re-deriving the key shape in three places.
+   */
+  private readonly formattingRuleCache = new Map<string, TextFormattingRule>();
 
   private logger: Logger;
   private chat: ChatInstance | undefined;
@@ -566,15 +585,257 @@ export class BacklogAdapter implements Adapter<
     notImplemented();
   }
 
-  handleWebhook(
-    _request: Request,
-    _options?: WebhookOptions
-  ): Promise<Response> {
-    notImplemented();
+  /**
+   * Populates the §9.1 formatting-rule cache for `channelId` with one Get
+   * Project call, unless an entry already exists — the cache is forever
+   * until `fetchChannelInfo` (P6) replaces it, so a second webhook for the
+   * same project must not spend a `read`-bucket call repeating a lookup this
+   * method already made. A lookup failure is not cached (`PermissionError`,
+   * `NetworkError`, …): the next call gets to try again rather than being
+   * pinned to a guess for the process's lifetime.
+   */
+  private async ensureFormattingRule(
+    host: string,
+    projectId: number
+  ): Promise<void> {
+    const channelId = `backlog:${host}:${projectId}`;
+    if (this.formattingRuleCache.has(channelId)) {
+      return;
+    }
+    try {
+      const project = await this.api(host).getProject(projectId);
+      this.formattingRuleCache.set(channelId, project.textFormattingRule);
+    } catch (cause) {
+      this.logger.warn('textFormattingRule lookup failed; assuming markdown', {
+        host,
+        projectId,
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
   }
 
-  parseMessage(_raw: BacklogRawMessage): Message<BacklogRawMessage> {
-    notImplemented();
+  async handleWebhook(
+    request: Request,
+    options?: WebhookOptions
+  ): Promise<Response> {
+    const verification = await verifyWebhookRequest({
+      request,
+      maxWebhookBodyBytes: this.ingressConfig.maxWebhookBodyBytes,
+      webhookVerifier: this.ingressConfig.webhookVerifier,
+      installations: this.installations,
+      logger: this.logger,
+    });
+
+    if (!verification.ok) {
+      return new Response(verification.body, { status: verification.status });
+    }
+
+    const { host, installation, rawBody } = verification;
+
+    let parsedBody: unknown;
+    try {
+      parsedBody = JSON.parse(rawBody);
+    } catch {
+      this.logger.warn('webhook rejected', { reason: 'invalid_json' });
+      return new Response('Invalid JSON', { status: 400 });
+    }
+    if (typeof parsedBody !== 'object' || parsedBody === null) {
+      this.logger.warn('webhook rejected', { reason: 'invalid_json' });
+      return new Response('Invalid JSON', { status: 400 });
+    }
+
+    const envelope = parseEnvelope(parsedBody);
+    if (envelope === null) {
+      this.logger.warn('webhook rejected', { reason: 'invalid_envelope' });
+      return new Response('Invalid payload', { status: 400 });
+    }
+
+    if (
+      !(DISPATCHED_ACTIVITY_TYPES as readonly number[]).includes(envelope.type)
+    ) {
+      this.logger.info('webhook ignored', { host, type: envelope.type });
+      return new Response('Ignored', { status: 200 });
+    }
+
+    const parsed = parseActivity(envelope.type, parsedBody);
+    if ('issuePaths' in parsed) {
+      this.logger.warn('webhook rejected', {
+        reason: 'invalid_payload',
+        issuePaths: parsed.issuePaths,
+      });
+      return new Response('Invalid payload', { status: 400 });
+    }
+    const { activity } = parsed;
+    // `raw.payload` must be the body as Backlog sent it, unknown keys
+    // included (docs/specs/adapter.md §5.2 "not a stripped copy") — `zod`
+    // strips fields a schema does not name, so `activity` above (its output)
+    // is never what reaches a message; `parsedBody` is.
+    const rawPayload = parsedBody as BacklogWebhookPayload;
+
+    if (this.chat === undefined) {
+      this.logger.error('webhook rejected: adapter not initialized');
+      return new Response('Adapter not initialized', { status: 503 });
+    }
+    const chat = this.chat;
+
+    if (activity.createdUser.id === installation.botUserId) {
+      this.logger.debug('self message skipped', {
+        host,
+        issueId: activity.content.id,
+      });
+      return new Response('OK', { status: 200 });
+    }
+
+    const threadId = encodeThreadIdStruct({
+      host,
+      projectId: activity.project.id,
+      issueId: activity.content.id,
+    });
+
+    if (activity.type === 4) {
+      const channelId = decodeChannelIdFromThreadId(threadId);
+      const messageId = encodeMessageId({
+        kind: 'issue',
+        host,
+        issueId: activity.content.id,
+      });
+      // The core registers this promise with `options.waitUntil` itself
+      // (docs/specs/adapter.md §5.1); the response below returns
+      // immediately regardless of how long that processing takes.
+      // Wrapped in `Promise.resolve` because `ChatInstance` is an interface,
+      // not a guarantee: `createMockChatInstance`'s default `processMessageDeleted`
+      // is `vi.fn()` with no implementation, which returns `undefined` rather
+      // than a promise, and `undefined.catch` throws synchronously.
+      void Promise.resolve(
+        chat.processMessageDeleted(
+          {
+            adapter: this,
+            platform: 'backlog',
+            channelId,
+            threadId,
+            messageId,
+            raw: { kind: 'webhook', host, payload: rawPayload, changes: [] },
+            deletedAt: new Date(activity.created),
+          },
+          options
+        )
+      ).catch((cause: unknown) => {
+        this.logger.error('inbound processing failed', {
+          host,
+          issueId: activity.content.id,
+          messageId,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      });
+      return new Response('OK', { status: 200 });
+    }
+
+    const factory = async (): Promise<Message<BacklogRawMessage>> => {
+      await this.ensureFormattingRule(host, activity.project.id);
+      return this.parseMessage({
+        kind: 'webhook',
+        host,
+        payload: rawPayload,
+        changes: [],
+      });
+    };
+
+    const messageIdForLog =
+      activity.type === 1
+        ? encodeMessageId({ kind: 'issue', host, issueId: activity.content.id })
+        : activity.content.comment !== null &&
+            activity.content.comment !== undefined
+          ? encodeMessageId({
+              kind: 'comment',
+              host,
+              issueId: activity.content.id,
+              commentId: activity.content.comment.id,
+            })
+          : encodeMessageId({
+              kind: 'update',
+              host,
+              issueId: activity.content.id,
+              created: activity.created,
+            });
+
+    // Dispatched, not awaited: the response below must return before
+    // processing completes (docs/specs/adapter.md §5.1 step 12). A factory
+    // that throws is logged here rather than left to reject unhandled,
+    // because the core swallows the rejection for `waitUntil` but this is
+    // the only place that knows which host/issue/message it was for.
+    // `Promise.resolve(...)` guards the same mock-return-value gap noted on
+    // the type-4 branch above.
+    void Promise.resolve(
+      chat.processMessage(this, threadId, factory, options)
+    ).catch((cause: unknown) => {
+      this.logger.error('inbound processing failed', {
+        host,
+        issueId: activity.content.id,
+        messageId: messageIdForLog,
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+    });
+
+    return new Response('OK', { status: 200 });
+  }
+
+  parseMessage(raw: BacklogRawMessage): Message<BacklogRawMessage> {
+    if (raw.kind !== 'webhook') {
+      // P5 (REST comment/issue -> Message) and P3 (webhook) share the
+      // `BacklogRawMessage` union, but this phase only ever constructs the
+      // `webhook` variant; a non-webhook raw reaching here would be a defect
+      // in the caller, not a recoverable input.
+      throw new ValidationError(
+        'backlog',
+        `parseMessage: unsupported raw message kind "${raw.kind}"`
+      );
+    }
+
+    const { host, payload } = raw;
+    const installation = this.resolveInstallation(host);
+    const channelId = `backlog:${host}:${payload.project.id}`;
+    if (!this.formattingRuleCache.has(channelId)) {
+      this.logger.warn('textFormattingRule uncached; assuming markdown', {
+        host,
+        projectId: payload.project.id,
+      });
+    }
+
+    if (payload.type !== 1 && payload.type !== 2 && payload.type !== 3) {
+      throw new ValidationError(
+        'backlog',
+        `parseMessage: activity type ${payload.type} produces no message`
+      );
+    }
+    const activity = payload;
+
+    return buildInboundMessage(
+      activity,
+      {
+        host,
+        botUserId: installation.botUserId,
+        botUserName: installation.botUserName,
+        fetchAttachment: (issueId, attachmentId) =>
+          this.fetchAttachmentData(host, issueId, attachmentId),
+        payload,
+      },
+      MessageCtor
+    );
+  }
+
+  /**
+   * Downloads one attachment through the port
+   * (docs/specs/adapter.md §6.6, `GET /issues/:issueId/attachments/:id`);
+   * the port already maps every failure to a `@chat-adapter/shared` error,
+   * so `fetchData()` never throws a `backlog-js` type to a consumer.
+   */
+  private async fetchAttachmentData(
+    host: string,
+    issueId: number,
+    attachmentId: number
+  ): Promise<Buffer> {
+    const file = await this.api(host).downloadAttachment(issueId, attachmentId);
+    return file.data;
   }
 
   postMessage(
