@@ -1,3 +1,4 @@
+import type { BacklogApi } from './client/port';
 import type { Logger } from 'chat';
 
 /**
@@ -225,12 +226,8 @@ export interface BacklogAdapterConfig {
   rateLimit?: { maxWaitMs?: number; maxRetries?: number };
   maxWebhookBodyBytes?: number;
   /**
-   * Test seam / escape hatch: receives the resolved installation and returns
-   * the Backlog API port. Typed as `unknown` here rather than the real
-   * `BacklogApi` because the client port (`src/client/**`,
-   * docs/plans/adapter-implementation.md P1) lands in a separate, parallel PR
-   * and does not exist in this one — a later PR narrows this to `BacklogApi`
-   * once the port is in place.
+   * Test seam and escape hatch: receives the resolved installation and returns
+   * the Backlog API port. Defaults to the `backlog-js`-backed implementation.
    */
-  createApi?: (installation: ResolvedInstallation) => unknown;
+  createApi?: (installation: ResolvedInstallation) => BacklogApi;
 }

@@ -6,6 +6,13 @@ import {
 } from '@chat-adapter/shared';
 import { ConsoleLogger } from 'chat';
 
+import { createBacklogJsApi } from './client/backlog-js';
+import type {
+  BacklogApi,
+  BacklogCredentials,
+  RateLimitSnapshots,
+  RetryOptions,
+} from './client/port';
 import {
   channelIdFromThreadId as decodeChannelIdFromThreadId,
   decodeThreadId as decodeThreadIdString,
@@ -35,13 +42,47 @@ import type {
 } from 'chat';
 
 /**
- * The Backlog API port, once `src/client/**` lands (docs/plans/adapter-implementation.md
- * P1, landing in parallel with this PR). This phase implements no member that
- * makes an API call, so a structural placeholder is enough to keep `api(host)`
- * type-checking without importing a port that does not exist in this
- * worktree; a later PR narrows this to the real `BacklogApi` and deletes it.
+ * Builds the `backlog-js`-backed port for one installation.
+ *
+ * The credential is passed as the resolver itself rather than an already
+ * resolved string: the port awaits it on every request and never memoises the
+ * result (docs/specs/adapter.md §3.2, §8.2), so a caller whose OAuth token
+ * expires hourly refreshes it without reconstructing the adapter. Resolving it
+ * here instead would pin the first value for the process's lifetime.
  */
-export type BacklogApiLike = unknown;
+function defaultCreateApi(
+  retry: RetryOptions
+): (installation: ResolvedInstallation) => BacklogApi {
+  return (installation) =>
+    createBacklogJsApi({
+      host: installation.host,
+      credentials: toCredentials(installation),
+      retry,
+    });
+}
+
+function toCredentials(installation: ResolvedInstallation): BacklogCredentials {
+  // The constructor already rejected an installation carrying neither
+  // credential, so the fallback below is unreachable; it exists because the
+  // port's union type cannot express "exactly one of these two" in a way the
+  // compiler can narrow from `ResolvedInstallation`.
+  if (installation.apiKey !== undefined) {
+    const apiKey = installation.apiKey;
+    return { apiKey: () => resolve(apiKey) };
+  }
+  if (installation.accessToken !== undefined) {
+    const accessToken = installation.accessToken;
+    return { accessToken: () => resolve(accessToken) };
+  }
+  throw new ValidationError(
+    'backlog',
+    `installation ${installation.host} has no apiKey or accessToken`
+  );
+}
+
+function resolve(resolvable: Resolvable): string | Promise<string> {
+  return typeof resolvable === 'function' ? resolvable() : resolvable;
+}
 
 const ENV_HOST = 'BACKLOG_HOST';
 const ENV_API_KEY = 'BACKLOG_API_KEY';
@@ -344,7 +385,7 @@ export class BacklogAdapter implements Adapter<
   private readonly installations: Map<string, ResolvedInstallation>;
   private readonly createApi: (
     installation: ResolvedInstallation
-  ) => BacklogApiLike;
+  ) => BacklogApi;
   /**
    * `rateLimit`/`maxWebhookBodyBytes`/`webhookVerifier` are validated in the
    * constructor (docs/specs/adapter.md §3.2) and held here for the webhook
@@ -357,7 +398,7 @@ export class BacklogAdapter implements Adapter<
     maxWebhookBodyBytes: number;
     webhookVerifier: BacklogAdapterConfig['webhookVerifier'];
   };
-  private readonly apiCache = new Map<string, BacklogApiLike>();
+  private readonly apiCache = new Map<string, BacklogApi>();
 
   private logger: Logger;
   private chat: ChatInstance | undefined;
@@ -412,7 +453,8 @@ export class BacklogAdapter implements Adapter<
       ),
       webhookVerifier: config.webhookVerifier,
     };
-    this.createApi = config.createApi ?? ((): BacklogApiLike => undefined);
+    this.createApi =
+      config.createApi ?? defaultCreateApi(this.ingressConfig.rateLimit);
     this.logger = config.logger ?? new ConsoleLogger('info').child('backlog');
   }
 
@@ -506,7 +548,7 @@ export class BacklogAdapter implements Adapter<
     }
   }
 
-  api(host: string): BacklogApiLike {
+  api(host: string): BacklogApi {
     const installation = this.resolveInstallation(host);
     let api = this.apiCache.get(host);
     if (api === undefined) {
@@ -516,11 +558,8 @@ export class BacklogAdapter implements Adapter<
     return api;
   }
 
-  rateLimit(_host: string): Record<string, never> {
-    // No port makes a request yet in this phase (P1 lands in parallel), so
-    // there is nothing to report. A later PR replaces this with the real
-    // per-bucket X-RateLimit-* snapshot (docs/specs/adapter.md §3.3).
-    return {};
+  rateLimit(host: string): RateLimitSnapshots {
+    return this.api(host).rateLimit();
   }
 
   renderFormatted(_content: FormattedContent, _target?: string): string {

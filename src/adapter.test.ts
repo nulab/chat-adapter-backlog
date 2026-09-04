@@ -5,7 +5,8 @@ import { Chat } from 'chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BacklogAdapter, createBacklogAdapter } from './adapter';
-import type { BacklogThreadId } from './types';
+import { createInMemoryBacklogApi } from './client/in-memory';
+import type { BacklogThreadId, ResolvedInstallation } from './types';
 import type { Adapter } from 'chat';
 
 const ENV_KEYS = [
@@ -485,4 +486,89 @@ threadIdContract<BacklogThreadId>({
       encoded: 'backlog:example.backlogtool.com:500:8001',
     },
   ],
+});
+
+describe('BacklogAdapter port wiring', () => {
+  const base = {
+    host: 'example.backlog.com',
+    botUserId: 999,
+    botUserName: 'Chatbot',
+    webhookSecret: 'secret',
+  } as const;
+
+  it('builds a port for a configured host without being given one', () => {
+    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
+    expect(typeof adapter.api('example.backlog.com').getIssue).toBe('function');
+  });
+
+  it('reuses one port per host across calls', () => {
+    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
+    expect(adapter.api('example.backlog.com')).toBe(
+      adapter.api('example.backlog.com')
+    );
+  });
+
+  it('reports an unknown host as a missing installation', () => {
+    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
+    expect(() => adapter.api('other.backlog.com')).toThrow(
+      ResourceNotFoundError
+    );
+    expect(() => adapter.rateLimit('other.backlog.com')).toThrow(
+      ResourceNotFoundError
+    );
+  });
+
+  it('reports no rate-limit buckets before any request', () => {
+    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
+    expect(adapter.rateLimit('example.backlog.com')).toEqual({});
+  });
+
+  it('passes the resolved installation to a supplied createApi', () => {
+    const createApi = vi.fn((_installation: ResolvedInstallation) =>
+      createInMemoryBacklogApi()
+    );
+    const adapter = createBacklogAdapter({
+      ...base,
+      host: 'EXAMPLE.Backlog.com',
+      apiKey: 'key',
+      createApi,
+    });
+
+    adapter.api('example.backlog.com');
+
+    expect(createApi).toHaveBeenCalledTimes(1);
+    expect(createApi.mock.calls[0]?.[0]).toMatchObject({
+      host: 'example.backlog.com',
+      botUserId: 999,
+      botUserName: 'Chatbot',
+    });
+  });
+
+  it('hands the port the credential resolver itself, not a resolved value', () => {
+    // The port awaits the resolver on every request, so an adapter that
+    // resolved it once at construction would pin the first token for the
+    // lifetime of the process (docs/specs/adapter.md §3.2).
+    let calls = 0;
+    const createApi = vi.fn((_installation: ResolvedInstallation) =>
+      createInMemoryBacklogApi()
+    );
+    const adapter = createBacklogAdapter({
+      ...base,
+      apiKey: () => {
+        calls += 1;
+        return `token-${calls}`;
+      },
+      createApi,
+    });
+
+    adapter.api('example.backlog.com');
+
+    const resolvable = createApi.mock.calls[0]?.[0].apiKey;
+    expect(typeof resolvable).toBe('function');
+    expect(calls).toBe(0);
+
+    const resolver = resolvable as () => string;
+    expect(resolver()).toBe('token-1');
+    expect(resolver()).toBe('token-2');
+  });
 });
