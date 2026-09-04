@@ -1,19 +1,35 @@
 import { ResourceNotFoundError, ValidationError } from '@chat-adapter/shared';
 import { paragraph, root, text as textNode } from 'chat';
 
-import { decodeMessageId, decodeThreadId, encodeMessageId } from './ids';
+import {
+  decodeChannelId,
+  decodeMessageId,
+  decodeThreadId,
+  decodeUserId,
+  encodeMessageId,
+} from './ids';
 
-import type { BacklogApi, BacklogComment, BacklogIssue } from './client/port';
+import type {
+  BacklogApi,
+  BacklogComment,
+  BacklogIssue,
+  TextFormattingRule,
+} from './client/port';
 import type { BacklogRawMessage } from './types';
 import type {
   Attachment,
   Author,
+  ChannelInfo,
   FetchDirection,
   FetchOptions,
   FetchResult,
+  ListThreadsOptions,
+  ListThreadsResult,
   Message,
   MessageData,
+  MessageSubject,
   ThreadInfo,
+  UserInfo,
 } from 'chat';
 
 const CURSOR_PATTERN = /^(0|[1-9]\d*)$/;
@@ -137,12 +153,22 @@ export function buildRootMessage(
   });
 }
 
-function toRawIssue(issue: BacklogIssue): {
+/**
+ * Shared with `createChannelIssue` (`src/egress.ts`): both a REST-fetched
+ * issue (this file) and a freshly created one (`postChannelMessage`) become
+ * the same `BacklogRawMessage` `{ kind: "issue" }` shape, so the port ->
+ * types.ts field mapping has exactly one implementation.
+ */
+export function toRawIssue(issue: BacklogIssue): {
   id: number;
   issueKey: string;
   projectId: number;
   summary: string;
   description: string;
+  status: { id: number; name: string };
+  issueType: { id: number; name: string };
+  priority: { id: number; name: string };
+  assignee: { id: number; name: string } | null;
   createdUser: { id: number; name: string; userId?: string | null };
   created: string;
   updated: string;
@@ -153,6 +179,13 @@ function toRawIssue(issue: BacklogIssue): {
     projectId: issue.projectId,
     summary: issue.summary,
     description: issue.description,
+    status: { id: issue.status.id, name: issue.status.name },
+    issueType: { id: issue.issueType.id, name: issue.issueType.name },
+    priority: { id: issue.priority.id, name: issue.priority.name },
+    assignee:
+      issue.assignee === null
+        ? null
+        : { id: issue.assignee.id, name: issue.assignee.name },
     createdUser: {
       id: issue.createdUser.id,
       name: issue.createdUser.name,
@@ -211,6 +244,7 @@ export function buildCommentMessage(
 
 function toRawCommentForRead(comment: BacklogComment): {
   id: number;
+  issueId: number;
   content: string | null;
   createdUser: { id: number; name: string; userId?: string | null };
   created: string;
@@ -224,6 +258,7 @@ function toRawCommentForRead(comment: BacklogComment): {
 } {
   return {
     id: comment.id,
+    issueId: comment.issueId,
     content: comment.content,
     createdUser: {
       id: comment.createdUser.id,
@@ -423,5 +458,346 @@ export async function fetchThread(
       updated: issue.updated,
       url: `https://${host}/view/${issue.issueKey}`,
     },
+  };
+}
+
+/**
+ * `<host>, <issueId>` a `BacklogRawMessage` belongs to, for every `kind`
+ * (docs/specs/adapter.md §7.4). `fetchSubject` uses this to decide whether it
+ * can skip the Get Issue call entirely: `kind: "issue"` already carries the
+ * issue, so there is nothing left to resolve.
+ */
+function issueRefOf(raw: BacklogRawMessage): { host: string; issueId: number } {
+  switch (raw.kind) {
+    case 'webhook':
+      return { host: raw.host, issueId: raw.payload.content.id };
+    case 'comment':
+      return { host: raw.host, issueId: raw.comment.issueId };
+    case 'issue':
+      return { host: raw.host, issueId: raw.issue.id };
+  }
+}
+
+export interface FetchSubjectInput {
+  raw: BacklogRawMessage;
+  api: BacklogApi;
+}
+
+/**
+ * `fetchSubject` (docs/specs/adapter.md §7.4). Called lazily from
+ * `message.subject` and its errors are turned into `null` by the core
+ * (`.claude/rules/chat-sdk-core-facts.md` "`fetchSubject` is called lazily by
+ * the `Message.subject` getter, errors -> `null`"), so every access — not
+ * just the first — spends a Get Issue call unless `raw.kind === "issue"`
+ * already carries it; document this cost to a caller that reads
+ * `message.subject` in a loop.
+ */
+export async function fetchSubject(
+  input: FetchSubjectInput
+): Promise<MessageSubject> {
+  const { raw, api } = input;
+  const { host, issueId } = issueRefOf(raw);
+  const issue = raw.kind === 'issue' ? raw.issue : await api.getIssue(issueId);
+
+  const subject: MessageSubject = {
+    id: `backlog:${host}:${issue.projectId}:${issueId}`,
+    type: 'issue',
+    title: issue.summary,
+    description: issue.description,
+    status: issue.status.name,
+    url: `https://${host}/view/${issue.issueKey}`,
+    author: {
+      id: `${host}:${issue.createdUser.id}`,
+      name: issue.createdUser.name,
+    },
+    labels: [issue.issueType.name, issue.priority.name],
+    raw: issue,
+  };
+  if (issue.assignee !== null) {
+    subject.assignee = {
+      id: `${host}:${issue.assignee.id}`,
+      name: issue.assignee.name,
+    };
+  }
+  return subject;
+}
+
+export interface FetchChannelInfoInput {
+  channelId: string;
+  api: BacklogApi;
+}
+
+/**
+ * `fetchChannelInfo` (docs/specs/adapter.md §7.5). Returns the project's
+ * `textFormattingRule` alongside the `ChannelInfo` (not just inside
+ * `metadata`, whose type is `Record<string, unknown>`) so the caller
+ * (`adapter.ts`) can replace the §9.1 formatting-rule cache entry — the one
+ * documented way to pick up a changed project setting without restarting,
+ * since that cache is otherwise permanent (D14) — without a runtime cast.
+ */
+export async function fetchChannelInfo(
+  input: FetchChannelInfoInput
+): Promise<{ info: ChannelInfo; textFormattingRule: TextFormattingRule }> {
+  const { channelId, api } = input;
+  const { host, projectId } = decodeChannelId(channelId);
+  const project = await api.getProject(projectId);
+
+  return {
+    info: {
+      id: channelId,
+      name: project.name,
+      isDM: false,
+      metadata: {
+        host,
+        projectId,
+        projectKey: project.projectKey,
+        textFormattingRule: project.textFormattingRule,
+      },
+    },
+    textFormattingRule: project.textFormattingRule,
+  };
+}
+
+export interface ListThreadsInput {
+  channelId: string;
+  options: ListThreadsOptions | undefined;
+  api: BacklogApi;
+  builders: Omit<MessageBuilders, 'projectId' | 'issueId'>;
+}
+
+/**
+ * `listThreads` (docs/specs/adapter.md §7.6). Deliberately does not sort or
+ * filter the port's response: Get Issue List draws on the **search** bucket
+ * (a documented example 150/min, far lower than `read`'s 600), so silently
+ * re-sorting or dropping closed issues here would hide that cost from a
+ * caller who asked for one page and would also disagree with what Backlog's
+ * own UI shows for the same call. `nextCursor` is only set on a full page —
+ * a short final page and a documented trailing empty page are both possible,
+ * per §7.6.
+ */
+export async function listThreads(
+  input: ListThreadsInput
+): Promise<ListThreadsResult<BacklogRawMessage>> {
+  const { channelId, options, api, builders } = input;
+  const { host, projectId } = decodeChannelId(channelId);
+  const limit = clampLimit(options?.limit);
+  const offset = parseOffset(options?.cursor);
+
+  const issues = await api.listIssues(projectId, { count: limit, offset });
+
+  const messageBuilders: MessageBuilders = {
+    ...builders,
+    projectId,
+    issueId: 0,
+  };
+  const threads = issues.map((issue) => ({
+    id: `backlog:${host}:${projectId}:${issue.id}`,
+    rootMessage: buildRootMessage(
+      { ...messageBuilders, issueId: issue.id },
+      issue
+    ),
+    lastReplyAt: issue.updated,
+  }));
+
+  const result: ListThreadsResult<BacklogRawMessage> = { threads };
+  if (issues.length >= limit) {
+    result.nextCursor = String(offset + issues.length);
+  }
+  return result;
+}
+
+function parseOffset(cursor: string | undefined): number {
+  if (cursor === undefined) {
+    return 0;
+  }
+  if (!CURSOR_PATTERN.test(cursor)) {
+    throw new ValidationError('backlog', `"${cursor}" is not a valid cursor`);
+  }
+  return Number(cursor);
+}
+
+export interface GetUserInput {
+  userId: string;
+  api: BacklogApi;
+  botUserId: number;
+}
+
+/**
+ * `getUser` (docs/specs/adapter.md §7.7). `chat.getUser()` cannot route here
+ * — the core infers an adapter from id shape and does not recognise
+ * `<host>:<id>` (`.claude/rules/chat-sdk-core-facts.md` "`openDM`/`getUser`
+ * absent -> `chat.openDM`/`chat.getUser` throw") — so this is reached only by
+ * calling `adapter.getUser()` directly; README documents that.
+ */
+export async function getUser(input: GetUserInput): Promise<UserInfo | null> {
+  const { userId, api, botUserId } = input;
+  const { host, userId: id } = decodeUserId(userId);
+  try {
+    const user = await api.getUser(id);
+    const info: UserInfo = {
+      userId: `${host}:${user.id}`,
+      userName: user.userId ?? user.name,
+      fullName: user.name,
+      isBot: user.id === botUserId,
+    };
+    if (user.mailAddress !== null) {
+      info.email = user.mailAddress;
+    }
+    return info;
+  } catch (cause) {
+    if (cause instanceof ResourceNotFoundError) {
+      return null;
+    }
+    throw cause;
+  }
+}
+
+export interface MarkAsReadInput {
+  messageId: string;
+  message: Message<BacklogRawMessage> | undefined;
+  api: BacklogApi;
+  logger: {
+    debug: (message: string, ...args: unknown[]) => void;
+    info: (message: string, ...args: unknown[]) => void;
+  };
+}
+
+const MARK_AS_READ_PAGE_SIZE = 100;
+const MARK_AS_READ_MAX_PAGES = 3;
+
+/**
+ * Comment id `markAsRead` looks for, from `messageId` and — when a `message`
+ * is given — cross-checked against `message.raw` (docs/specs/adapter.md
+ * §7.8 "comment id from `messageId` (or `message.raw` when given — they must
+ * agree)"). `:i`/`:u:` ids have no notification-worthy comment and return
+ * `undefined`, which the caller turns into a no-call debug log.
+ */
+function commentIdForMarkAsRead(
+  messageId: string,
+  message: Message<BacklogRawMessage> | undefined
+): number | undefined {
+  const decoded = decodeMessageId(messageId);
+  if (decoded.kind !== 'comment') {
+    return undefined;
+  }
+  if (message !== undefined && message.raw.kind === 'comment') {
+    if (message.raw.comment.id !== decoded.commentId) {
+      throw new ValidationError(
+        'backlog',
+        `messageId "${messageId}" and message.raw disagree on the comment id`
+      );
+    }
+  }
+  return decoded.commentId;
+}
+
+/**
+ * `markAsRead` (docs/specs/adapter.md §7.8): notifications are the **bot
+ * user's own** feed, paged newest-first at most 3 times
+ * (`GET /notifications?count=100[&maxId=]`) looking for `comment.id ===
+ * commentId`. Capped at 3 pages (300 notifications) rather than paging until
+ * exhausted because this is meant to be called per-message, not swept
+ * unboundedly — an old comment that has scrolled off the bot's most recent
+ * 300 notifications is treated the same as "no notification exists for this
+ * comment", which is the common case for a bot that was not itself notified.
+ */
+export async function markAsRead(input: MarkAsReadInput): Promise<void> {
+  const { messageId, message, api, logger } = input;
+  const commentId = commentIdForMarkAsRead(messageId, message);
+  if (commentId === undefined) {
+    logger.debug('markAsRead: not a comment id, nothing to mark', {
+      messageId,
+    });
+    return;
+  }
+
+  let maxId: number | undefined;
+  for (let page = 0; page < MARK_AS_READ_MAX_PAGES; page += 1) {
+    const options =
+      maxId === undefined
+        ? { count: MARK_AS_READ_PAGE_SIZE }
+        : { count: MARK_AS_READ_PAGE_SIZE, maxId };
+    const notifications = await api.listNotifications(options);
+    if (notifications.length === 0) {
+      break;
+    }
+
+    const found = notifications.find((n) => n.comment?.id === commentId);
+    if (found !== undefined) {
+      if (!found.alreadyRead) {
+        await api.markNotificationAsRead(found.id);
+      }
+      return;
+    }
+
+    const last = notifications[notifications.length - 1];
+    if (last === undefined) {
+      break;
+    }
+    maxId = last.id;
+  }
+
+  logger.info('markAsRead: no matching notification found within 3 pages', {
+    messageId,
+    commentId,
+  });
+}
+
+const ATTACHMENT_URL_PATTERN =
+  /^\/api\/v2\/issues\/([1-9]\d*)\/attachments\/([1-9]\d*)$/;
+
+export interface RehydrateAttachmentInput {
+  attachment: Attachment;
+  configuredHosts: ReadonlySet<string>;
+  fetchAttachment: (
+    host: string,
+    issueId: number,
+    attachmentId: number
+  ) => Promise<Buffer>;
+}
+
+/**
+ * `rehydrateAttachment` (docs/specs/adapter.md §6.6): synchronous, and a
+ * security boundary — it accepts only a URL whose host is one of this
+ * adapter's **configured** installations and whose path matches
+ * `/api/v2/issues/<posint>/attachments/<posint>`; anything else (a foreign
+ * host, a malformed path, no URL at all) is returned unchanged, without
+ * `fetchData`, which is what keeps a rehydrated attachment from ever
+ * downloading through a host this adapter was not configured for (§11).
+ */
+export function rehydrateAttachment(
+  input: RehydrateAttachmentInput
+): Attachment {
+  const { attachment, configuredHosts, fetchAttachment } = input;
+  if (attachment.url === undefined) {
+    return attachment;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(attachment.url);
+  } catch {
+    return attachment;
+  }
+
+  if (!configuredHosts.has(parsed.hostname)) {
+    return attachment;
+  }
+  const match = ATTACHMENT_URL_PATTERN.exec(parsed.pathname);
+  if (match === null) {
+    return attachment;
+  }
+  const issueIdSegment = match[1];
+  const attachmentIdSegment = match[2];
+  if (issueIdSegment === undefined || attachmentIdSegment === undefined) {
+    return attachment;
+  }
+  const issueId = Number(issueIdSegment);
+  const attachmentId = Number(attachmentIdSegment);
+  const host = parsed.hostname;
+
+  return {
+    ...attachment,
+    fetchData: () => fetchAttachment(host, issueId, attachmentId),
   };
 }
