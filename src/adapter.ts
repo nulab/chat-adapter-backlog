@@ -1,7 +1,7 @@
 import {
-  AdapterError,
   AuthenticationError,
   ResourceNotFoundError,
+  toBuffer,
   ValidationError,
 } from '@chat-adapter/shared';
 import { ConsoleLogger, Message as MessageCtor } from 'chat';
@@ -15,11 +15,27 @@ import type {
   TextFormattingRule,
 } from './client/port';
 import {
+  addReaction as addReactionToComment,
+  bufferStream,
+  editComment,
+  postComment,
+  removeReaction as removeReactionFromComment,
+  requireCommentId,
+} from './egress';
+import { converterFor } from './format/fallback';
+import type { FallbackFormatConverter } from './format/fallback';
+import {
   channelIdFromThreadId as decodeChannelIdFromThreadId,
+  decodeChannelId,
   decodeThreadId as decodeThreadIdString,
   encodeMessageId,
   encodeThreadId as encodeThreadIdStruct,
 } from './ids';
+import {
+  fetchMessage as fetchMessageRead,
+  fetchMessages as fetchMessagesRead,
+  fetchThread as fetchThreadRead,
+} from './reads';
 import type {
   BacklogAdapterConfig,
   BacklogInstallation,
@@ -42,10 +58,13 @@ import type {
   ChatInstance,
   FetchOptions,
   FetchResult,
+  FileUpload,
   FormattedContent,
   Logger,
   Message,
   RawMessage,
+  StreamChunk,
+  StreamOptions,
   ThreadInfo,
   TypingOptions,
   WebhookOptions,
@@ -373,17 +392,15 @@ function validateMaxWebhookBodyBytes(value: number | undefined): number {
   return value;
 }
 
-function notImplemented(): never {
-  throw new AdapterError('not implemented', 'backlog', 'NOT_IMPLEMENTED');
-}
-
 /**
  * Backlog adapter for Chat SDK. See docs/specs/adapter.md for the full
- * behavioural contract; this phase (P2, docs/plans/adapter-implementation.md)
- * implements construction, config resolution, the thread-id codec delegation
- * and identity/lifecycle members. Every other required member throws a typed
- * "not implemented" error until its owning phase lands (P3 webhook, P4
- * format, P5 egress/reads, P6 optional members).
+ * behavioural contract. Construction, config resolution, thread-id codec
+ * delegation and identity/lifecycle members landed in P2; webhook ingress in
+ * P3; format converters in P4; egress, reads, `stream` and reactions in P5
+ * (docs/plans/adapter-implementation.md). Only P6's optional members
+ * (`postChannelMessage`, `listThreads`, `getUser`, `fetchSubject`,
+ * `fetchChannelInfo`, `markAsRead`, `rehydrateAttachment`, type-4 deletion)
+ * still throw a typed "not implemented" error.
  */
 export class BacklogAdapter implements Adapter<
   BacklogThreadId,
@@ -581,8 +598,35 @@ export class BacklogAdapter implements Adapter<
     return this.api(host).rateLimit();
   }
 
-  renderFormatted(_content: FormattedContent, _target?: string): string {
-    notImplemented();
+  /**
+   * Synchronous and cache-only (docs/specs/adapter.md §9.1, D14): `target`,
+   * when given, is a thread id whose formatting rule `ensureFormattingRule`
+   * (webhook ingress) or `getConverter` (egress) may already have cached. An
+   * absent `target` or a channel this instance has never talked to falls
+   * back to Markdown with one `warn` rather than blocking this synchronous
+   * interface method on a network call the caller cannot await.
+   */
+  renderFormatted(content: FormattedContent, target?: string): string {
+    const channelId =
+      target === undefined ? undefined : decodeChannelIdFromThreadId(target);
+    const rule =
+      channelId === undefined
+        ? undefined
+        : this.formattingRuleCache.get(channelId);
+
+    if (rule === undefined) {
+      this.logger.warn('textFormattingRule uncached; assuming markdown', {
+        target,
+      });
+    }
+
+    const context =
+      channelId === undefined
+        ? { host: '', projectId: 0 }
+        : decodeChannelId(channelId);
+    return converterFor(rule ?? 'markdown', this.logger, context).fromAst(
+      content
+    );
   }
 
   /**
@@ -613,6 +657,35 @@ export class BacklogAdapter implements Adapter<
       });
     }
   }
+
+  /**
+   * Resolves the converter an egress call renders through: awaits
+   * `ensureFormattingRule` (a single cached Get Project per channel, §9.1)
+   * and wraps the result in the §9.2 fallback. Every egress member reaches
+   * Backlog through this so a notation project renders `''bold''` instead of
+   * `**bold**` on the very first post to a channel, not just once the cache
+   * happens to be warm.
+   */
+  private async getConverter(
+    host: string,
+    projectId: number
+  ): Promise<FallbackFormatConverter> {
+    await this.ensureFormattingRule(host, projectId);
+    const channelId = `backlog:${host}:${projectId}`;
+    const rule = this.formattingRuleCache.get(channelId) ?? 'markdown';
+    return converterFor(rule, this.logger, { host, projectId });
+  }
+
+  private toFileBuffer = async (file: FileUpload): Promise<Buffer> => {
+    const buffer = await toBuffer(file.data, { platform: 'slack' });
+    if (buffer === null) {
+      throw new ValidationError(
+        'backlog',
+        `file "${file.filename}" has no readable data`
+      );
+    }
+    return buffer;
+  };
 
   async handleWebhook(
     request: Request,
@@ -838,50 +911,160 @@ export class BacklogAdapter implements Adapter<
     return file.data;
   }
 
-  postMessage(
-    _threadId: string,
-    _message: AdapterPostableMessage
+  /**
+   * The bot's own login-id string, cached per host
+   * (`.claude/rules/backlog-api-facts.md` "Stars"; see `src/egress.ts`
+   * `isBotPresenter` for why this is compared as a string rather than a
+   * numeric id). One extra `read`-bucket call per host for the lifetime of
+   * the adapter instance, spent only by `addReaction`/`removeReaction`.
+   */
+  private readonly botUserIdStringCache = new Map<string, string | null>();
+
+  private async botUserIdString(host: string): Promise<string | null> {
+    const cached = this.botUserIdStringCache.get(host);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const installation = this.resolveInstallation(host);
+    const user = await this.api(host).getUser(installation.botUserId);
+    this.botUserIdStringCache.set(host, user.userId);
+    return user.userId;
+  }
+
+  async postMessage(
+    threadId: string,
+    message: AdapterPostableMessage
   ): Promise<RawMessage<BacklogRawMessage>> {
-    notImplemented();
+    const { host, projectId, issueId } = decodeThreadIdString(threadId);
+    const converter = await this.getConverter(host, projectId);
+    return postComment({
+      host,
+      projectId,
+      issueId,
+      api: this.api(host),
+      converter,
+      message,
+      toBuffer: this.toFileBuffer,
+    });
   }
 
-  editMessage(
-    _threadId: string,
-    _messageId: string,
-    _message: AdapterPostableMessage
+  async editMessage(
+    threadId: string,
+    messageId: string,
+    message: AdapterPostableMessage
   ): Promise<RawMessage<BacklogRawMessage>> {
-    notImplemented();
+    const { host, projectId } = decodeThreadIdString(threadId);
+    const { issueId, commentId } = requireCommentId(messageId, 'edited');
+    const converter = await this.getConverter(host, projectId);
+    return editComment({
+      host,
+      projectId,
+      issueId,
+      commentId,
+      api: this.api(host),
+      converter,
+      message,
+    });
   }
 
-  deleteMessage(_threadId: string, _messageId: string): Promise<void> {
-    notImplemented();
+  async deleteMessage(threadId: string, messageId: string): Promise<void> {
+    const { host } = decodeThreadIdString(threadId);
+    const { issueId, commentId } = requireCommentId(messageId, 'deleted');
+    await this.api(host).deleteComment(issueId, commentId);
   }
 
-  addReaction(
-    _threadId: string,
-    _messageId: string,
+  /**
+   * Buffers the whole stream into one `postMessage` call
+   * (docs/specs/adapter.md §6.4, D4; CLAUDE.md "`stream()` must be
+   * overridden"): the core's fallback would otherwise edit a message every
+   * `streamingUpdateIntervalMs` (default 500 ms), which is roughly 120
+   * `updateComment` calls a minute against a documented example 150/min
+   * update-bucket limit. An empty stream still posts `" "` (D4 default,
+   * matching the core's own fallback) so a `SentMessage` always exists for
+   * the caller to reference.
+   */
+  async stream(
+    threadId: string,
+    textStream: AsyncIterable<string | StreamChunk>,
+    options?: StreamOptions
+  ): Promise<RawMessage<BacklogRawMessage>> {
+    const buffered = await bufferStream(textStream, options?.signal);
+    return this.postMessage(threadId, {
+      markdown: buffered.length > 0 ? buffered : ' ',
+    });
+  }
+
+  async addReaction(
+    threadId: string,
+    messageId: string,
     _emoji: string
   ): Promise<void> {
-    notImplemented();
+    const { host } = decodeThreadIdString(threadId);
+    const { issueId, commentId } = requireCommentId(messageId, 'starred');
+    await addReactionToComment({
+      issueId,
+      commentId,
+      api: this.api(host),
+      botUserIdString: await this.botUserIdString(host),
+    });
   }
 
-  removeReaction(
-    _threadId: string,
-    _messageId: string,
+  async removeReaction(
+    threadId: string,
+    messageId: string,
     _emoji: string
   ): Promise<void> {
-    notImplemented();
+    const { host } = decodeThreadIdString(threadId);
+    const { issueId, commentId } = requireCommentId(messageId, 'starred');
+    await removeReactionFromComment({
+      issueId,
+      commentId,
+      api: this.api(host),
+      botUserIdString: await this.botUserIdString(host),
+    });
   }
 
-  fetchMessages(
-    _threadId: string,
-    _options?: FetchOptions
+  async fetchMessages(
+    threadId: string,
+    options?: FetchOptions
   ): Promise<FetchResult<BacklogRawMessage>> {
-    notImplemented();
+    const { host } = decodeThreadIdString(threadId);
+    return fetchMessagesRead({
+      threadId,
+      options,
+      api: this.api(host),
+      builders: {
+        host,
+        botUserIdString: await this.botUserIdString(host),
+        fetchAttachment: (issueId, attachmentId) =>
+          this.fetchAttachmentData(host, issueId, attachmentId),
+        MessageCtor,
+      },
+    });
   }
 
-  fetchThread(_threadId: string): Promise<ThreadInfo> {
-    notImplemented();
+  async fetchMessage(
+    threadId: string,
+    messageId: string
+  ): Promise<Message<BacklogRawMessage> | null> {
+    const { host } = decodeThreadIdString(threadId);
+    return fetchMessageRead({
+      threadId,
+      messageId,
+      api: this.api(host),
+      builders: {
+        host,
+        botUserIdString: await this.botUserIdString(host),
+        fetchAttachment: (issueId, attachmentId) =>
+          this.fetchAttachmentData(host, issueId, attachmentId),
+        MessageCtor,
+      },
+    });
+  }
+
+  async fetchThread(threadId: string): Promise<ThreadInfo> {
+    const { host } = decodeThreadIdString(threadId);
+    return fetchThreadRead({ threadId, api: this.api(host) });
   }
 }
 
