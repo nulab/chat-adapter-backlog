@@ -48,7 +48,7 @@ jobs:
       # Same major as `devEngines.runtime` so the two do not drift.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: 26
           registry-url: https://registry.npmjs.org
 
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
@@ -81,7 +81,7 @@ jobs:
         run: pnpm run build
 
       # Trusted Publishing needs the OIDC support added in npm 11.5.1; the npm
-      # bundled with Node 24 predates it and falls back to asking for a token.
+      # bundled with Node 26 predates it and falls back to asking for a token.
       - name: Update npm for Trusted Publishing
         run: npm install -g npm@latest
 
