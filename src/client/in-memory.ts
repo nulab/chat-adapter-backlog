@@ -84,7 +84,8 @@ const DEFAULT_PRIORITIES: BacklogPriority[] = [
 ];
 
 const DEFAULT_ME: BacklogUserRef = {
-  userId: '999',
+  id: 999,
+  userId: 'chatbot',
   name: 'Chatbot',
   mailAddress: null,
 };
@@ -153,7 +154,7 @@ export function createInMemoryBacklogApi(
   }
 
   function findUser(userId: number): BacklogUserRef {
-    const user = users.find((u) => u.userId === String(userId));
+    const user = users.find((u) => u.id === userId);
     if (user === undefined) {
       throw new ResourceNotFoundError('backlog', 'user', String(userId));
     }

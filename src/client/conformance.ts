@@ -18,17 +18,20 @@ const PROJECT_ID = 500;
 const ISSUE_ID = 8001;
 const OTHER_ISSUE_ID = 8002;
 const BOT: BacklogUserRef = {
-  userId: '999',
+  id: 999,
+  userId: 'chatbot',
   name: 'Chatbot',
   mailAddress: null,
 };
 const ALICE: BacklogUserRef = {
-  userId: '100',
+  id: 100,
+  userId: 'alice',
   name: 'Alice',
   mailAddress: 'alice@example.com',
 };
 const BOB: BacklogUserRef = {
-  userId: '101',
+  id: 101,
+  userId: 'bob',
   name: 'Bob',
   mailAddress: 'bob@example.com',
 };
@@ -95,7 +98,10 @@ export function describeBacklogApiConformance(
       await expect(api.getProject(PROJECT_ID)).resolves.toMatchObject({
         id: PROJECT_ID,
       });
-      await expect(api.getUser(100)).resolves.toMatchObject({ userId: '100' });
+      await expect(api.getUser(100)).resolves.toMatchObject({
+        id: 100,
+        userId: 'alice',
+      });
       await expect(api.getComment(ISSUE_ID, 1)).resolves.toMatchObject({
         id: 1,
       });
@@ -227,13 +233,17 @@ export function describeBacklogApiConformance(
       );
     });
 
-    it('stars carry a presenter and are removable by star id', async () => {
+    it('stars carry the presenter as a numeric id, matching the credential owner, and are removable by star id', async () => {
       const api = await factory();
       await api.addStar(1);
       const comment = await api.getComment(ISSUE_ID, 1);
       expect(comment.stars.length).toBeGreaterThan(0);
       const star = comment.stars[comment.stars.length - 1];
-      expect(star?.presenter).toBeDefined();
+      // `presenter.id` is what docs/specs/adapter.md §6.5 compares against
+      // `botUserId` to decide whether a star is the bot's own — a
+      // `presenter` with no usable numeric id would make that comparison
+      // impossible, so this asserts the field is a number, not just present.
+      expect(star?.presenter.id).toBe(BOT.id);
       if (star !== undefined) {
         await api.deleteStar(star.id);
       }

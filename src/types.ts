@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import type { BacklogApi } from './client/port';
 import type { RecognisedActivity } from './webhook/payload';
 import type { Logger } from 'chat';
@@ -122,6 +124,30 @@ export type BacklogRawMessage =
 export interface BacklogPostableExtras {
   notifiedUserId?: number[];
 }
+
+/**
+ * Validates `notifiedUserId` strictly: a present-but-mistyped extra is a
+ * `ValidationError` rather than a value silently dropped
+ * (docs/specs/adapter.md §3.4). Membership is deliberately not checked here —
+ * Backlog itself drops a non-member or nonexistent id without failing the
+ * request (measured 2026-08-18, `.claude/rules/backlog-api-facts.md`
+ * "`notifiedUserId[]` fails open"), so pre-validating membership would reject
+ * requests Backlog would have accepted.
+ */
+export const notifiedUserIdSchema = z.array(z.number().int().positive());
+
+/**
+ * The strict schema `postMessage`/`postChannelMessage` read
+ * `BacklogPostableExtras` through (docs/specs/adapter.md §3.4). Only
+ * `notifiedUserId` is defined for `postMessage`; `.strip()` would silently
+ * drop an unknown key, so `.strict()` is used instead to surface a typo as a
+ * `ValidationError` rather than a no-op.
+ */
+export const backlogPostableExtrasSchema = z
+  .object({
+    notifiedUserId: notifiedUserIdSchema.optional(),
+  })
+  .strict();
 
 /**
  * Extras a caller intersects with a Chat SDK postable to reach Backlog-only

@@ -73,11 +73,13 @@ function defaultRateLimitHeaders(
 }
 
 function toWireUser(user: {
+  id: number;
   userId: string | null;
   name: string;
   mailAddress: string | null;
 }) {
   return {
+    id: user.id,
     userId: user.userId,
     name: user.name,
     mailAddress: user.mailAddress,
@@ -473,8 +475,8 @@ export function createFakeBacklogServer(
     }
 
     if (segments[0] === 'users' && segments.length === 2 && method === 'GET') {
-      const userId = segments[1];
-      const user = users.find((u) => u.userId === userId);
+      const userId = Number(segments[1]);
+      const user = users.find((u) => u.id === userId);
       if (user === undefined) throw new RouteError(404, 6, 'No such user');
       return respond(200, toWireUser(user));
     }
