@@ -1,3 +1,4 @@
+import type { BacklogApi } from './client/port';
 import type { Logger } from 'chat';
 
 /**
@@ -184,6 +185,23 @@ export interface BacklogInstallation {
 }
 
 /**
+ * One configured Backlog installation after shape A/B resolution and
+ * validation (docs/specs/adapter.md §3.2): a fully-formed `BacklogInstallation`
+ * with its host lowercased and exactly one of `apiKey`/`accessToken` present.
+ * `createApi` receives this, not the raw config, so a test seam or a future
+ * `backlog-js`-backed port never has to re-derive validation the constructor
+ * already did.
+ */
+export interface ResolvedInstallation {
+  host: string;
+  apiKey?: Resolvable;
+  accessToken?: Resolvable;
+  botUserId: number;
+  botUserName: string;
+  webhookSecret?: string;
+}
+
+/**
  * Constructor config for `BacklogAdapter` / `createBacklogAdapter`
  * (docs/specs/adapter.md §3.2). Shape A (single space, every field falling
  * back to an environment variable) and shape B (`installations`) are
@@ -207,4 +225,9 @@ export interface BacklogAdapterConfig {
   logger?: Logger;
   rateLimit?: { maxWaitMs?: number; maxRetries?: number };
   maxWebhookBodyBytes?: number;
+  /**
+   * Test seam and escape hatch: receives the resolved installation and returns
+   * the Backlog API port. Defaults to the `backlog-js`-backed implementation.
+   */
+  createApi?: (installation: ResolvedInstallation) => BacklogApi;
 }
