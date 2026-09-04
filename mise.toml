@@ -1,10 +1,28 @@
 [tools]
-# The only tool mise provisions. Node.js comes from pnpm itself
-# (`devEngines.runtime` in package.json), which is not circular: the pnpm mise
-# installs is a standalone executable with Node.js linked in, so it runs with
-# nothing else on PATH.
-#
 # Kept in lockstep with package.json's `packageManager`. Bump both together:
 # mise puts pnpm on PATH, while `packageManager` is what pnpm itself and any
 # corepack-based toolchain read, and a mismatch makes pnpm re-download.
+#
+# Not circular with mise also providing Node below: the pnpm mise installs is a
+# standalone executable with Node.js linked into it, so pnpm itself needs
+# nothing else on PATH.
 pnpm = "10.34.5"
+
+# Not the Node the project runs on. `devEngines.runtime` in package.json is
+# that, and `node_modules/.bin/node` shadows this one for every `pnpm run` and
+# `pnpm exec`. This exists only to bootstrap `pnpm install`, which pnpm 10.34.5
+# cannot do from `devEngines.runtime` alone on a machine that has no Node:
+#
+#   - it runs dependency install scripts before it links the runtime's bin, so
+#     lefthook's postinstall dies on `node: command not found`;
+#   - it checks every dependency's `engines` against the Node 20.11.1 linked
+#     into the standalone pnpm binary, which quietly drops the platform
+#     packages oxlint, oxfmt and rolldown load their native bindings from, and
+#     leaves lint, test and build failing after a green install.
+#
+# The first is pnpm/pnpm#14358, fixed in pnpm 12.2.0 and never in 10.x
+# — 10.34.5 is the last 10 release. So do not delete this the way `node = "24"`
+# was deleted before: until this repository is on pnpm 12, a machine with no
+# Node cannot install it from `devEngines.runtime` alone. Same major as the
+# range in `devEngines.runtime`; move the two together.
+node = "24"
