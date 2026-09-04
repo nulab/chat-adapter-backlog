@@ -73,12 +73,34 @@ jobs:
       # condition or an unresolvable import in the bundle is invisible to every
       # other job.
       #
+      # The adapter is constructed, not just imported: `createBacklogAdapter`
+      # validates synchronously, so a construction that throws proves the
+      # config resolution survived bundling. `--input-type=module` with
+      # top-level await replaces the previous `.then()` form, which had no
+      # `.catch` and would have surfaced a failure as an unhandled rejection
+      # rather than a failed step.
+      #
       # Through `pnpm exec`, not a bare `node`: this job installs the runtime,
       # so `pnpm exec` reaches the Node the lockfile pins instead of whatever
       # the runner image happens to ship.
       - name: Smoke test the built entry
         run: |
-          pnpm exec node -e "import('./dist/index.js').then((m) => { if (m.ADAPTER_ID !== 'backlog') { throw new Error('esm entry is broken'); } })"
+          pnpm exec node --input-type=module -e "
+            const m = await import('./dist/index.js');
+            if (typeof m.createBacklogAdapter !== 'function') {
+              throw new Error('createBacklogAdapter is missing from the built entry');
+            }
+            const adapter = new m.BacklogAdapter({
+              host: 'example.backlog.com',
+              apiKey: 'smoke-test',
+              botUserId: 999,
+              botUserName: 'Chatbot',
+              webhookSecret: 'smoke-test',
+            });
+            if (adapter.name !== 'backlog') {
+              throw new Error(\`adapter.name is \${adapter.name}, not backlog\`);
+            }
+          "
           test -f dist/index.d.ts
 
   test:

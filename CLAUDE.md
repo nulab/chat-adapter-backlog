@@ -7,15 +7,29 @@ reading the code.
 
 ## State of the repo
 
-A Backlog adapter for [Chat SDK](https://chat-sdk.dev/). The toolchain is
-complete; the adapter is not. `src/index.ts` exports a placeholder
-`ADAPTER_ID` and nothing else. No part of the `Adapter` interface is
-implemented, so there is no existing pattern in this repo to follow — the
-sections below are the design constraints to follow instead.
+A Backlog adapter for [Chat SDK](https://chat-sdk.dev/). Every required
+member of the `Adapter` interface is implemented and `src/index.ts` exports the
+real surface, so there **is** a pattern in this repo to follow now: read the
+neighbouring module before adding to one.
 
-`.github/workflows/ci.yml` asserts `ADAPTER_ID === 'backlog'` by importing
-`dist/index.js` in a real Node process. When the placeholder is replaced, that
-smoke test must be updated in the same change or the build job breaks.
+Layout, mirroring the PR scopes so a change's scope is its path:
+`src/adapter.ts` (the class and `createBacklogAdapter`), `src/ids.ts` (the id
+grammar), `src/types.ts` (public types, including the serialisable raw-message
+shapes), `src/egress.ts` and `src/reads.ts`, `src/webhook/*` (ingress),
+`src/client/*` (the Backlog API port), `src/format/*` (the converters), and
+`src/test/fixtures/*`.
+
+One split is worth knowing before you touch either side: `src/client/port.ts`
+owns the **API domain** types, which carry `Date` objects, while `src/types.ts`
+owns the **raw-message** types reachable from `message.raw`, which carry ISO
+strings so a serialised `Message` survives the queue round trip.
+`BacklogIssue`, `BacklogComment` and `BacklogChange` therefore exist twice on
+purpose; `src/index.ts` exports the port's and explains why.
+
+`.github/workflows/ci.yml` builds the bundle, imports it in a real Node
+process, constructs an adapter from it and asserts `adapter.name === 'backlog'`.
+Changing the public entry means changing that smoke test in the same commit, or
+the build job breaks.
 
 ## Design documents
 
