@@ -9,3 +9,11 @@ minimumReleaseAge: 4320
 
 onlyBuiltDependencies:
   - lefthook
+
+# The Node.js every `pnpm run`/`pnpm exec` uses; nothing else provisions one.
+# Spelled out to the patch because this setting takes an exact version and
+# nothing else: `24` crashes pnpm 10.34.5 inside its own version check, and
+# `24.x` and `lts` are rejected as invalid. So it does not follow 24.x on its
+# own — bump it by hand. `engines.node: ">=22"` stays the supported range; this
+# is only what the repository develops and releases against.
+useNodeVersion: 24.20.0
