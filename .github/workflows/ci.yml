@@ -102,14 +102,26 @@ jobs:
       # is the only override pnpm 10.34.5 offers: there is no environment
       # variable for it, so every pnpm command below has to carry the flag or
       # it silently runs the repository default instead of the matrix entry.
+      # Asserted inside the Node process rather than by capturing its output:
+      # pnpm announces "Fetching Node.js <version> ..." on stdout when it has
+      # to download the runtime, which it does in some jobs and not others, so
+      # a captured stdout is the version with an unpredictable preamble.
       - name: Verify the provisioned Node
         env:
           EXPECTED_NODE_MAJOR: ${{ matrix.node-version }}
         run: |
-          actual="$(pnpm --config.use-node-version="$PNPM_NODE_VERSION" exec node -p 'process.versions.node')"
-          echo "node $actual, pnpm $(pnpm --version)"
-          test "$actual" = "$PNPM_NODE_VERSION"
-          test "${actual%%.*}" = "$EXPECTED_NODE_MAJOR"
+          pnpm --config.use-node-version="$PNPM_NODE_VERSION" exec node -e '
+            const actual = process.versions.node;
+            const { EXPECTED_NODE_MAJOR, PNPM_NODE_VERSION } = process.env;
+            console.log(`node ${actual}`);
+            if (actual !== PNPM_NODE_VERSION) {
+              throw new Error(`ran Node ${actual}, not the resolved ${PNPM_NODE_VERSION}`);
+            }
+            if (actual.split(".")[0] !== EXPECTED_NODE_MAJOR) {
+              throw new Error(`ran Node ${actual}, not the advertised major ${EXPECTED_NODE_MAJOR}`);
+            }
+          '
+          pnpm --version
 
       - run: pnpm install --frozen-lockfile --config.use-node-version="$PNPM_NODE_VERSION"
 
