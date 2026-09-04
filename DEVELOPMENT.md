@@ -193,7 +193,9 @@ credentials are absent, so that the default suite and CI stay green:
 import { describe, it } from 'vitest';
 
 const liveCredentialsPresent = Boolean(
-  process.env.BACKLOG_API_KEY && process.env.BACKLOG_HOST,
+  process.env.BACKLOG_HOST &&
+    process.env.BACKLOG_API_KEY &&
+    process.env.BACKLOG_LIVE_ISSUE_ID,
 );
 
 describe.skipIf(!liveCredentialsPresent)('live Backlog space', () => {
@@ -206,6 +208,14 @@ describe.skipIf(!liveCredentialsPresent)('live Backlog space', () => {
 Keep such suites small and sequential. Backlog's Update bucket allows on the
 order of 150 requests per user per minute, and a chatty live suite will hit
 HTTP 429 — see [Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/).
+
+The adapter's own live suite stays within roughly ten update-bucket calls:
+Get Project, Get Issue, then add, edit, star, unstar and delete one comment,
+and upload one small attachment and attach it before deleting that comment
+too. It creates no issues and touches no notifications, and it asserts that
+`adapter.rateLimit(host)` reports populated `read` and `update` buckets
+afterwards. Point `BACKLOG_LIVE_ISSUE_ID` at a scratch issue: the suite
+comments on it.
 
 ## Backlog credentials
 
@@ -223,10 +233,25 @@ You need a Backlog space and a personal API key.
    cp .env.example .env
    ```
 
-   | Variable           | Meaning                                                        |
-   | ------------------ | -------------------------------------------------------------- |
-   | `BACKLOG_HOST`     | Space host without a scheme, e.g. `example.backlog.com`.       |
-   | `BACKLOG_API_KEY`  | The personal API key issued above.                             |
+   Each variable is the fallback for the matching field of
+   `createBacklogAdapter({ ... })`, and only for the single-space
+   configuration shape. An explicit empty value is a validation error, not a
+   request to fall back.
+
+   | Variable                | Required                | Meaning                                                                                                                            |
+   | ----------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+   | `BACKLOG_HOST`          | yes                     | Space host without a scheme, port or path, e.g. `example.backlog.com`. Also `backlog.jp` and legacy `backlogtool.com` domains.      |
+   | `BACKLOG_API_KEY`       | one of these two        | The personal API key issued above. Sent in the `Backlog-API-Key` header.                                                            |
+   | `BACKLOG_ACCESS_TOKEN`  | one of these two        | OAuth 2.0 bearer token instead of a key. Expires after an hour; the adapter runs no OAuth flow, so use the resolver form long-term.  |
+   | `BACKLOG_BOT_USER_ID`   | yes                     | Numeric id of the bot user. `GET /api/v2/users/myself` reports it for the key above. Recognises the bot's own messages.              |
+   | `BACKLOG_BOT_USER_NAME` | yes                     | The bot's display name as Backlog renders it. Mentions arrive as resolved text, so this is what the mention pattern matches.         |
+   | `BACKLOG_WEBHOOK_SECRET`| unless a verifier is set| Secret carried in the webhook URL's `token` parameter. Backlog signs nothing, so this is the only sender-side check available.       |
+   | `BACKLOG_LIVE_ISSUE_ID` | live suite only         | Numeric id of a scratch issue the opt-in live suite comments on.                                                                     |
+
+   Generate the webhook secret with `openssl rand -hex 32` and treat it as a
+   credential: it is the entire authenticity check on the ingress path, because
+   [Add Webhook](https://developer.nulab.com/docs/backlog/api/2/add-webhook/)
+   accepts no secret parameter and Backlog sends no signature header.
 
 `.env` is gitignored (`.env` and `.env.*` are ignored, `.env.example` is the
 one exception). Never commit a real key, and never put it in a URL query
