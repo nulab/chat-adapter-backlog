@@ -1,0 +1,455 @@
+# CLAUDE.md
+
+Repo-specific knowledge for agents working in `@nulab/chat-adapter-backlog`.
+Contributor setup and the release process live in
+[DEVELOPMENT.md](./DEVELOPMENT.md); this file covers what you cannot derive by
+reading the code.
+
+## State of the repo
+
+A Backlog adapter for [Chat SDK](https://chat-sdk.dev/). The toolchain is
+complete; the adapter is not. `src/index.ts` exports a placeholder
+`ADAPTER_ID` and nothing else. No part of the `Adapter` interface is
+implemented, so there is no existing pattern in this repo to follow — the
+sections below are the design constraints to follow instead.
+
+`.github/workflows/ci.yml` asserts `ADAPTER_ID === 'backlog'` by importing
+`dist/index.js` in a real Node process. When the placeholder is replaced, that
+smoke test must be updated in the same change or the build job breaks.
+
+## Quality gates
+
+Run all five before declaring work done; CI runs exactly these:
+
+```sh
+pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
+```
+
+- `pnpm lint` uses `--max-warnings 0`, so a `console.log` (allowed: `warn`,
+  `error`) fails the build. `typescript/no-explicit-any` is an error outside
+  `*.test.ts`.
+- The pre-commit hook's oxlint step ends in `|| true` — it never blocks a
+  commit. A green commit says nothing about a green CI.
+- `tsconfig.json` enables `noUncheckedIndexedAccess`,
+  `exactOptionalPropertyTypes`, `verbatimModuleSyntax` (type-only imports must
+  say `import type`), `noUnusedLocals` and `noUnusedParameters` (prefix
+  intentionally unused params with `_`).
+- `pnpm build` fails on `publint` problems and on `attw` problems at the
+  `esm-only` profile. Touching `exports`, `files` or the build config means
+  running the build, not just the type check.
+- `engines.node` is `">=20"` (matching the `chat` core package), so do not use
+  APIs newer than Node 20 in shipped code. The test matrix runs the suite on
+  Node 20, 22, 24 and 26, so a 26-only API now fails a job rather than reaching
+  a consumer — but `pnpm typecheck` and `pnpm build` still only ever see the
+  pinned runtime, so a type-level or build-time 26-ism is caught by `test`
+  alone.
+- One Node runs the gates and pnpm provisions it: `devEngines.runtime` in
+  `package.json` (`^26.0.0`), pinned with a checksum in `pnpm-lock.yaml`.
+  `pnpm exec node`, `pnpm run <script>` and a bare `node` inside a script all
+  get it. A bare `node` in your own shell is a different Node, or none at all —
+  never assume one exists; go through pnpm.
+- `pnpm install` needs nothing but pnpm on PATH. There is no `mise.toml` any
+  more, and no bootstrap Node: the standalone pnpm build has Node.js linked in,
+  and the install-script ordering bug that used to make this fail
+  (pnpm/pnpm#14358) is fixed in the pinned pnpm.
+- No setting overrides the runtime per invocation (`--config.useNodeVersion` and
+  `PNPM_SHIM_BYPASS` are accepted and ignored). To run a gate on a different
+  Node, install with `--no-runtime` and put that Node on PATH — that is exactly
+  what the CI matrix does. Do not edit `devEngines.runtime` to test another
+  major; it changes the lockfile.
+- `@types/node` tracks the runtime's major on purpose. Running it ahead makes
+  `pnpm typecheck` accept APIs that do not exist at run time; holding it behind
+  hides APIs that do. Move the two together.
+- `pnpm-workspace.yaml` uses `allowBuilds` (pnpm 11 removed
+  `onlyBuiltDependencies`), and `minimumReleaseAge: 4320` means "latest" is the
+  newest release at least three days old. A brand-new version simply will not
+  resolve; that is intended, so wait rather than lowering it.
+
+## Pull requests
+
+Three rules shape every PR here, and they interact: work reaches `main` only as
+a squash commit, stacked PRs are actively used, and the release notes are
+generated from labels.
+
+### Titles
+
+Conventional Commits, **with a scope**, because the title becomes a commit
+subject on `main`: `feat(webhook): 401 a request with no path secret`.
+
+Types used here: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `ci`,
+`chore`, `revert`. Two are deliberately absent: `style`, because oxfmt owns
+formatting and a formatting-only change is a `chore` on the scope it touched;
+and `build`, because `build` is a *scope* here — the toolchain change that
+would be `build:` elsewhere is `chore(build)` or `fix(build)`.
+
+| Scope       | Covers                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `adapter`   | the `Adapter` surface: the class, `createBacklogAdapter`, thread-ID codec, egress, reads, reactions, presence, `stream()` |
+| `client`    | the Backlog API port: the `backlog-js` wrapper, auth, rate-limit buckets, typed errors, retries                           |
+| `webhook`   | webhook ingress: verification, body parsing, the `processMessage` dispatch                                                |
+| `format`    | markup conversion — the `BaseFormatConverter` subclass and its AST both ways                                              |
+| `build`     | tsdown, `exports`/`files`, `tsconfig.json`, publint/attw                                                                  |
+| `toolchain` | pnpm, the pinned Node runtime, oxlint/oxfmt/vitest configuration, lefthook                                                |
+| `ci`        | `.github/workflows/ci.yml` and the Node matrix                                                                            |
+| `release`   | `.github/workflows/release.yml`, `.github/release.yml`, publishing, versioning                                            |
+| `deps`      | dependency and lockfile bumps — what Dependabot opens                                                                     |
+| `docs`      | README, DEVELOPMENT.md, CLAUDE.md/AGENTS.md, the PR template                                                              |
+
+Tests take the scope of the code they cover, not a scope of their own:
+`test(client)`, never `test(test)`.
+
+If no scope fits, the PR is usually too broad — split it. If it really is a
+new area, add the scope to this table in the same PR; do not invent a one-off
+that appears in the history exactly once.
+
+A breaking change carries `!` before the colon (`feat(adapter)!: …`) and
+repeats itself as a `BREAKING CHANGE:` footer in the squash body.
+
+### Labels
+
+Label the PR when you open it. `.github/release.yml` builds the release notes
+from labels alone, and because of its `'*'` catch-all an unlabeled PR does not
+fail anything — it is filed under "Other Changes", silently, and the published
+notes stay wrong until someone edits them by hand.
+
+Read the label off the title's type:
+
+| Title                                                      | Label                                     | Section          |
+| ---------------------------------------------------------- | ----------------------------------------- | ---------------- |
+| `feat`                                                     | `enhancement`                             | New Features     |
+| `fix`                                                      | `bug`                                     | Bug Fixes        |
+| `perf`                                                     | `performance`                             | Performance      |
+| `docs`                                                     | `documentation`                           | Documentation    |
+| `chore(deps)` / `fix(deps)`, and anything Dependabot opens | `dependencies`                            | Dependencies     |
+| any `!` title or `BREAKING CHANGE:` footer                 | `breaking`, **plus** the type's own label | Breaking Changes |
+| `chore`, `ci`, `refactor`, `test`, `revert`                | none — leave it unlabeled                 | Other Changes    |
+
+- The last row is the only case where unlabeled is right, and it is a decision
+  rather than a forgotten step: no category covers those types, and stretching
+  `enhancement` over a refactor advertises a change users cannot observe as a
+  new feature.
+- `breaking` is the first category in `release.yml`, and GitHub documents `'*'`
+  as the catch-all "for pull requests that didn't match any of the previous
+  categories" — categories are matched in file order and a PR lands in exactly
+  one — so a breaking feature carrying both labels appears under Breaking
+  Changes, which is the intent.
+- Dependabot applies `dependencies` and an ecosystem label itself, and creates
+  those labels if they are missing, so its PRs need nothing from you.
+- **Nothing in this repository creates the six labels.** `.github/release.yml`
+  only categorizes; no workflow syncs labels. They exist because the maintainer
+  created them. If `gh pr edit --add-label enhancement` fails because the label
+  does not exist, say so in the PR and stop — do not create one, and never
+  settle for a near-miss like `feature` or `bugfix`, which the generated notes
+  cannot tell apart from unlabeled.
+
+### Squash merge
+
+Squash merge is the standard, and the individual commits on the branch never
+reach `main`. Their Why bodies are therefore lost unless they are carried into
+the squash commit message. GitHub composes a default message from the PR title,
+the description or the commits depending on repository settings, and that
+default is not a substitute for a body somebody wrote:
+[about pull request merges](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/about-pull-request-merges).
+So before merging, write the squash message on purpose — subject = the PR
+title, body = the Why consolidated from the branch's commits and the PR
+description, `BREAKING CHANGE:` footer kept if there is one.
+
+Two consequences worth stating plainly: the PR title is a commit subject and is
+held to the same standard as one, and a PR body that says "see the commits"
+leaves nothing behind on `main` at all.
+
+A non-squash merge would need a case where the separation of the commits is
+itself the value on `main` *and* each commit passes all five gates alone —
+importing external history, say. That has not come up, only squash is enabled,
+and anything else is the maintainer's call, not yours.
+
+### Stacked PRs
+
+Use them. A dependent change split into a stack gives each part a reviewable
+diff and gets the bottom of it merged while the top is still being written.
+
+**Create a stack by basing each PR on the previous branch, not `main`:**
+
+```sh
+git switch -c lollipop-onl/backlog-client        # PR A, base main
+# ...
+git switch -c lollipop-onl/webhook-ingress       # PR B, branched off PR A
+gh pr create --base lollipop-onl/backlog-client  # not the default base
+```
+
+GitHub fixes the base when the PR is opened and will not update it if the branch
+changes later
+([changing the base branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/changing-the-base-branch-of-a-pull-request)),
+so a stack member opened with the default base shows its parent's commits as its
+own. Repair that by editing the base, not by rebasing.
+
+**Declare the dependency in the PR body** so the order does not have to be
+inferred from branch names. First line of the Why section:
+`Stacked on #12 — merge that first.` Review and merge bottom-up: until the
+parent merges, the child's diff contains the parent's commits, and a child must
+never merge ahead of its parent.
+
+**After the bottom PR is squash-merged**, two things are true and neither of
+them fixes the child's branch:
+
+1. If the merged branch is deleted — by the repository's automatic-deletion
+   setting or by hand — GitHub "checks for any open pull requests in the same
+   repository that specify the deleted branch as their base branch" and
+   "automatically updates any such pull requests, changing their base branch to
+   the merged pull request's base branch"
+   ([creating and deleting branches](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository)),
+   so the child ends up targeting `main`. Before retargeting existed, those PRs
+   were closed outright
+   ([changelog](https://github.blog/changelog/2020-05-19-pull-request-retargeting/)).
+   Retargeting moves the PR's base pointer and nothing else. If the branch is
+   *not* deleted, not even that happens: the child keeps a base branch that is
+   now a dead end.
+2. The child's branch still carries the parent's commits, while `main` has that
+   content only inside the squash commit, under a different SHA — so the
+   child's diff presents the parent's work a second time. GitHub documents the
+   consequence: "If you keep working on the same head branch after a squash
+   merge, later pull requests can include commits that were already squashed
+   into the base branch. This can make merge conflicts more likely and can
+   force you to resolve the same conflicts more than once", and advises
+   rebasing before opening the next pull request
+   ([about pull request merges](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/about-pull-request-merges)).
+
+The recovery is a rebase that names its cut point:
+
+```sh
+git fetch origin
+git rebase --onto origin/main <parent-tip> lollipop-onl/webhook-ingress
+git push --force-with-lease
+```
+
+`<parent-tip>` is the parent branch's last commit before it was merged. Record
+it (`git rev-parse origin/<parent-branch>`) before the branch is deleted, or
+recover it afterwards from the PR's merge event or `git reflog`.
+
+Plain `git rebase origin/main` is the form that fails. It replays every commit
+on the child that is not on `main`, the parent's included, and git drops only
+commits that are "clean cherry-picks (as determined by
+`git log --cherry-mark ...`)"
+([git-rebase](https://git-scm.com/docs/git-rebase)). A squash of more than one
+commit is patch-identical to none of them, so nothing is dropped: git reapplies
+changes `main` already has and hands you the conflicts. `--onto` states the
+graft point and the cut point separately, so only the child's own commits are
+replayed — the documented use of `git rebase --onto master topicA topicB` to
+"rebase part of a branch"
+([git-rebase](https://git-scm.com/docs/git-rebase)).
+
+Force-pushing your own stack branch after that rebase is expected, and is the
+one exception to leaving pushed commits alone. Use `--force-with-lease`, and
+only on a stack branch — never on `main`.
+
+**A stack is the wrong tool when:**
+
+- The parts are not genuinely dependent. Open them as separate PRs off `main`:
+  they merge in any order and none of them pays the rebase above.
+- The bottom PR would leave `main` broken. That is one indivisible change, not a
+  stack — every PR merges on its own and must pass all five gates on its own.
+- The stack is getting deep. Each merge costs a rebase and a force-push on every
+  branch above it, so keep a stack to two or three and merge the bottom promptly
+  instead of accumulating.
+
+## Chat SDK adapter contract
+
+Read before implementing:
+
+- [Building an adapter](https://chat-sdk.dev/docs/contributing/building) — walks
+  a complete Matrix adapter end to end.
+- [Publishing your adapter](https://chat-sdk.dev/docs/contributing/publishing)
+- [Vendor-official adapters](https://chat-sdk.dev/docs/contributing/vendor-official)
+- [Testing](https://chat-sdk.dev/docs/testing)
+
+The interface is `Adapter<TThreadId, TRawMessage>`, shipped in `chat`'s own
+`.d.ts` — read it there rather than trusting the docs page, which is not fully
+in sync. As of `chat@4.39.0` it has **17 required members**:
+
+- Properties: `name`, `userName`
+- Lifecycle: `initialize(chat)`
+- Thread IDs: `encodeThreadId`, `decodeThreadId`, `channelIdFromThreadId`
+  (the docs page lists this one as optional; the shipped type says otherwise)
+- Ingress: `handleWebhook`, `parseMessage`
+- Egress: `postMessage`, `editMessage`, `deleteMessage`, `renderFormatted`
+- Reactions: `addReaction`, `removeReaction`
+- Reads: `fetchMessages`, `fetchThread`
+- Presence: `startTyping`
+
+…and 27 optional ones the SDK degrades gracefully around (`stream`,
+`disconnect`, `openDM`, `isDM`, `reply`, `listThreads`, `fetchMessage`,
+`fetchChannelInfo`, `fetchChannelMessages`, `openModal`, `postEphemeral`,
+`postChannelMessage`, `scheduleMessage`, `markAsRead`, `getUser`, and others).
+Implement only what Backlog can actually support.
+
+Conventions to follow:
+
+- Export both the class and a `createBacklogAdapter(config?)` factory, with
+  `config?.x ?? process.env.X` fallbacks so zero-config construction works.
+  The vendor-official review additionally expects credential fields to accept
+  **resolver functions**, not only static strings, resolved per call.
+- `@chat-adapter/shared` supplies the error classes to throw
+  (`ValidationError`, `AuthenticationError`, `ResourceNotFoundError`,
+  `PermissionError`, `AdapterRateLimitError`, `NetworkError`, `AdapterError`)
+  and the message helpers `extractCard()`, `extractFiles()`, `toBuffer()`,
+  `cardToFallbackText()`. Do not hand-roll equivalents.
+- `handleWebhook` must, in this order: verify the request's authenticity and
+  return **401** if it is missing or invalid; parse the raw body; build a lazy
+  async factory (`async () => this.parseMessage(payload)`); call
+  `this.chat.processMessage(this, threadId, factory, options)`; return 200
+  quickly. The SDK handles `waitUntil` internally.
+- Formatting goes through a `BaseFormatConverter` subclass (`toAst`,
+  `fromAst`, and `renderPostable` only if Backlog's markup demands it).
+- **Dependency on `chat`:** the published docs prescribe
+  `"peerDependencies": { "chat": "^4.0.0" }` plus
+  `"dependencies": { "@chat-adapter/shared": "^4.0.0" }`, while every
+  first-party `@chat-adapter/*` package (checked: `@chat-adapter/github@4.39.0`)
+  instead pins both exactly in `dependencies` (`"chat": "4.39.0"`). The exact
+  pin only works inside Vercel's release-locked monorepo; a package released on
+  its own cadence should follow the docs and use the peer range. Whichever is
+  chosen, record why in the commit.
+
+## `stream()` must be overridden
+
+If `stream()` is left unimplemented, the SDK falls back to posting a message
+and editing it every `streamingUpdateIntervalMs`, which defaults to **500 ms**
+(`chat@4.39.0`). Against Backlog that is roughly 120 edits per minute into a
+150-per-minute Update bucket — one streamed reply can exhaust the user's write
+quota. `@chat-adapter/github` overrides `stream()` for exactly this reason: it
+accumulates the whole `textStream` and calls `postMessage` once. Do the same
+here.
+
+## Backlog API landmines
+
+Reference: [Backlog API v2](https://developer.nulab.com/docs/backlog/). Only v2
+exists.
+
+**Host.** Base URL is `https://<space>.backlog.com/api/v2`, but spaces also live
+on `backlog.jp` and legacy `backlogtool.com` domains (the docs show
+`backlog.com` and `backlogtool.com`). Take the full host as a configurable
+string; never accept a subdomain slug and template a fixed domain around it.
+
+**Auth.** ([Authentication &
+Authorization](https://developer.nulab.com/docs/backlog/auth/)) API key via the
+`Backlog-API-Key` header — prefer it, because the documented `?apiKey=`
+query-string form leaks the key into access logs, proxies and error reports. Or
+OAuth 2.0 authorization code grant against `POST /api/v2/oauth2/token`:
+`Bearer` access token with `expires_in: 3600`, refreshable via
+`grant_type=refresh_token`; no scopes are documented, so a token is
+all-or-nothing.
+
+**Rate limits.** ([Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/),
+[Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/))
+Limits are **per user, per minute**, in four independent buckets:
+
+| Bucket | Covers                                                            | Documented example |
+| ------ | ----------------------------------------------------------------- | ------------------ |
+| read   | GET, excluding the Search and Icon endpoints                      | 600                |
+| update | POST, PATCH, DELETE                                               | 150                |
+| search | Issue List, Count Issue, Wiki Page List, Count Wiki Page          | 150                |
+| icon   | Space Logo, User Icon, Project Icon, Group Icon, Team Icon        | 60                 |
+
+Traps, in order of how easily they are missed:
+
+1. **Issue listing and counting draw on `search`, not `read`.** The bucket that
+   any polling loop consumes is the 150 one, not the 600 one.
+2. **The numbers above are the documented example values.** The rate-limit page
+   states limits differ between Free and Paid plans and tells you to call
+   `GET /api/v2/rateLimit`. Read the real figures from that endpoint or from the
+   response headers; do not hard-code 600/150/150/60 as invariants.
+3. **Backlog sends no `Retry-After`.** Over limit is HTTP 429 with error code
+   13. Compute the backoff from `X-RateLimit-Reset`, which is **UTC epoch
+   seconds**, alongside `X-RateLimit-Limit` and `X-RateLimit-Remaining`. Track
+   the headers per bucket — one bucket's remaining count says nothing about
+   another's.
+
+**Errors.** ([Error response](https://developer.nulab.com/docs/backlog/error-response/))
+The body is `{"errors":[{"message":"...","code":N,"moreInfo":"..."}]}` with
+codes 1–13: 1 InternalError, 2 LicenceError, 3 LicenceExpiredError,
+4 AccessDeniedError, 5 UnauthorizedOperationError, 6 NoResourceError,
+7 InvalidRequestError, 8 SpaceOverCapacityError, 9 ResourceOverflowError,
+10 TooLargeFileError, 11 AuthenticationError, 12 RequiredMFAError,
+13 TooManyRequestsError. The HTTP status alone is not enough to classify a
+failure — map from `errors[].code` when deciding what to throw and what to
+retry.
+
+**Webhooks have no HMAC signing.** ([Add
+Webhook](https://developer.nulab.com/docs/backlog/api/2/add-webhook/)) The
+endpoint accepts only `name`, `description`, `hookUrl`, `allEvent` and
+`activityTypeIds[]` — there is no secret parameter and no signature header, so
+Chat SDK's "verify the signature, else 401" contract cannot be satisfied the
+usual way. Backlog offers only IP allowlisting or Basic auth embedded in the
+URL. The workable shape: carry a high-entropy secret in the `hookUrl` path or
+query, compare it in constant time, 401 on mismatch, and expose a
+`webhookVerifier` escape hatch so a deployment can plug in its own check (a
+reverse-proxy assertion, mTLS, an IP allowlist). Document the weaker guarantee
+where users will see it; never silently skip verification.
+
+**No realtime transport.** No SSE, no WebSocket. Push is webhooks only.
+Anything else polls: `updatedSince` on
+[`GET /api/v2/issues`](https://developer.nulab.com/docs/backlog/api/2/get-issue-list/)
+— note its granularity is a **date** (`yyyy-MM-dd`), not a timestamp, so it
+cannot be used as a fine-grained cursor on its own — and `minId` / `maxId` /
+`count` (1–100) on
+[`GET /api/v2/notifications`](https://developer.nulab.com/docs/backlog/api/2/get-notification/).
+Both compete for the 150/min search and read budgets, so any poller needs a
+persisted cursor and a backoff.
+
+**Activity types** ([Get
+Activity](https://developer.nulab.com/docs/backlog/api/2/get-activity/)) that
+matter here: **1** Issue Created, **2** Issue Updated, **3** Issue Commented,
+**17** Comment Notification Added. Type 17 is the "project notifications" in the
+package description. Subscribe to these explicitly via `activityTypeIds[]`
+rather than setting `allEvent` — the full range runs to 49 and includes git,
+pull request, wiki and document events this adapter has no meaning for.
+
+## Dependency plan
+
+Build on [`backlog-js`](https://github.com/nulab/backlog-js) (v0.20.1, MIT,
+Nulab's own, tsdown-built, single runtime dependency `qs`), wrapped behind a
+narrow internal port so the adapter never leaks its types outward. It does not
+provide, and this repo must add:
+
+1. Rate-limit bucket awareness (classify each request into read/update/search/
+   icon and track the headers per bucket).
+2. Typed errors derived from `errors[].code`.
+3. 429 retry with backoff computed from `X-RateLimit-Reset`.
+
+The port also keeps the option open to drop `backlog-js` for plain `fetch`
+without touching adapter code.
+
+## Test strategy
+
+- Vitest, colocated `src/**/*.test.ts`. Mock the platform client with
+  `vi.mock` — not msw, not nock.
+- Use `@chat-adapter/tests` (v4.39.0). Verified exports: the contract suites
+  `threadIdContract`, `selfMessageContract` and `connectWebhookContract`; the
+  factories `createMockAdapter`, `createMockChatInstance`, `createMockState`,
+  `createTestMessage`, `createMockLogger` / `mockLogger`; plus subpaths
+  `@chat-adapter/tests/matchers` (`toHavePosted`, `toHaveEdited`,
+  `toHaveDeleted`, `toHaveReactedWith`, `toHaveStartedTyping`,
+  `toHavePostedToChannel`, `toHaveDispatched`, `toBeSubscribedTo`) and
+  `@chat-adapter/tests/setup`. Run the three contract suites against this
+  adapter; they encode invariants (thread-ID roundtrip, self-message
+  suppression, webhook connect) that are easy to break silently.
+- `pnpm test` must pass with no credentials and no network. Any live suite is
+  opt-in and self-skipping on absent `BACKLOG_API_KEY` — see the pattern in
+  DEVELOPMENT.md. Keep it lean; the 150/min update bucket will 429 a chatty
+  suite.
+
+## Don't
+
+Anti-patterns observed in real adapter code:
+
+- **No `process.exit()`** anywhere. This is a library; killing the host process
+  on a config error is never correct. Throw a typed error.
+- **Never skip webhook verification** because the raw body was unavailable —
+  that is the case where you must return 401. Include a timestamp staleness
+  window too; verification without one is replayable.
+- **Never swallow a send error and return a fabricated success.** A failed post
+  must surface as a rejection, not as a synthetic message object.
+- **Never mutate the caller's message envelope.** Copy before adding
+  platform-specific fields.
+- **Never hard-code a space host, a rate-limit number, or an activity type
+  name** in a place a user cannot override or a future reader cannot trace back
+  to the API docs.

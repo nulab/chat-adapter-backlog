@@ -1,0 +1,59 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Diagnostic reports (https://nodejs.org/api/report.html)
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Dependency directories
+node_modules/
+
+# Build output
+dist/
+
+# Test coverage
+coverage
+*.lcov
+
+# TypeScript build artifacts
+*.tsbuildinfo
+
+# Output of 'npm pack'
+*.tgz
+
+# dotenv environment variable files
+.env
+.env.*
+!.env.example
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+.vscode-test
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Vite logs files
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Claude Code plans
+.claude/plans/
+
+# Orca agent worktrees
+.orca/
+
+# Git worktrees
+.worktrees/
+
+# Lefthook local overrides
+lefthook-local.yml

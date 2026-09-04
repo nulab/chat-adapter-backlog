@@ -1,0 +1,30 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # Matches `minimumReleaseAge: 4320` in pnpm-workspace.yaml. The quarantine
+    # already decides when a release becomes installable, so a longer cooldown
+    # here does not add safety — it only holds the PR back after the release
+    # was safe to take, which is how this repository ended up several patch
+    # versions behind on every tool.
+    #
+    # Majors keep a longer wait, but nothing like the old 30 days: the risk a
+    # major carries is breakage rather than a compromised release, and a week
+    # is enough for a bad `x.0.0` to be superseded by `x.0.1` before the PR
+    # opens. Anything longer is review latency, not review.
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+    groups:
+      dev-dependencies:
+        dependency-type: development
+      production-dependencies:
+        dependency-type: production
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
