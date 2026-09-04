@@ -71,59 +71,48 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [22, 24, 26]
-
-    name: Test (Node ${{ matrix.node-version }})
+    name: Test
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
 
-      # pnpm-workspace.yaml's `useNodeVersion` — the only thing that puts Node
-      # on PATH here — takes an exact version and rejects `22`, `22.x` and
-      # `lts`, so the matrix major has to be resolved to one. Asking pnpm keeps
-      # three patch versions from being pinned in this file, where they would
-      # rot silently: the matrix would still be green while testing Node the
-      # supported range has moved past.
-      - name: Resolve the matrix major to an exact version
-        env:
-          NODE_MAJOR: ${{ matrix.node-version }}
-        run: |
-          version="$(pnpm env list --remote "$NODE_MAJOR" | tail -1)"
-          echo "Resolved Node $NODE_MAJOR to $version"
-          echo "PNPM_NODE_VERSION=$version" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
 
-      # `--config.use-node-version` overrides the setting per invocation, which
-      # is the only override pnpm 10.34.5 offers: there is no environment
-      # variable for it, so every pnpm command below has to carry the flag or
-      # it silently runs the repository default instead of the matrix entry.
+      # `pnpm exec node` exits 0 even when nothing provisioned a runtime: with
+      # no `node_modules/.bin/node` to shadow it, the runner image's own Node
+      # services the step and the suite silently passes on a version the
+      # repository never selected. The range is read out of `package.json` so
+      # that bumping `devEngines.runtime` does not need this file edited too.
+      #
       # Asserted inside the Node process rather than by capturing its output:
-      # pnpm announces "Fetching Node.js <version> ..." on stdout when it has
-      # to download the runtime, which it does in some jobs and not others, so
-      # a captured stdout is the version with an unpredictable preamble.
-      - name: Verify the provisioned Node
-        env:
-          EXPECTED_NODE_MAJOR: ${{ matrix.node-version }}
+      # pnpm writes its own progress to stdout, which would make the captured
+      # version a value with an unpredictable preamble.
+      - name: Verify the provisioned Node satisfies devEngines.runtime
         run: |
-          pnpm --config.use-node-version="$PNPM_NODE_VERSION" exec node -e '
+          pnpm exec node -e '
+            const { devEngines } = require("./package.json");
+            const { version: provisioned } = require("./node_modules/node/package.json");
+            const range = devEngines.runtime.version;
             const actual = process.versions.node;
-            const { EXPECTED_NODE_MAJOR, PNPM_NODE_VERSION } = process.env;
-            console.log(`node ${actual}`);
-            if (actual !== PNPM_NODE_VERSION) {
-              throw new Error(`ran Node ${actual}, not the resolved ${PNPM_NODE_VERSION}`);
+            console.log(`node ${actual} from ${process.execPath}`);
+            if (actual !== provisioned) {
+              throw new Error(`ran Node ${actual}, not the ${provisioned} pnpm provisioned`);
             }
-            if (actual.split(".")[0] !== EXPECTED_NODE_MAJOR) {
-              throw new Error(`ran Node ${actual}, not the advertised major ${EXPECTED_NODE_MAJOR}`);
+            // Comparing majors is the whole of the range check only because
+            // the range is a caret: every 24.x satisfies ^24.0.0. Rather than
+            // hand-roll semver for shapes that are not in use, a range in any
+            // other shape is rejected here instead of waved through.
+            const expected = /^\^(\d+)\./.exec(range)?.[1];
+            if (!expected) {
+              throw new Error(`this check only understands a caret range, not ${range}`);
+            }
+            if (actual.split(".")[0] !== expected) {
+              throw new Error(`ran Node ${actual}, which does not satisfy devEngines.runtime ${range}`);
             }
           '
           pnpm --version
 
-      - run: pnpm install --frozen-lockfile --config.use-node-version="$PNPM_NODE_VERSION"
-
       - name: Test
-        run: pnpm --config.use-node-version="$PNPM_NODE_VERSION" run test
+        run: pnpm run test
