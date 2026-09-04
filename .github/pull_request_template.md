@@ -24,10 +24,11 @@ nothing about live behavior. If the opt-in live suite ran, say so.
 
 <!-- Delete the lines that do not apply. -->
 
-- [ ] Labeled `breaking`, `enhancement`, `bug`, `performance`, `documentation`
-      or `dependencies` — release notes are generated from labels
-      (`.github/release.yml`), and an unlabeled PR is filed under
-      "Other Changes".
+- [ ] Labeled to match the title's type — `feat`->`enhancement`, `fix`->`bug`,
+      `perf`->`performance`, `docs`->`documentation`, deps->`dependencies`, any
+      `!`->`breaking`. Release notes are generated from labels
+      (`.github/release.yml`); `chore`, `ci`, `refactor`, `test` and `revert`
+      have no category and belong in "Other Changes" unlabeled.
 - [ ] `package.json` changed: `pnpm-lock.yaml` is committed with it, because CI
       installs with `--frozen-lockfile`.
 - [ ] The public entry's exports changed: the smoke test in

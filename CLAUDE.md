@@ -65,6 +65,193 @@ pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
   newest release at least three days old. A brand-new version simply will not
   resolve; that is intended, so wait rather than lowering it.
 
+## Pull requests
+
+Three rules shape every PR here, and they interact: work reaches `main` only as
+a squash commit, stacked PRs are actively used, and the release notes are
+generated from labels.
+
+### Titles
+
+Conventional Commits, **with a scope**, because the title becomes a commit
+subject on `main`: `feat(webhook): 401 a request with no path secret`.
+
+Types used here: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `ci`,
+`chore`, `revert`. Two are deliberately absent: `style`, because oxfmt owns
+formatting and a formatting-only change is a `chore` on the scope it touched;
+and `build`, because `build` is a *scope* here — the toolchain change that
+would be `build:` elsewhere is `chore(build)` or `fix(build)`.
+
+| Scope       | Covers                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `adapter`   | the `Adapter` surface: the class, `createBacklogAdapter`, thread-ID codec, egress, reads, reactions, presence, `stream()` |
+| `client`    | the Backlog API port: the `backlog-js` wrapper, auth, rate-limit buckets, typed errors, retries                           |
+| `webhook`   | webhook ingress: verification, body parsing, the `processMessage` dispatch                                                |
+| `format`    | markup conversion — the `BaseFormatConverter` subclass and its AST both ways                                              |
+| `build`     | tsdown, `exports`/`files`, `tsconfig.json`, publint/attw                                                                  |
+| `toolchain` | pnpm, the pinned Node runtime, oxlint/oxfmt/vitest configuration, lefthook                                                |
+| `ci`        | `.github/workflows/ci.yml` and the Node matrix                                                                            |
+| `release`   | `.github/workflows/release.yml`, `.github/release.yml`, publishing, versioning                                            |
+| `deps`      | dependency and lockfile bumps — what Dependabot opens                                                                     |
+| `docs`      | README, DEVELOPMENT.md, CLAUDE.md/AGENTS.md, the PR template                                                              |
+
+Tests take the scope of the code they cover, not a scope of their own:
+`test(client)`, never `test(test)`.
+
+If no scope fits, the PR is usually too broad — split it. If it really is a
+new area, add the scope to this table in the same PR; do not invent a one-off
+that appears in the history exactly once.
+
+A breaking change carries `!` before the colon (`feat(adapter)!: …`) and
+repeats itself as a `BREAKING CHANGE:` footer in the squash body.
+
+### Labels
+
+Label the PR when you open it. `.github/release.yml` builds the release notes
+from labels alone, and because of its `'*'` catch-all an unlabeled PR does not
+fail anything — it is filed under "Other Changes", silently, and the published
+notes stay wrong until someone edits them by hand.
+
+Read the label off the title's type:
+
+| Title                                                      | Label                                     | Section          |
+| ---------------------------------------------------------- | ----------------------------------------- | ---------------- |
+| `feat`                                                     | `enhancement`                             | New Features     |
+| `fix`                                                      | `bug`                                     | Bug Fixes        |
+| `perf`                                                     | `performance`                             | Performance      |
+| `docs`                                                     | `documentation`                           | Documentation    |
+| `chore(deps)` / `fix(deps)`, and anything Dependabot opens | `dependencies`                            | Dependencies     |
+| any `!` title or `BREAKING CHANGE:` footer                 | `breaking`, **plus** the type's own label | Breaking Changes |
+| `chore`, `ci`, `refactor`, `test`, `revert`                | none — leave it unlabeled                 | Other Changes    |
+
+- The last row is the only case where unlabeled is right, and it is a decision
+  rather than a forgotten step: no category covers those types, and stretching
+  `enhancement` over a refactor advertises a change users cannot observe as a
+  new feature.
+- `breaking` is the first category in `release.yml`, and GitHub documents `'*'`
+  as the catch-all "for pull requests that didn't match any of the previous
+  categories" — categories are matched in file order and a PR lands in exactly
+  one — so a breaking feature carrying both labels appears under Breaking
+  Changes, which is the intent.
+- Dependabot applies `dependencies` and an ecosystem label itself, and creates
+  those labels if they are missing, so its PRs need nothing from you.
+- **Nothing in this repository creates the six labels.** `.github/release.yml`
+  only categorizes; no workflow syncs labels. They exist because the maintainer
+  created them. If `gh pr edit --add-label enhancement` fails because the label
+  does not exist, say so in the PR and stop — do not create one, and never
+  settle for a near-miss like `feature` or `bugfix`, which the generated notes
+  cannot tell apart from unlabeled.
+
+### Squash merge
+
+Squash merge is the standard, and the individual commits on the branch never
+reach `main`. Their Why bodies are therefore lost unless they are carried into
+the squash commit message. GitHub composes a default message from the PR title,
+the description or the commits depending on repository settings, and that
+default is not a substitute for a body somebody wrote:
+[about pull request merges](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/about-pull-request-merges).
+So before merging, write the squash message on purpose — subject = the PR
+title, body = the Why consolidated from the branch's commits and the PR
+description, `BREAKING CHANGE:` footer kept if there is one.
+
+Two consequences worth stating plainly: the PR title is a commit subject and is
+held to the same standard as one, and a PR body that says "see the commits"
+leaves nothing behind on `main` at all.
+
+A non-squash merge would need a case where the separation of the commits is
+itself the value on `main` *and* each commit passes all five gates alone —
+importing external history, say. That has not come up, only squash is enabled,
+and anything else is the maintainer's call, not yours.
+
+### Stacked PRs
+
+Use them. A dependent change split into a stack gives each part a reviewable
+diff and gets the bottom of it merged while the top is still being written.
+
+**Create a stack by basing each PR on the previous branch, not `main`:**
+
+```sh
+git switch -c lollipop-onl/backlog-client        # PR A, base main
+# ...
+git switch -c lollipop-onl/webhook-ingress       # PR B, branched off PR A
+gh pr create --base lollipop-onl/backlog-client  # not the default base
+```
+
+GitHub fixes the base when the PR is opened and will not update it if the branch
+changes later
+([changing the base branch](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/changing-the-base-branch-of-a-pull-request)),
+so a stack member opened with the default base shows its parent's commits as its
+own. Repair that by editing the base, not by rebasing.
+
+**Declare the dependency in the PR body** so the order does not have to be
+inferred from branch names. First line of the Why section:
+`Stacked on #12 — merge that first.` Review and merge bottom-up: until the
+parent merges, the child's diff contains the parent's commits, and a child must
+never merge ahead of its parent.
+
+**After the bottom PR is squash-merged**, two things are true and neither of
+them fixes the child's branch:
+
+1. If the merged branch is deleted — by the repository's automatic-deletion
+   setting or by hand — GitHub "checks for any open pull requests in the same
+   repository that specify the deleted branch as their base branch" and
+   "automatically updates any such pull requests, changing their base branch to
+   the merged pull request's base branch"
+   ([creating and deleting branches](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-and-deleting-branches-within-your-repository)),
+   so the child ends up targeting `main`. Before retargeting existed, those PRs
+   were closed outright
+   ([changelog](https://github.blog/changelog/2020-05-19-pull-request-retargeting/)).
+   Retargeting moves the PR's base pointer and nothing else. If the branch is
+   *not* deleted, not even that happens: the child keeps a base branch that is
+   now a dead end.
+2. The child's branch still carries the parent's commits, while `main` has that
+   content only inside the squash commit, under a different SHA — so the
+   child's diff presents the parent's work a second time. GitHub documents the
+   consequence: "If you keep working on the same head branch after a squash
+   merge, later pull requests can include commits that were already squashed
+   into the base branch. This can make merge conflicts more likely and can
+   force you to resolve the same conflicts more than once", and advises
+   rebasing before opening the next pull request
+   ([about pull request merges](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/incorporating-changes-from-a-pull-request/about-pull-request-merges)).
+
+The recovery is a rebase that names its cut point:
+
+```sh
+git fetch origin
+git rebase --onto origin/main <parent-tip> lollipop-onl/webhook-ingress
+git push --force-with-lease
+```
+
+`<parent-tip>` is the parent branch's last commit before it was merged. Record
+it (`git rev-parse origin/<parent-branch>`) before the branch is deleted, or
+recover it afterwards from the PR's merge event or `git reflog`.
+
+Plain `git rebase origin/main` is the form that fails. It replays every commit
+on the child that is not on `main`, the parent's included, and git drops only
+commits that are "clean cherry-picks (as determined by
+`git log --cherry-mark ...`)"
+([git-rebase](https://git-scm.com/docs/git-rebase)). A squash of more than one
+commit is patch-identical to none of them, so nothing is dropped: git reapplies
+changes `main` already has and hands you the conflicts. `--onto` states the
+graft point and the cut point separately, so only the child's own commits are
+replayed — the documented use of `git rebase --onto master topicA topicB` to
+"rebase part of a branch"
+([git-rebase](https://git-scm.com/docs/git-rebase)).
+
+Force-pushing your own stack branch after that rebase is expected, and is the
+one exception to leaving pushed commits alone. Use `--force-with-lease`, and
+only on a stack branch — never on `main`.
+
+**A stack is the wrong tool when:**
+
+- The parts are not genuinely dependent. Open them as separate PRs off `main`:
+  they merge in any order and none of them pays the rebase above.
+- The bottom PR would leave `main` broken. That is one indivisible change, not a
+  stack — every PR merges on its own and must pass all five gates on its own.
+- The stack is getting deep. Each merge costs a rebase and a force-push on every
+  branch above it, so keep a stack to two or three and merge the bottom promptly
+  instead of accumulating.
+
 ## Chat SDK adapter contract
 
 Read before implementing:

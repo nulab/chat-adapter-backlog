@@ -269,6 +269,16 @@ majors. The default matches `minimumReleaseAge`, so a release becomes
 installable and eligible for a PR at the same moment; a longer cooldown would
 only hold the update back after it was already safe to take.
 
+## Pull requests
+
+How a change lands is written down once, in [CLAUDE.md](./CLAUDE.md) (`AGENTS.md`
+is a symlink to it), and applies to human contributors and agents alike: squash
+merge as the standard, Conventional Commit titles with a scope from a fixed
+vocabulary, the label each PR needs before `.github/release.yml` can file it
+under the right heading, and how to build a stack of dependent PRs and unwind it
+after the bottom one merges. `.github/pull_request_template.md` is the short
+form you get in the PR form.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on pushes to `main`, on pull requests
