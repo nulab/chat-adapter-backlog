@@ -47,10 +47,16 @@
     "format:check": "oxfmt --check src tsdown.config.ts vitest.config.ts",
     "typecheck": "tsc --noEmit"
   },
+  "peerDependencies": {
+    "chat": "^4.39.0"
+  },
   "devDependencies": {
     "@arethetypeswrong/core": "^0.18.5",
+    "@chat-adapter/state-memory": "^4.39.0",
+    "@chat-adapter/tests": "^4.39.0",
     "@types/node": "^26.4.0",
     "@vitest/coverage-v8": "^4.1.11",
+    "chat": "^4.39.0",
     "lefthook": "^2.1.12",
     "only-allow": "^1.2.2",
     "oxfmt": "^0.65.0",
@@ -73,5 +79,10 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "@chat-adapter/shared": "^4.39.0",
+    "backlog-js": "^0.20.1",
+    "zod": "^4.5.4"
   }
 }
