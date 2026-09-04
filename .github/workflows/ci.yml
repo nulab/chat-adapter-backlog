@@ -117,19 +117,28 @@ jobs:
       # the Node this job asked for is the only one on PATH.
       - run: pnpm install --frozen-lockfile --no-runtime
 
-      # Without this the matrix can go green while testing one version four
-      # times, which is exactly what it did before `--no-runtime`: a linked
-      # runtime silently serviced every job. Both halves are load-bearing —
-      # the major has to match, and it has to come from outside node_modules.
+      # From here on the job must not go through pnpm, which is why neither
+      # step below does. `pnpm exec` and `pnpm run` verify installed
+      # dependencies against the lockfile first, and a runtime deliberately
+      # left out by `--no-runtime` reads as a dependency that is missing: pnpm
+      # downloads and links Node 26, then services the command with it. That
+      # is not hypothetical — it is what failed this matrix on 22, 24 and 26
+      # while 20 happened to escape it, so the repair is not even consistent
+      # enough to work around.
       #
-      # Asserted inside the Node process rather than by capturing its output:
-      # pnpm writes its own progress to stdout, which would make the captured
-      # version a value with an unpredictable preamble.
+      # Invoking the runner's entry point with a bare `node` keeps one Node in
+      # play: the one actions/setup-node put on PATH.
+      #
+      # Asserted inside the Node process rather than by capturing its output,
+      # so there is nothing to parse and the process being identified is the
+      # one doing the identifying. Both halves are load-bearing — the major has
+      # to match, and it has to come from outside node_modules, which is the
+      # half that catches a runtime that got linked after all.
       - name: Verify the running Node is the one this job asked for
         env:
           EXPECTED_MAJOR: ${{ matrix.node }}
         run: |
-          pnpm exec node -e '
+          node -e '
             const expected = process.env.EXPECTED_MAJOR;
             const actual = process.versions.node;
             console.log(`node ${actual} from ${process.execPath}`);
@@ -140,7 +149,8 @@ jobs:
               throw new Error(`ran Node ${actual}, not the Node ${expected} this job asked for`);
             }
           '
-          pnpm --version
 
+      # `pnpm test` is `vitest run`; this is that, with the Node this job
+      # selected instead of the one pnpm would relink.
       - name: Test
-        run: pnpm run test
+        run: node node_modules/vitest/vitest.mjs run

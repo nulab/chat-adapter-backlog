@@ -55,12 +55,19 @@ Node as a real dependency, `node_modules/.bin/node` shadows everything else:
 ignored. What does work is **`pnpm install --no-runtime`**, which skips
 fetching and linking the runtime and leaves the rest of the install alone — so
 whatever Node is on PATH is the one that runs. That flag, not an override
-setting, is how the CI test matrix reaches four majors from one lockfile. Use
-it the same way locally:
+setting, is how the CI test matrix reaches four majors from one lockfile.
+
+There is a catch, and it is the reason the matrix does not use `pnpm run`.
+`pnpm run` and `pnpm exec` verify installed dependencies against the lockfile
+before running anything, and a runtime left out by `--no-runtime` looks exactly
+like a dependency that is missing — so pnpm downloads and links the pinned Node
+and services the command with it, undoing the override. So run the tool
+directly:
 
 ```sh
-pnpm install --frozen-lockfile --no-runtime   # then PATH's node runs the gates
-pnpm install                                  # restores the pinned runtime
+pnpm install --frozen-lockfile --no-runtime
+node node_modules/vitest/vitest.mjs run   # bare `node`, not `pnpm test`
+pnpm install                              # restores the pinned runtime
 ```
 
 `package.json` also declares `"engines": { "node": ">=20" }`. That is the range
@@ -292,11 +299,17 @@ over PATH for every `pnpm run` and `pnpm exec`, and no flag or setting
 overrides it — the matrix would run the pinned Node four times and report four
 green checks.
 
+After that install the job stops using pnpm, and that is deliberate: `pnpm run`
+and `pnpm exec` re-materialize the skipped runtime and would hand the step the
+pinned Node anyway. The assertion and the suite both run through a bare `node`,
+so exactly one Node is in play.
+
 Which is why `test` asserts, and asserts two things: that the running Node's
 major is the one the job asked for, and that its `execPath` is not inside
-`node_modules`. The second half is the one that catches a silently linked
-runtime. An earlier matrix went green while testing a single version, and this
-assertion is the only guard against that recurring.
+`node_modules`. The second half is the one that catches a linked runtime. An
+earlier matrix went green while testing a single version, and this assertion is
+the only guard against that recurring — it is also what caught the
+re-materializing install rather than letting it pass as three green checks.
 
 Nothing in CI calls a bare `node`. The runner images ship their own, and it
 would quietly service any step that asked for it, so the build job's smoke test
