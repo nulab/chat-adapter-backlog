@@ -39,26 +39,19 @@ function parseCursor(cursor: string | undefined): number | undefined {
 }
 
 /**
- * Author for a REST-derived message (a comment or the issue root). The
- * port's `BacklogUserRef` (src/client/port.ts, owned by an earlier phase)
- * carries no numeric user id — only the login `userId` string and `name` —
- * unlike a webhook activity's `createdUser.id`
- * (`src/webhook/inbound.ts` `buildAuthor`). `userId` here is therefore
- * `<host>:<login-id-or-name>` rather than the webhook path's
- * `<host>:<numeric-id>`; both are opaque identity strings to the core
- * (`.claude/rules/chat-sdk-core-facts.md`: dedupe and self-skip read
- * `author.isMe`, not `userId`), so the differing shape does not affect
- * dedupe or mention handling.
+ * Author for a REST-derived message (a comment or the issue root). Mirrors
+ * the webhook path's `<host>:<id>` shape (`src/webhook/inbound.ts`
+ * `buildAuthor`) using `BacklogUserRef.id`, the same numeric identity §2
+ * specifies for every user id in this adapter.
  */
 export function buildRestAuthor(
   host: string,
-  botUserIdString: string | null,
-  createdUser: { userId: string | null; name: string }
+  botUserId: number,
+  createdUser: { id: number; userId: string | null; name: string }
 ): Author {
-  const isMe =
-    botUserIdString !== null && createdUser.userId === botUserIdString;
+  const isMe = createdUser.id === botUserId;
   return {
-    userId: `${host}:${createdUser.userId ?? createdUser.name}`,
+    userId: `${host}:${createdUser.id}`,
     userName: createdUser.userId ?? createdUser.name,
     fullName: createdUser.name,
     isMe,
@@ -107,7 +100,7 @@ export interface MessageBuilders {
   host: string;
   projectId: number;
   issueId: number;
-  botUserIdString: string | null;
+  botUserId: number;
   fetchAttachment: (issueId: number, attachmentId: number) => Promise<Buffer>;
   MessageCtor: new (
     data: MessageData<BacklogRawMessage>
@@ -125,7 +118,7 @@ export function buildRootMessage(
   builders: MessageBuilders,
   issue: BacklogIssue
 ): Message<BacklogRawMessage> {
-  const { host, projectId, issueId, botUserIdString, MessageCtor } = builders;
+  const { host, projectId, issueId, botUserId, MessageCtor } = builders;
   const text = [issue.summary, issue.description].filter(Boolean).join('\n\n');
   return new MessageCtor({
     id: encodeMessageId({ kind: 'issue', host, issueId }),
@@ -133,7 +126,7 @@ export function buildRootMessage(
     text,
     formatted: plainTextAst(text),
     raw: { kind: 'issue', host, issue: toRawIssue(issue), changes: [] },
-    author: buildRestAuthor(host, botUserIdString, issue.createdUser),
+    author: buildRestAuthor(host, botUserId, issue.createdUser),
     metadata: { dateSent: issue.created, edited: false },
     // The port's `BacklogIssue` (src/client/port.ts, an earlier phase) has no
     // `attachments[]` — `getIssue` never surfaces them — so a REST-derived
@@ -160,9 +153,8 @@ function toRawIssue(issue: BacklogIssue): {
     projectId: issue.projectId,
     summary: issue.summary,
     description: issue.description,
-    // See `toRawComment` in src/egress.ts for why this is a placeholder.
     createdUser: {
-      id: 0,
+      id: issue.createdUser.id,
       name: issue.createdUser.name,
       userId: issue.createdUser.userId,
     },
@@ -182,14 +174,8 @@ export function buildCommentMessage(
   builders: MessageBuilders,
   comment: BacklogComment
 ): Message<BacklogRawMessage> {
-  const {
-    host,
-    projectId,
-    issueId,
-    botUserIdString,
-    fetchAttachment,
-    MessageCtor,
-  } = builders;
+  const { host, projectId, issueId, botUserId, fetchAttachment, MessageCtor } =
+    builders;
   const text = comment.content ?? '';
   const edited = comment.updated.getTime() !== comment.created.getTime();
   const metadata: MessageData['metadata'] = edited
@@ -216,7 +202,7 @@ export function buildCommentMessage(
         oldValue: change.oldValue,
       })),
     },
-    author: buildRestAuthor(host, botUserIdString, comment.createdUser),
+    author: buildRestAuthor(host, botUserId, comment.createdUser),
     metadata,
     attachments: toCommentAttachments(host, issueId, fetchAttachment, comment),
     isMention: false,
@@ -240,7 +226,7 @@ function toRawCommentForRead(comment: BacklogComment): {
     id: comment.id,
     content: comment.content,
     createdUser: {
-      id: 0,
+      id: comment.createdUser.id,
       name: comment.createdUser.name,
       userId: comment.createdUser.userId,
     },
@@ -251,7 +237,10 @@ function toRawCommentForRead(comment: BacklogComment): {
       newValue: change.newValue,
       oldValue: change.oldValue,
     })),
-    stars: comment.stars.map((star) => ({ id: star.id, presenter: { id: 0 } })),
+    stars: comment.stars.map((star) => ({
+      id: star.id,
+      presenter: { id: star.presenter.id },
+    })),
   };
 }
 
@@ -423,18 +412,13 @@ export async function fetchThread(
       summary: issue.summary,
       description: issue.description,
       status: issue.status,
-      // §7.3 models `assignee`/`createdUserId` after Backlog's numeric user
-      // id, matching `status`/`issueType`/`priority`'s `{ id, name }` shape.
-      // The port's `BacklogUserRef` (src/client/port.ts) carries only the
-      // login `userId` string, not a numeric id (see `buildRestAuthor`
-      // above), so that string is what populates these fields instead.
       assignee:
         issue.assignee === null
           ? null
-          : { id: issue.assignee.userId, name: issue.assignee.name },
+          : { id: issue.assignee.id, name: issue.assignee.name },
       issueType: issue.issueType,
       priority: issue.priority,
-      createdUserId: issue.createdUser.userId,
+      createdUserId: issue.createdUser.id,
       created: issue.created,
       updated: issue.updated,
       url: `https://${host}/view/${issue.issueKey}`,

@@ -911,26 +911,6 @@ export class BacklogAdapter implements Adapter<
     return file.data;
   }
 
-  /**
-   * The bot's own login-id string, cached per host
-   * (`.claude/rules/backlog-api-facts.md` "Stars"; see `src/egress.ts`
-   * `isBotPresenter` for why this is compared as a string rather than a
-   * numeric id). One extra `read`-bucket call per host for the lifetime of
-   * the adapter instance, spent only by `addReaction`/`removeReaction`.
-   */
-  private readonly botUserIdStringCache = new Map<string, string | null>();
-
-  private async botUserIdString(host: string): Promise<string | null> {
-    const cached = this.botUserIdStringCache.get(host);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const installation = this.resolveInstallation(host);
-    const user = await this.api(host).getUser(installation.botUserId);
-    this.botUserIdStringCache.set(host, user.userId);
-    return user.userId;
-  }
-
   async postMessage(
     threadId: string,
     message: AdapterPostableMessage
@@ -1005,7 +985,7 @@ export class BacklogAdapter implements Adapter<
       issueId,
       commentId,
       api: this.api(host),
-      botUserIdString: await this.botUserIdString(host),
+      botUserId: this.resolveInstallation(host).botUserId,
     });
   }
 
@@ -1020,7 +1000,7 @@ export class BacklogAdapter implements Adapter<
       issueId,
       commentId,
       api: this.api(host),
-      botUserIdString: await this.botUserIdString(host),
+      botUserId: this.resolveInstallation(host).botUserId,
     });
   }
 
@@ -1035,7 +1015,7 @@ export class BacklogAdapter implements Adapter<
       api: this.api(host),
       builders: {
         host,
-        botUserIdString: await this.botUserIdString(host),
+        botUserId: this.resolveInstallation(host).botUserId,
         fetchAttachment: (issueId, attachmentId) =>
           this.fetchAttachmentData(host, issueId, attachmentId),
         MessageCtor,
@@ -1054,7 +1034,7 @@ export class BacklogAdapter implements Adapter<
       api: this.api(host),
       builders: {
         host,
-        botUserIdString: await this.botUserIdString(host),
+        botUserId: this.resolveInstallation(host).botUserId,
         fetchAttachment: (issueId, attachmentId) =>
           this.fetchAttachmentData(host, issueId, attachmentId),
         MessageCtor,

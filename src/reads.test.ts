@@ -15,6 +15,7 @@ const PROJECT_ID = 500;
 const ISSUE_ID = 8001;
 const THREAD_ID = `backlog:${HOST}:${PROJECT_ID}:${ISSUE_ID}`;
 const CHANNEL_ID = `backlog:${HOST}:${PROJECT_ID}`;
+const ALICE = { id: 100, userId: 'alice', name: 'Alice', mailAddress: null };
 
 function baseIssue(overrides: Partial<BacklogIssue> = {}): BacklogIssue {
   return {
@@ -27,7 +28,7 @@ function baseIssue(overrides: Partial<BacklogIssue> = {}): BacklogIssue {
     priority: { id: 3, name: 'Normal' },
     status: { id: 1, name: 'Open' },
     assignee: null,
-    createdUser: { userId: '100', name: 'Alice', mailAddress: null },
+    createdUser: ALICE,
     created: new Date('2026-01-01T00:00:00Z'),
     updated: new Date('2026-01-01T00:00:00Z'),
     ...overrides,
@@ -42,7 +43,7 @@ function makeComments(count: number): BacklogComment[] {
     issueId: ISSUE_ID,
     content: `Comment ${index + 1}`,
     changeLog: [],
-    createdUser: { userId: '100', name: 'Alice', mailAddress: null },
+    createdUser: ALICE,
     // Strictly after the issue's `created` (`ISSUE_CREATED`) so a
     // chronological sort never ties the root against the first comment.
     // Built from `.getTime() + ms`, not `new Date(y, m, d, h, m, s)`, which
@@ -85,7 +86,7 @@ function fetchOptions(
 function builders(): Omit<MessageBuilders, 'projectId' | 'issueId'> {
   return {
     host: HOST,
-    botUserIdString: '999',
+    botUserId: 999,
     fetchAttachment: () => Promise.reject(new Error('no attachments expected')),
     MessageCtor,
   };
@@ -270,7 +271,7 @@ describe('fetchMessages REST comment mapping', () => {
           issueId: ISSUE_ID,
           content: 'Edited content',
           changeLog: [],
-          createdUser: { userId: '100', name: 'Alice', mailAddress: null },
+          createdUser: ALICE,
           created: new Date('2026-01-01T00:00:00Z'),
           updated: editedAt,
           stars: [],

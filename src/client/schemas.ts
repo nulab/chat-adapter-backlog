@@ -9,6 +9,7 @@ import { z } from 'zod';
  */
 
 const userSchema = z.object({
+  id: z.number(),
   userId: z.string().nullable().default(null),
   name: z.string(),
   mailAddress: z.string().nullable().default(null),

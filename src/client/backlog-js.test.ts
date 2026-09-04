@@ -215,7 +215,12 @@ describe('createBacklogJsApi', () => {
             priority: { id: 3, name: 'Normal' },
             status: { id: 1, name: 'Open' },
             assignee: null,
-            createdUser: { userId: '100', name: 'Alice', mailAddress: null },
+            createdUser: {
+              id: 100,
+              userId: 'alice',
+              name: 'Alice',
+              mailAddress: null,
+            },
             created: '2026-01-01T00:00:00Z',
             updated: '2026-01-01T00:00:00Z',
           }),

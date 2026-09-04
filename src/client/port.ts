@@ -25,7 +25,16 @@ export type RateLimitSnapshots = Partial<
 >;
 
 export interface BacklogUserRef {
-  /** `null` when the API omits it (e.g. a deleted user), per docs/specs/adapter.md §8.1. */
+  /**
+   * The numeric Backlog user id — identity everywhere in this adapter
+   * (docs/specs/adapter.md §2 `<host>:<userId>`, §6.5 `presenter.id ===
+   * botUserId`, §7.3 `assignee`/`createdUserId`). `userId` below is the
+   * login handle, not identity: it is `null` for a user signed in with a
+   * Nulab account (see the field below), so it cannot serve as the stable
+   * key `id` is.
+   */
+  id: number;
+  /** `null` when the API omits it (e.g. a deleted user or a Nulab-account login), per docs/specs/adapter.md §8.1. */
   userId: string | null;
   name: string;
   mailAddress: string | null;

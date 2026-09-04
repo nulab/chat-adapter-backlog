@@ -21,7 +21,15 @@ import type { PostableMarkdown } from 'chat';
 const HOST = 'example.backlog.com';
 const PROJECT_ID = 500;
 const ISSUE_ID = 8001;
-const BOT_USER_ID = '999';
+const BOT_USER_ID = 999;
+const ALICE = { id: 100, userId: 'alice', name: 'Alice', mailAddress: null };
+const BOB = { id: 101, userId: 'bob', name: 'Bob', mailAddress: null };
+const CHATBOT = {
+  id: BOT_USER_ID,
+  userId: 'chatbot',
+  name: 'Chatbot',
+  mailAddress: null,
+};
 
 function api(overrides: Parameters<typeof createInMemoryBacklogApi>[0] = {}) {
   return createInMemoryBacklogApi({
@@ -44,7 +52,7 @@ function api(overrides: Parameters<typeof createInMemoryBacklogApi>[0] = {}) {
         priority: { id: 3, name: 'Normal' },
         status: { id: 1, name: 'Open' },
         assignee: null,
-        createdUser: { userId: '100', name: 'Alice', mailAddress: null },
+        createdUser: ALICE,
         created: new Date('2026-01-01T00:00:00Z'),
         updated: new Date('2026-01-01T00:00:00Z'),
       },
@@ -222,11 +230,7 @@ describe('editComment', () => {
           issueId: ISSUE_ID,
           content: 'Original',
           changeLog: [],
-          createdUser: {
-            userId: BOT_USER_ID,
-            name: 'Chatbot',
-            mailAddress: null,
-          },
+          createdUser: CHATBOT,
           created: new Date('2026-01-01T00:00:00Z'),
           updated: new Date('2026-01-01T00:00:00Z'),
           stars: [],
@@ -300,7 +304,7 @@ describe('addReaction', () => {
       issueId: ISSUE_ID,
       content: 'Any progress?',
       changeLog: [],
-      createdUser: { userId: '100', name: 'Alice', mailAddress: null },
+      createdUser: ALICE,
       created: new Date('2026-01-01T00:00:00Z'),
       updated: new Date('2026-01-01T00:00:00Z'),
       stars: [] as {
@@ -309,6 +313,7 @@ describe('addReaction', () => {
         url: string;
         title: string;
         presenter: {
+          id: number;
           userId: string | null;
           name: string;
           mailAddress: string | null;
@@ -324,13 +329,13 @@ describe('addReaction', () => {
       issueId: ISSUE_ID,
       commentId: 1,
       api: backlogApi,
-      botUserIdString: BOT_USER_ID,
+      botUserId: BOT_USER_ID,
     });
     await addReaction({
       issueId: ISSUE_ID,
       commentId: 1,
       api: backlogApi,
-      botUserIdString: BOT_USER_ID,
+      botUserId: BOT_USER_ID,
     });
 
     const addStarCalls = backlogApi.state.recordedInputs.filter(
@@ -349,7 +354,7 @@ describe('removeReaction', () => {
           issueId: ISSUE_ID,
           content: 'Any progress?',
           changeLog: [],
-          createdUser: { userId: '100', name: 'Alice', mailAddress: null },
+          createdUser: ALICE,
           created: new Date('2026-01-01T00:00:00Z'),
           updated: new Date('2026-01-01T00:00:00Z'),
           stars: [
@@ -358,11 +363,7 @@ describe('removeReaction', () => {
               comment: null,
               url: '',
               title: '',
-              presenter: {
-                userId: BOT_USER_ID,
-                name: 'Chatbot',
-                mailAddress: null,
-              },
+              presenter: CHATBOT,
               created: new Date('2026-01-01T00:00:00Z'),
             },
             {
@@ -370,7 +371,7 @@ describe('removeReaction', () => {
               comment: null,
               url: '',
               title: '',
-              presenter: { userId: '101', name: 'Bob', mailAddress: null },
+              presenter: BOB,
               created: new Date('2026-01-01T00:00:00Z'),
             },
           ],
@@ -382,11 +383,11 @@ describe('removeReaction', () => {
       issueId: ISSUE_ID,
       commentId: 1,
       api: backlogApi,
-      botUserIdString: BOT_USER_ID,
+      botUserId: BOT_USER_ID,
     });
 
     const remaining = backlogApi.state.comments.find((c) => c.id === 1)?.stars;
-    expect(remaining?.map((star) => star.presenter.userId)).toEqual(['101']);
+    expect(remaining?.map((star) => star.presenter.id)).toEqual([BOB.id]);
   });
 
   it('a comment with no bot star makes no delete call', async () => {
@@ -397,7 +398,7 @@ describe('removeReaction', () => {
           issueId: ISSUE_ID,
           content: 'Any progress?',
           changeLog: [],
-          createdUser: { userId: '100', name: 'Alice', mailAddress: null },
+          createdUser: ALICE,
           created: new Date('2026-01-01T00:00:00Z'),
           updated: new Date('2026-01-01T00:00:00Z'),
           stars: [
@@ -406,7 +407,7 @@ describe('removeReaction', () => {
               comment: null,
               url: '',
               title: '',
-              presenter: { userId: '101', name: 'Bob', mailAddress: null },
+              presenter: BOB,
               created: new Date('2026-01-01T00:00:00Z'),
             },
           ],
@@ -418,7 +419,7 @@ describe('removeReaction', () => {
       issueId: ISSUE_ID,
       commentId: 1,
       api: backlogApi,
-      botUserIdString: BOT_USER_ID,
+      botUserId: BOT_USER_ID,
     });
 
     expect(
@@ -426,6 +427,58 @@ describe('removeReaction', () => {
         (input) => input.method === 'deleteStar'
       )
     ).toHaveLength(0);
+  });
+
+  it('deletes only the bot star when another user has also starred the comment', async () => {
+    const backlogApi = api({
+      comments: [
+        {
+          id: 1,
+          issueId: ISSUE_ID,
+          content: 'Any progress?',
+          changeLog: [],
+          createdUser: ALICE,
+          created: new Date('2026-01-01T00:00:00Z'),
+          updated: new Date('2026-01-01T00:00:00Z'),
+          stars: [
+            {
+              id: 1,
+              comment: null,
+              url: '',
+              title: '',
+              presenter: BOB,
+              created: new Date('2026-01-01T00:00:00Z'),
+            },
+            {
+              id: 2,
+              comment: null,
+              url: '',
+              title: '',
+              presenter: CHATBOT,
+              created: new Date('2026-01-01T00:00:00Z'),
+            },
+          ],
+        },
+      ],
+    });
+
+    await removeReaction({
+      issueId: ISSUE_ID,
+      commentId: 1,
+      api: backlogApi,
+      botUserId: BOT_USER_ID,
+    });
+
+    expect(backlogApi.state.recordedInputs).toContainEqual({
+      method: 'deleteStar',
+      starId: 2,
+    });
+    expect(backlogApi.state.recordedInputs).not.toContainEqual({
+      method: 'deleteStar',
+      starId: 1,
+    });
+    const remaining = backlogApi.state.comments.find((c) => c.id === 1)?.stars;
+    expect(remaining?.map((star) => star.presenter.id)).toEqual([BOB.id]);
   });
 });
 

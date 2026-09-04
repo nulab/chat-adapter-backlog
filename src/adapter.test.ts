@@ -1052,16 +1052,25 @@ describe('BacklogAdapter.parseMessage', () => {
   });
 });
 
-/**
- * The in-memory port's `getUser(id)` (`src/client/in-memory.ts`) finds a
- * seeded user by `userId === String(id)` — it keys on the numeric id turned
- * into a string, not on a Backlog login handle. `FIXTURE.bot.userId`
- * ("chatbot") is the login handle used for webhook `createdUser.userId`
- * fixtures; the egress/reads tests below instead need a `BacklogUserRef`
- * `getUser(FIXTURE.bot.id)` will actually find, so they seed and compare
- * against this numeric-string form.
- */
-const BOT_USER_ID_STRING = String(FIXTURE.bot.id);
+/** `BacklogUserRef` fixtures matching the project's vocabulary (Chatbot 999, Alice 100, Bob 101). */
+const ALICE_USER_REF = {
+  id: FIXTURE.alice.id,
+  userId: FIXTURE.alice.userId,
+  name: FIXTURE.alice.name,
+  mailAddress: null,
+};
+const BOB_USER_REF = {
+  id: FIXTURE.bob.id,
+  userId: FIXTURE.bob.userId,
+  name: FIXTURE.bob.name,
+  mailAddress: null,
+};
+const CHATBOT_USER_REF = {
+  id: FIXTURE.bot.id,
+  userId: FIXTURE.bot.userId,
+  name: FIXTURE.bot.name,
+  mailAddress: null,
+};
 
 /**
  * A `BacklogAdapter` backed by an in-memory port seeded with `FIXTURE`'s
@@ -1099,27 +1108,13 @@ function egressAdapter(
         priority: { id: 3, name: 'Normal' },
         status: { id: 1, name: 'Open' },
         assignee: null,
-        createdUser: {
-          userId: FIXTURE.alice.userId,
-          name: FIXTURE.alice.name,
-          mailAddress: null,
-        },
+        createdUser: ALICE_USER_REF,
         created: new Date('2026-01-01T00:00:00Z'),
         updated: new Date('2026-01-01T00:00:00Z'),
       },
     ],
-    users: [
-      {
-        userId: BOT_USER_ID_STRING,
-        name: FIXTURE.bot.name,
-        mailAddress: null,
-      },
-    ],
-    me: {
-      userId: BOT_USER_ID_STRING,
-      name: FIXTURE.bot.name,
-      mailAddress: null,
-    },
+    users: [CHATBOT_USER_REF],
+    me: CHATBOT_USER_REF,
     ...options.seed,
   });
 
@@ -1228,11 +1223,7 @@ describe('BacklogAdapter.editMessage / deleteMessage (§6.2, §6.3, D12)', () =>
             issueId: FIXTURE.issueId,
             content: 'Original',
             changeLog: [],
-            createdUser: {
-              userId: FIXTURE.bot.userId,
-              name: FIXTURE.bot.name,
-              mailAddress: null,
-            },
+            createdUser: CHATBOT_USER_REF,
             created: new Date('2026-01-01T00:00:00Z'),
             updated: new Date('2026-01-01T00:00:00Z'),
             stars: [],
@@ -1295,7 +1286,14 @@ describe('BacklogAdapter.stream (§6.4, D4)', () => {
 });
 
 describe('BacklogAdapter reactions (§6.5)', () => {
-  function seedWithComment(stars: { presenterUserId: string }[] = []) {
+  function seedWithComment(
+    presenters: {
+      id: number;
+      userId: string | null;
+      name: string;
+      mailAddress: string | null;
+    }[] = []
+  ) {
     return egressAdapter({
       seed: {
         comments: [
@@ -1304,23 +1302,15 @@ describe('BacklogAdapter reactions (§6.5)', () => {
             issueId: FIXTURE.issueId,
             content: 'Any progress?',
             changeLog: [],
-            createdUser: {
-              userId: FIXTURE.alice.userId,
-              name: FIXTURE.alice.name,
-              mailAddress: null,
-            },
+            createdUser: ALICE_USER_REF,
             created: new Date('2026-01-01T00:00:00Z'),
             updated: new Date('2026-01-01T00:00:00Z'),
-            stars: stars.map((star, index) => ({
+            stars: presenters.map((presenter, index) => ({
               id: index + 1,
               comment: null,
               url: '',
               title: '',
-              presenter: {
-                userId: star.presenterUserId,
-                name: 'x',
-                mailAddress: null,
-              },
+              presenter,
               created: new Date('2026-01-01T00:00:00Z'),
             })),
           },
@@ -1346,14 +1336,11 @@ describe('BacklogAdapter reactions (§6.5)', () => {
   });
 
   it("removing a reaction leaves other users' stars", async () => {
-    const { adapter, api } = seedWithComment([
-      { presenterUserId: BOT_USER_ID_STRING },
-      { presenterUserId: FIXTURE.bob.userId },
-    ]);
+    const { adapter, api } = seedWithComment([CHATBOT_USER_REF, BOB_USER_REF]);
     await adapter.removeReaction(EGRESS_THREAD_ID, commentMessageId, 'star');
     const remaining = api.state.comments.find((c) => c.id === 1)?.stars;
-    expect(remaining?.map((star) => star.presenter.userId)).toEqual([
-      FIXTURE.bob.userId,
+    expect(remaining?.map((star) => star.presenter.id)).toEqual([
+      BOB_USER_REF.id,
     ]);
   });
 
@@ -1379,11 +1366,7 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
           issueId: FIXTURE.issueId,
           content: `Comment ${index + 1}`,
           changeLog: [],
-          createdUser: {
-            userId: FIXTURE.alice.userId,
-            name: FIXTURE.alice.name,
-            mailAddress: null,
-          },
+          createdUser: ALICE_USER_REF,
           created: new Date(
             Date.parse('2026-01-01T00:00:00Z') + (index + 1) * 60_000
           ),
@@ -1431,11 +1414,7 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
             issueId: FIXTURE.issueId,
             content: 'Edited content',
             changeLog: [],
-            createdUser: {
-              userId: FIXTURE.alice.userId,
-              name: FIXTURE.alice.name,
-              mailAddress: null,
-            },
+            createdUser: ALICE_USER_REF,
             created: new Date('2026-01-01T00:00:00Z'),
             updated: editedAt,
             stars: [],
@@ -1526,27 +1505,13 @@ describe('BacklogAdapter wiring with a real Chat instance', () => {
           priority: { id: 3, name: 'Normal' },
           status: { id: 1, name: 'Open' },
           assignee: null,
-          createdUser: {
-            userId: FIXTURE.alice.userId,
-            name: FIXTURE.alice.name,
-            mailAddress: null,
-          },
+          createdUser: ALICE_USER_REF,
           created: new Date('2026-01-01T00:00:00Z'),
           updated: new Date('2026-01-01T00:00:00Z'),
         },
       ],
-      users: [
-        {
-          userId: BOT_USER_ID_STRING,
-          name: FIXTURE.bot.name,
-          mailAddress: null,
-        },
-      ],
-      me: {
-        userId: BOT_USER_ID_STRING,
-        name: FIXTURE.bot.name,
-        mailAddress: null,
-      },
+      users: [CHATBOT_USER_REF],
+      me: CHATBOT_USER_REF,
     });
     const adapter = createBacklogAdapter({
       host: FIXTURE.host,

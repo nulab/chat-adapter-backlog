@@ -107,14 +107,7 @@ function toRawComment(
       id: comment.id,
       content: comment.content,
       createdUser: {
-        // The port's `BacklogUserRef` (src/client/port.ts) carries no numeric
-        // user id — only the login `userId` string, `name` and
-        // `mailAddress` — so a REST-derived `BacklogRawMessage.comment` can
-        // never populate the numeric `id` this repo's inbound (webhook) path
-        // carries. `0` is a documented placeholder, not a real id; nothing
-        // reads it (author identity for REST-derived raws is resolved from
-        // `createdUser.userId`/`name`, never `.id`).
-        id: 0,
+        id: comment.createdUser.id,
         name: comment.createdUser.name,
         userId: comment.createdUser.userId,
       },
@@ -127,9 +120,7 @@ function toRawComment(
       })),
       stars: comment.stars.map((star) => ({
         id: star.id,
-        // Same placeholder as `createdUser.id` above, and for the same
-        // reason: `BacklogStar.presenter` is a `BacklogUserRef`.
-        presenter: { id: 0 },
+        presenter: { id: star.presenter.id },
       })),
     },
     changes: [],
@@ -238,33 +229,11 @@ export async function editComment(
   };
 }
 
-/**
- * Resolves whether `presenter` is the bot's own star. The port's
- * `BacklogUserRef` (src/client/port.ts, owned by an earlier phase) has no
- * numeric user id — only the login `userId` string — so `botUserId` (a
- * number) cannot be compared to it directly the way §6.5 describes
- * (`presenter.id === botUserId`). `botUserRef.userId` is resolved once (via
- * `api.getUser(botUserId)`, cached by the caller) and compared as a string
- * instead: both values come from the same account's `userId` field, so they
- * agree regardless of whether that field holds a login handle or looks
- * numeric.
- */
-function isBotPresenter(
-  presenterUserId: string | null,
-  botUserIdString: string | null
-): boolean {
-  return (
-    botUserIdString !== null &&
-    presenterUserId !== null &&
-    presenterUserId === botUserIdString
-  );
-}
-
 export interface AddReactionInput {
   issueId: number;
   commentId: number;
   api: BacklogApi;
-  botUserIdString: string | null;
+  botUserId: number;
 }
 
 /**
@@ -274,10 +243,10 @@ export interface AddReactionInput {
  * every retry or duplicate reaction would add another star.
  */
 export async function addReaction(input: AddReactionInput): Promise<void> {
-  const { issueId, commentId, api, botUserIdString } = input;
+  const { issueId, commentId, api, botUserId } = input;
   const comment = await api.getComment(issueId, commentId);
-  const alreadyStarred = comment.stars.some((star) =>
-    isBotPresenter(star.presenter.userId, botUserIdString)
+  const alreadyStarred = comment.stars.some(
+    (star) => star.presenter.id === botUserId
   );
   if (alreadyStarred) {
     return;
@@ -289,7 +258,7 @@ export interface RemoveReactionInput {
   issueId: number;
   commentId: number;
   api: BacklogApi;
-  botUserIdString: string | null;
+  botUserId: number;
 }
 
 /**
@@ -301,10 +270,10 @@ export interface RemoveReactionInput {
 export async function removeReaction(
   input: RemoveReactionInput
 ): Promise<void> {
-  const { issueId, commentId, api, botUserIdString } = input;
+  const { issueId, commentId, api, botUserId } = input;
   const comment = await api.getComment(issueId, commentId);
-  const ownStars = comment.stars.filter((star) =>
-    isBotPresenter(star.presenter.userId, botUserIdString)
+  const ownStars = comment.stars.filter(
+    (star) => star.presenter.id === botUserId
   );
   for (const star of ownStars) {
     await api.deleteStar(star.id);
