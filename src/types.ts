@@ -72,6 +72,13 @@ export type BacklogWebhookPayload = RecognisedActivity;
 
 export interface BacklogComment {
   id: number;
+  /**
+   * The issue this comment belongs to. Carried on the raw shape (not just
+   * derivable from the enclosing thread id) because `fetchSubject` and
+   * `markAsRead` (docs/specs/adapter.md §7.4, §7.8) both take a bare `raw` or
+   * `message.raw` with no thread context alongside it.
+   */
+  issueId: number;
   content: string | null;
   createdUser: { id: number; name: string; userId?: string | null };
   created: string;
@@ -86,6 +93,10 @@ export interface BacklogIssue {
   projectId: number;
   summary: string;
   description: string;
+  status: { id: number; name: string };
+  issueType: { id: number; name: string };
+  priority: { id: number; name: string };
+  assignee: { id: number; name: string } | null;
   createdUser: { id: number; name: string; userId?: string | null };
   created: string;
   updated: string;
@@ -160,6 +171,21 @@ export interface BacklogChannelPostableExtras {
   priorityId?: number;
   assigneeId?: number;
 }
+
+/**
+ * The strict schema `postChannelMessage` reads `BacklogChannelPostableExtras`
+ * through (docs/specs/adapter.md §3.4, §6.7). `.strict()` for the same reason
+ * as `backlogPostableExtrasSchema`: a typo'd extra must surface as a
+ * `ValidationError`, not a silently ignored field.
+ */
+export const backlogChannelPostableExtrasSchema = z
+  .object({
+    notifiedUserId: notifiedUserIdSchema.optional(),
+    issueTypeId: z.number().int().positive().optional(),
+    priorityId: z.number().int().positive().optional(),
+    assigneeId: z.number().int().positive().optional(),
+  })
+  .strict();
 
 /**
  * A deployment-supplied escape hatch for webhook authenticity. Backlog issues

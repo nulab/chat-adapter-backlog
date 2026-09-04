@@ -17,6 +17,7 @@ import type {
 import {
   addReaction as addReactionToComment,
   bufferStream,
+  createChannelIssue,
   editComment,
   postComment,
   removeReaction as removeReactionFromComment,
@@ -28,13 +29,20 @@ import {
   channelIdFromThreadId as decodeChannelIdFromThreadId,
   decodeChannelId,
   decodeThreadId as decodeThreadIdString,
+  decodeUserId as decodeUserIdString,
   encodeMessageId,
   encodeThreadId as encodeThreadIdStruct,
 } from './ids';
 import {
+  fetchChannelInfo as fetchChannelInfoRead,
   fetchMessage as fetchMessageRead,
   fetchMessages as fetchMessagesRead,
+  fetchSubject as fetchSubjectRead,
   fetchThread as fetchThreadRead,
+  getUser as getUserRead,
+  listThreads as listThreadsRead,
+  markAsRead as markAsReadRead,
+  rehydrateAttachment as rehydrateAttachmentRead,
 } from './reads';
 import type {
   BacklogAdapterConfig,
@@ -55,18 +63,24 @@ import { verifyWebhookRequest } from './webhook/verify';
 import type {
   Adapter,
   AdapterPostableMessage,
+  Attachment,
+  ChannelInfo,
   ChatInstance,
   FetchOptions,
   FetchResult,
   FileUpload,
   FormattedContent,
+  ListThreadsOptions,
+  ListThreadsResult,
   Logger,
   Message,
+  MessageSubject,
   RawMessage,
   StreamChunk,
   StreamOptions,
   ThreadInfo,
   TypingOptions,
+  UserInfo,
   WebhookOptions,
 } from 'chat';
 
@@ -396,11 +410,19 @@ function validateMaxWebhookBodyBytes(value: number | undefined): number {
  * Backlog adapter for Chat SDK. See docs/specs/adapter.md for the full
  * behavioural contract. Construction, config resolution, thread-id codec
  * delegation and identity/lifecycle members landed in P2; webhook ingress in
- * P3; format converters in P4; egress, reads, `stream` and reactions in P5
- * (docs/plans/adapter-implementation.md). Only P6's optional members
- * (`postChannelMessage`, `listThreads`, `getUser`, `fetchSubject`,
- * `fetchChannelInfo`, `markAsRead`, `rehydrateAttachment`, type-4 deletion)
- * still throw a typed "not implemented" error.
+ * P3; format converters in P4; egress, reads, `stream` and reactions in P5;
+ * `postChannelMessage`, `listThreads`, `getUser`, `fetchSubject`,
+ * `fetchChannelInfo`, `markAsRead`, `rehydrateAttachment` and type-4 deletion
+ * in P6 (docs/plans/adapter-implementation.md). Every optional member the
+ * Chat SDK core degrades gracefully around
+ * (`.claude/rules/chat-sdk-core-facts.md` "Degradations when optional members
+ * are absent") that Backlog cannot actually support — `openDM`,
+ * `postEphemeral`, `openModal`, `scheduleMessage`, `reply`,
+ * `postObject`/`editObject`, `fetchChannelMessages`, `endTyping`,
+ * `disconnect`, `onThreadSubscribe`, `getChannelVisibility`, `lockScope`,
+ * `persistThreadHistory`, `supportsTurnCancellation`, `botUserId` — is
+ * deliberately absent rather than implemented as a throwing stub, so the
+ * core's own fallback behaviour runs instead of a Backlog-specific error.
  */
 export class BacklogAdapter implements Adapter<
   BacklogThreadId,
@@ -435,6 +457,17 @@ export class BacklogAdapter implements Adapter<
    * without re-deriving the key shape in three places.
    */
   private readonly formattingRuleCache = new Map<string, TextFormattingRule>();
+  /**
+   * `channelId -> { issueTypeId, priorityId }` (docs/specs/adapter.md §6.7):
+   * `postChannelMessage`'s defaults, cached forever like the formatting-rule
+   * cache above and refreshed the same two ways — a `ValidationError` on a
+   * create that used the cached values (the narrow one-shot retry), or
+   * `fetchChannelInfo` replacing it outright alongside the formatting rule.
+   */
+  private readonly channelDefaultsCache = new Map<
+    string,
+    { issueTypeId: number; priorityId: number }
+  >();
 
   private logger: Logger;
   private chat: ChatInstance | undefined;
@@ -1045,6 +1078,142 @@ export class BacklogAdapter implements Adapter<
   async fetchThread(threadId: string): Promise<ThreadInfo> {
     const { host } = decodeThreadIdString(threadId);
     return fetchThreadRead({ threadId, api: this.api(host) });
+  }
+
+  /**
+   * `postChannelMessage` (docs/specs/adapter.md §6.7): creates an issue from
+   * a channel-level post. `issueTypeId`/`priorityId` default resolution and
+   * the narrow retry-once-on-stale-cache rule live in `createChannelIssue`
+   * (`src/egress.ts`); this method's job is only to own the per-channel
+   * defaults cache the way `getConverter`/`ensureFormattingRule` own the
+   * formatting-rule cache above.
+   */
+  async postChannelMessage(
+    channelId: string,
+    message: AdapterPostableMessage
+  ): Promise<RawMessage<BacklogRawMessage>> {
+    const { host, projectId } = decodeChannelId(channelId);
+    const converter = await this.getConverter(host, projectId);
+    return createChannelIssue({
+      host,
+      projectId,
+      api: this.api(host),
+      converter,
+      message,
+      toBuffer: this.toFileBuffer,
+      getCachedDefaults: () => this.channelDefaultsCache.get(channelId),
+      setCachedDefaults: (defaults) =>
+        this.channelDefaultsCache.set(channelId, defaults),
+      clearCachedDefaults: () => this.channelDefaultsCache.delete(channelId),
+    });
+  }
+
+  /**
+   * `listThreads` (docs/specs/adapter.md §7.6): the port call and result
+   * shaping live in `src/reads.ts`; this method only decodes the channel id
+   * and supplies the host-scoped port and builders, matching every other
+   * read member above.
+   */
+  async listThreads(
+    channelId: string,
+    options?: ListThreadsOptions
+  ): Promise<ListThreadsResult<BacklogRawMessage>> {
+    const { host } = decodeChannelId(channelId);
+    return listThreadsRead({
+      channelId,
+      options,
+      api: this.api(host),
+      builders: {
+        host,
+        botUserId: this.resolveInstallation(host).botUserId,
+        fetchAttachment: (issueId, attachmentId) =>
+          this.fetchAttachmentData(host, issueId, attachmentId),
+        MessageCtor,
+      },
+    });
+  }
+
+  /**
+   * `getUser` (docs/specs/adapter.md §7.7). `chat.getUser()` cannot route to
+   * this adapter — the core infers an adapter from id shape and does not
+   * recognise `<host>:<id>` (`.claude/rules/chat-sdk-core-facts.md`) — so a
+   * caller reaches this only through `adapter.getUser()` directly.
+   */
+  async getUser(userId: string): Promise<UserInfo | null> {
+    const { host } = decodeUserIdString(userId);
+    return getUserRead({
+      userId,
+      api: this.api(host),
+      botUserId: this.resolveInstallation(host).botUserId,
+    });
+  }
+
+  /**
+   * `fetchSubject` (docs/specs/adapter.md §7.4). Called lazily by
+   * `message.subject`; the core turns a thrown error into `null`
+   * (`.claude/rules/chat-sdk-core-facts.md`), so this deliberately lets a
+   * lookup failure propagate rather than pre-emptively returning `null`
+   * itself — the core's own handling is the single place that decision is
+   * made.
+   */
+  async fetchSubject(raw: BacklogRawMessage): Promise<MessageSubject | null> {
+    return fetchSubjectRead({ raw, api: this.api(raw.host) });
+  }
+
+  /**
+   * `fetchChannelInfo` (docs/specs/adapter.md §7.5). Replaces both the
+   * formatting-rule cache entry and the `postChannelMessage` defaults cache
+   * entry for this channel — the documented way to pick up a changed project
+   * setting (formatting rule, issue types, priorities) without restarting,
+   * since both caches are otherwise permanent (D14).
+   */
+  async fetchChannelInfo(channelId: string): Promise<ChannelInfo> {
+    const { host } = decodeChannelId(channelId);
+    const { info, textFormattingRule } = await fetchChannelInfoRead({
+      channelId,
+      api: this.api(host),
+    });
+    this.formattingRuleCache.set(channelId, textFormattingRule);
+    this.channelDefaultsCache.delete(channelId);
+    return info;
+  }
+
+  /**
+   * `markAsRead` (docs/specs/adapter.md §7.8): notifications are the bot
+   * user's own feed, so the host comes from `threadId`, not from a
+   * per-message installation lookup — `message`, when given, is only used to
+   * cross-check the comment id `messageId` already names.
+   */
+  async markAsRead(
+    threadId: string,
+    messageId: string,
+    message?: Message<BacklogRawMessage>
+  ): Promise<void> {
+    const { host } = decodeThreadIdString(threadId);
+    await markAsReadRead({
+      messageId,
+      message,
+      api: this.api(host),
+      logger: this.logger,
+    });
+  }
+
+  /**
+   * `rehydrateAttachment` (docs/specs/adapter.md §6.6): **synchronous**
+   * (`.claude/rules/chat-sdk-core-facts.md`, VERIFIED-FACTS — the shipped
+   * `Adapter` signature is `(attachment) => Attachment`, not a `Promise`).
+   * `configuredHosts` is this instance's installation map, so an attachment
+   * URL naming a host nobody configured here is returned unchanged rather
+   * than trusted — the security boundary docs/specs/adapter.md §6.6 and §11
+   * describe.
+   */
+  rehydrateAttachment(attachment: Attachment): Attachment {
+    return rehydrateAttachmentRead({
+      attachment,
+      configuredHosts: new Set(this.installations.keys()),
+      fetchAttachment: (host, issueId, attachmentId) =>
+        this.fetchAttachmentData(host, issueId, attachmentId),
+    });
   }
 }
 

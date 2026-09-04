@@ -379,8 +379,8 @@ describe('BacklogAdapter lifecycle and identity', () => {
   });
 });
 
-describe('BacklogAdapter optional members not yet implemented are absent', () => {
-  it('has no openDM, postEphemeral, openModal, scheduleMessage, reply, postObject, editObject, fetchChannelMessages, endTyping, disconnect, onThreadSubscribe, getChannelVisibility, lockScope, persistThreadHistory, supportsTurnCancellation, botUserId, fetchSubject, fetchChannelInfo, listThreads, postChannelMessage, getUser, markAsRead or rehydrateAttachment', () => {
+describe('BacklogAdapter optional members Backlog cannot support are absent', () => {
+  it('has no openDM, postEphemeral, openModal, scheduleMessage, reply, postObject, editObject, fetchChannelMessages, endTyping, disconnect, onThreadSubscribe, getChannelVisibility, lockScope, persistThreadHistory, supportsTurnCancellation or botUserId', () => {
     const adapter = new BacklogAdapter(validConfig());
     const optionalMembers = [
       'openDM',
@@ -399,13 +399,6 @@ describe('BacklogAdapter optional members not yet implemented are absent', () =>
       'persistThreadHistory',
       'supportsTurnCancellation',
       'botUserId',
-      'fetchSubject',
-      'fetchChannelInfo',
-      'listThreads',
-      'postChannelMessage',
-      'getUser',
-      'markAsRead',
-      'rehydrateAttachment',
     ] as const;
 
     for (const member of optionalMembers) {
@@ -415,10 +408,23 @@ describe('BacklogAdapter optional members not yet implemented are absent', () =>
     }
   });
 
-  it('implements stream and fetchMessage', () => {
+  it('implements every P6 optional member', () => {
     const adapter = new BacklogAdapter(validConfig());
-    expect(adapter.stream).toBeInstanceOf(Function);
-    expect(adapter.fetchMessage).toBeInstanceOf(Function);
+    const implementedMembers = [
+      'stream',
+      'fetchMessage',
+      'postChannelMessage',
+      'listThreads',
+      'getUser',
+      'fetchSubject',
+      'fetchChannelInfo',
+      'markAsRead',
+      'rehydrateAttachment',
+    ] as const;
+
+    for (const member of implementedMembers) {
+      expect(adapter[member]).toBeInstanceOf(Function);
+    }
   });
 });
 
@@ -759,7 +765,7 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
     expect(chat).toHaveDispatched('processMessage');
   });
 
-  it('type-4 deletion dispatches processMessageDeleted with platform "backlog"', async () => {
+  it('a deleted issue is reported as a deleted root message', async () => {
     const { adapter, chat } = await webhookAdapter();
     const response = await adapter.handleWebhook(
       webhookRequest(issueDeleted())
@@ -1042,6 +1048,10 @@ describe('BacklogAdapter.parseMessage', () => {
           projectId: FIXTURE.projectId,
           summary: '',
           description: '',
+          status: { id: 1, name: 'Open' },
+          issueType: { id: 1, name: 'Task' },
+          priority: { id: 3, name: 'Normal' },
+          assignee: null,
           createdUser: { id: 1, name: 'a' },
           created: '',
           updated: '',
@@ -1446,6 +1456,349 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
       channelName: FIXTURE.projectKey,
       isDM: false,
     });
+  });
+});
+
+describe('BacklogAdapter.postChannelMessage (§6.7)', () => {
+  it('posting to a channel creates an issue whose summary is the first block as plain text', async () => {
+    const { adapter, api } = egressAdapter({
+      seed: { issueTypes: { [FIXTURE.projectId]: [{ id: 1, name: 'Task' }] } },
+    });
+    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
+    await adapter.postChannelMessage(channelId, {
+      markdown: '# Deploy is broken\n\nSee the logs for details.',
+    });
+    expect(api.state.recordedInputs).toContainEqual({
+      method: 'createIssue',
+      input: {
+        projectId: FIXTURE.projectId,
+        summary: 'Deploy is broken',
+        issueTypeId: 1,
+        priorityId: 3,
+        description: 'See the logs for details.',
+      },
+    });
+  });
+
+  it('stale cached defaults are refreshed once after a validation error', async () => {
+    const { adapter, api } = egressAdapter({
+      seed: { issueTypes: { [FIXTURE.projectId]: [{ id: 1, name: 'Task' }] } },
+    });
+    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
+    // Warm the cache with the default issue type, then remove it from the
+    // port so a create using the cached id fails validation — simulating a
+    // project setting that changed after the cache was populated.
+    await adapter.postChannelMessage(channelId, { markdown: 'First issue' });
+    const originalCreateIssue = api.createIssue.bind(api);
+    let calls = 0;
+    api.createIssue = (input) => {
+      calls += 1;
+      if (calls === 1 && input.issueTypeId === 1) {
+        return Promise.reject(
+          new ValidationError('backlog', 'issueTypeId no longer exists')
+        );
+      }
+      return originalCreateIssue(input);
+    };
+    api.listIssueTypes = () => Promise.resolve([{ id: 2, name: 'Bug' }]);
+
+    const result = await adapter.postChannelMessage(channelId, {
+      markdown: 'Second issue',
+    });
+
+    expect(calls).toBe(2);
+    expect(result.threadId).toMatch(
+      new RegExp(`^backlog:${FIXTURE.host}:${FIXTURE.projectId}:`)
+    );
+    const secondCreate = api.state.recordedInputs.filter(
+      (input) => input.method === 'createIssue'
+    );
+    expect(secondCreate[1]).toMatchObject({ input: { issueTypeId: 2 } });
+  });
+
+  it('explicit issue type and priority are never retried', async () => {
+    const { adapter, api } = egressAdapter();
+    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
+    let calls = 0;
+    api.createIssue = () => {
+      calls += 1;
+      return Promise.reject(
+        new ValidationError('backlog', 'summary already exists')
+      );
+    };
+
+    await expect(
+      adapter.postChannelMessage(channelId, {
+        markdown: 'Explicit ids',
+        issueTypeId: 1,
+        priorityId: 3,
+      } as unknown as Parameters<BacklogAdapter['postChannelMessage']>[1])
+    ).rejects.toThrow(ValidationError);
+    expect(calls).toBe(1);
+  });
+
+  it('an empty summary is a validation error', async () => {
+    const { adapter } = egressAdapter();
+    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
+    await expect(
+      adapter.postChannelMessage(channelId, { markdown: '' })
+    ).rejects.toThrow(ValidationError);
+  });
+});
+
+describe('BacklogAdapter.listThreads (§7.6)', () => {
+  it('threads are listed with an offset cursor and a trailing empty page', async () => {
+    const { adapter } = egressAdapter({
+      seed: {
+        issues: Array.from({ length: 3 }, (_, index) => ({
+          id: FIXTURE.issueId + index,
+          projectId: FIXTURE.projectId,
+          issueKey: `${FIXTURE.projectKey}-${index + 1}`,
+          summary: `Issue ${index + 1}`,
+          description: '',
+          issueType: { id: 1, name: 'Task' },
+          priority: { id: 3, name: 'Normal' },
+          status: { id: 1, name: 'Open' },
+          assignee: null,
+          createdUser: ALICE_USER_REF,
+          created: new Date('2026-01-01T00:00:00Z'),
+          updated: new Date('2026-01-01T00:00:00Z'),
+        })),
+      },
+    });
+    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
+
+    const firstPage = await adapter.listThreads(channelId, { limit: 2 });
+    expect(firstPage.threads).toHaveLength(2);
+    expect(firstPage.nextCursor).toBe('2');
+    const firstCursor = firstPage.nextCursor;
+    if (firstCursor === undefined) {
+      throw new Error('expected a nextCursor after a full first page');
+    }
+
+    const secondPage = await adapter.listThreads(channelId, {
+      limit: 2,
+      cursor: firstCursor,
+    });
+    expect(secondPage.threads).toHaveLength(1);
+    expect(secondPage.nextCursor).toBeUndefined();
+
+    const thirdPage = await adapter.listThreads(channelId, {
+      limit: 2,
+      cursor: '3',
+    });
+    expect(thirdPage.threads).toHaveLength(0);
+    expect(thirdPage.nextCursor).toBeUndefined();
+  });
+});
+
+describe('BacklogAdapter.getUser (§7.7)', () => {
+  it('a user id round-trips through getUser', async () => {
+    const { adapter } = egressAdapter({
+      seed: { users: [CHATBOT_USER_REF, ALICE_USER_REF] },
+    });
+    const userId = `${FIXTURE.host}:${FIXTURE.alice.id}`;
+    const user = await adapter.getUser(userId);
+    expect(user).toMatchObject({
+      userId,
+      userName: FIXTURE.alice.userId,
+      fullName: FIXTURE.alice.name,
+      isBot: false,
+    });
+  });
+
+  it('the bot user reports isBot true', async () => {
+    const { adapter } = egressAdapter();
+    const user = await adapter.getUser(`${FIXTURE.host}:${FIXTURE.bot.id}`);
+    expect(user?.isBot).toBe(true);
+  });
+
+  it('an unknown user id resolves to null', async () => {
+    const { adapter } = egressAdapter();
+    const user = await adapter.getUser(`${FIXTURE.host}:999999`);
+    expect(user).toBeNull();
+  });
+});
+
+describe('BacklogAdapter.fetchSubject (§7.4)', () => {
+  it('the parent subject is the issue', async () => {
+    const { adapter } = egressAdapter();
+    const message = await adapter.fetchMessage(
+      EGRESS_THREAD_ID,
+      encodeMessageId({
+        kind: 'issue',
+        host: FIXTURE.host,
+        issueId: FIXTURE.issueId,
+      })
+    );
+    expect(message).not.toBeNull();
+    const subject =
+      message === null ? null : await adapter.fetchSubject(message.raw);
+    expect(subject).toMatchObject({
+      id: EGRESS_THREAD_ID,
+      type: 'issue',
+      title: 'Deploy fails on the staging space',
+      url: `https://${FIXTURE.host}/view/${FIXTURE.projectKey}-1`,
+    });
+  });
+});
+
+describe('BacklogAdapter.fetchChannelInfo (§7.5)', () => {
+  it('fetching channel info replaces the cached formatting rule', async () => {
+    const { adapter, api } = egressAdapter({ textFormattingRule: 'markdown' });
+    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
+
+    // Warm the cache with the seeded "markdown" rule.
+    await adapter.postMessage(EGRESS_THREAD_ID, { markdown: '**bold**' });
+    api.state.projects[0] = {
+      ...(api.state.projects[0] as (typeof api.state.projects)[number]),
+      textFormattingRule: 'backlog',
+    };
+
+    const info = await adapter.fetchChannelInfo(channelId);
+    expect(info.metadata).toMatchObject({ textFormattingRule: 'backlog' });
+
+    await adapter.postMessage(EGRESS_THREAD_ID, { markdown: '**bold**' });
+    const addComment = api.state.recordedInputs.filter(
+      (input) => input.method === 'addComment'
+    );
+    expect(addComment[addComment.length - 1]).toMatchObject({
+      input: { content: "''bold''" },
+    });
+  });
+});
+
+describe('BacklogAdapter.markAsRead (§7.8)', () => {
+  it('marking read finds the notification on the third page', async () => {
+    const targetCommentId = 5;
+    // 250 notifications, newest-first (highest notification id first), one
+    // per page-of-100 boundary: notification id 250 down to 1. The target
+    // comment is attached to the single **oldest** notification (id 1), so
+    // it can only be found on the third `GET /notifications` page
+    // (ids 50..1) — pages 1 and 2 (ids 250..51) must be exhausted first.
+    const notifications = Array.from({ length: 250 }, (_, index) => {
+      const notificationId = 250 - index;
+      const isOldestNotification = notificationId === 1;
+      return {
+        id: notificationId,
+        alreadyRead: false,
+        project: {
+          id: FIXTURE.projectId,
+          projectKey: FIXTURE.projectKey,
+          name: 'Example project',
+        },
+        issue: {
+          id: FIXTURE.issueId,
+          issueKey: `${FIXTURE.projectKey}-1`,
+          summary: 'Deploy fails on the staging space',
+        },
+        comment: {
+          id: isOldestNotification ? targetCommentId : 1000 + notificationId,
+        },
+        sender: ALICE_USER_REF,
+        created: new Date('2026-01-01T00:00:00Z'),
+      };
+    });
+    const { adapter, api } = egressAdapter({
+      seed: { notifications },
+    });
+    const commentMessageId = encodeMessageId({
+      kind: 'comment',
+      host: FIXTURE.host,
+      issueId: FIXTURE.issueId,
+      commentId: targetCommentId,
+    });
+
+    await adapter.markAsRead(EGRESS_THREAD_ID, commentMessageId);
+
+    expect(api.state.recordedInputs).toContainEqual({
+      method: 'markNotificationAsRead',
+      id: 1,
+    });
+  });
+
+  it('marking an already-read notification makes no update call', async () => {
+    const { adapter, api } = egressAdapter({
+      seed: {
+        notifications: [
+          {
+            id: 1,
+            alreadyRead: true,
+            project: {
+              id: FIXTURE.projectId,
+              projectKey: FIXTURE.projectKey,
+              name: 'Example project',
+            },
+            issue: null,
+            comment: { id: 7 },
+            sender: ALICE_USER_REF,
+            created: new Date('2026-01-01T00:00:00Z'),
+          },
+        ],
+      },
+    });
+    const commentMessageId = encodeMessageId({
+      kind: 'comment',
+      host: FIXTURE.host,
+      issueId: FIXTURE.issueId,
+      commentId: 7,
+    });
+
+    await adapter.markAsRead(EGRESS_THREAD_ID, commentMessageId);
+
+    expect(
+      api.state.recordedInputs.filter(
+        (input) => input.method === 'markNotificationAsRead'
+      )
+    ).toHaveLength(0);
+  });
+
+  it('the issue body id makes no notification call', async () => {
+    const { adapter, api } = egressAdapter();
+    const issueMessageId = encodeMessageId({
+      kind: 'issue',
+      host: FIXTURE.host,
+      issueId: FIXTURE.issueId,
+    });
+
+    await adapter.markAsRead(EGRESS_THREAD_ID, issueMessageId);
+
+    expect(
+      api.state.recordedInputs.filter(
+        (input) => input.method === 'markNotificationAsRead'
+      )
+    ).toHaveLength(0);
+  });
+});
+
+describe('BacklogAdapter.rehydrateAttachment (§6.6)', () => {
+  it('a serialised attachment regains fetchData for a configured host', () => {
+    const { adapter } = egressAdapter();
+    const attachment = {
+      type: 'file' as const,
+      name: 'log.txt',
+      url: `https://${FIXTURE.host}/api/v2/issues/${FIXTURE.issueId}/attachments/42`,
+    };
+    const rehydrated = adapter.rehydrateAttachment(attachment);
+    expect(typeof rehydrated.fetchData).toBe('function');
+  });
+
+  it('an attachment on a foreign host is returned unchanged', () => {
+    const { adapter } = egressAdapter();
+    const attachment = {
+      type: 'file' as const,
+      name: 'log.txt',
+      url: `https://not-configured.backlog.com/api/v2/issues/${FIXTURE.issueId}/attachments/42`,
+    };
+    const rehydrated = adapter.rehydrateAttachment(attachment);
+    expect(rehydrated).toEqual(attachment);
+    expect(rehydrated.fetchData).toBeUndefined();
+  });
+
+  it('an attachment with no url is returned unchanged', () => {
+    const { adapter } = egressAdapter();
+    const attachment = { type: 'file' as const, name: 'log.txt' };
+    expect(adapter.rehydrateAttachment(attachment)).toEqual(attachment);
   });
 });
 
