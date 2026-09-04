@@ -1,13 +1,51 @@
 import { ResourceNotFoundError, ValidationError } from '@chat-adapter/shared';
 import { MemoryStateAdapter } from '@chat-adapter/state-memory';
-import { threadIdContract } from '@chat-adapter/tests';
+import {
+  connectWebhookContract,
+  createMockChatInstance,
+  createMockLogger,
+  selfMessageContract,
+  threadIdContract,
+} from '@chat-adapter/tests';
+import type { ChatHandler } from '@chat-adapter/tests/matchers';
 import { Chat } from 'chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BacklogAdapter, createBacklogAdapter } from './adapter';
 import { createInMemoryBacklogApi } from './client/in-memory';
+import { conformanceFixture } from './client/conformance';
+import {
+  FIXTURE,
+  issueCommented,
+  issueDeleted,
+  issueMultiUpdated,
+  issueUpdated,
+  statusChanged,
+  unrelatedActivity,
+  webhookRequest,
+} from './test/fixtures/webhooks';
+import { UNAUTHORIZED_BODY } from './webhook/verify';
 import type { BacklogThreadId, ResolvedInstallation } from './types';
-import type { Adapter } from 'chat';
+import type { Adapter, ChatInstance, Message } from 'chat';
+
+/**
+ * `@chat-adapter/tests@4.39.0`'s own `matchers.d.ts` augments
+ * `declare module "vitest" { interface Assertion<T = any> { ... } }`, which
+ * does not merge under this repo's installed `vitest@4.1.11`: `Assertion`
+ * there only re-exports `@vitest/expect`'s `Assertion`, and vitest 4 moved
+ * the actual custom-matcher extension point to the (initially empty)
+ * `Matchers<T>` interface `Assertion` extends — verified by reproducing both
+ * augmentation targets against this toolchain, where only `Matchers` merged.
+ * Re-declaring `toHaveDispatched` here against the interface vitest 4
+ * actually extends is a type-only shim; the runtime matcher itself still
+ * comes from `@chat-adapter/tests/setup` via `vitest.config.ts`.
+ */
+declare module 'vitest' {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- must match `Matchers<T = any>` exactly for declaration merging (see comment above).
+  interface Matchers<T = any> {
+    toHaveDispatched(handler: ChatHandler): T;
+  }
+}
 
 const ENV_KEYS = [
   'BACKLOG_HOST',
@@ -351,32 +389,6 @@ describe('BacklogAdapter required members not yet implemented', () => {
         }),
     ],
     [
-      'handleWebhook',
-      () =>
-        new BacklogAdapter(validConfig()).handleWebhook(
-          new Request('https://example.com')
-        ),
-    ],
-    [
-      'parseMessage',
-      () =>
-        new BacklogAdapter(validConfig()).parseMessage({
-          kind: 'issue',
-          host: 'example.backlog.com',
-          issue: {
-            id: 1,
-            issueKey: 'X-1',
-            projectId: 1,
-            summary: '',
-            description: '',
-            createdUser: { id: 1, name: 'a' },
-            created: '',
-            updated: '',
-          },
-          changes: [],
-        }),
-    ],
-    [
       'postMessage',
       () => new BacklogAdapter(validConfig()).postMessage('t', 'hi'),
     ],
@@ -571,4 +583,546 @@ describe('BacklogAdapter port wiring', () => {
     expect(resolver()).toBe('token-1');
     expect(resolver()).toBe('token-2');
   });
+});
+
+/** One installation matching `FIXTURE`, backed by an in-memory port pre-seeded with the fixture project so `ensureFormattingRule` resolves without a network call. */
+function webhookAdapterConfig(overrides: Partial<ResolvedInstallation> = {}) {
+  return {
+    host: FIXTURE.host,
+    apiKey: 'test-api-key',
+    botUserId: FIXTURE.bot.id,
+    botUserName: FIXTURE.bot.name,
+    webhookSecret: FIXTURE.webhookSecret,
+    createApi: () =>
+      createInMemoryBacklogApi({
+        projects: [conformanceFixture.baseProject()],
+      }),
+    ...overrides,
+  };
+}
+
+async function webhookAdapter(
+  config: Record<string, unknown> = {}
+): Promise<{ adapter: BacklogAdapter; chat: ChatInstance }> {
+  const adapter = createBacklogAdapter({
+    ...webhookAdapterConfig(),
+    ...config,
+  });
+  const chat = createMockChatInstance({ logger: createMockLogger() });
+  await adapter.initialize(chat);
+  return { adapter, chat };
+}
+
+describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
+  it('a non-POST request is rejected with 405', async () => {
+    const { adapter } = await webhookAdapter();
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented(), { method: 'GET' })
+    );
+    expect(response.status).toBe(405);
+    expect(await response.text()).toBe('Method not allowed');
+  });
+
+  it('a body larger than maxWebhookBodyBytes is rejected with 413', async () => {
+    const { adapter } = await webhookAdapter({ maxWebhookBodyBytes: 10 });
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented())
+    );
+    expect(response.status).toBe(413);
+    expect(await response.text()).toBe('Payload too large');
+  });
+
+  it('a request without a token is rejected with 401', async () => {
+    const { adapter } = await webhookAdapter();
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented(), { token: null })
+    );
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe(UNAUTHORIZED_BODY);
+  });
+
+  it('an unknown host gets the same 401 body as a wrong token', async () => {
+    const { adapter } = await webhookAdapter();
+
+    const unknownHost = await adapter.handleWebhook(
+      webhookRequest(issueCommented(), { host: 'nope.backlog.com' })
+    );
+    const wrongToken = await adapter.handleWebhook(
+      webhookRequest(issueCommented(), { token: 'wrong' })
+    );
+
+    expect(unknownHost.status).toBe(401);
+    expect(wrongToken.status).toBe(401);
+    const [unknownHostBody, wrongTokenBody] = await Promise.all([
+      unknownHost.text(),
+      wrongToken.text(),
+    ]);
+    expect(unknownHostBody).toBe(wrongTokenBody);
+    expect(unknownHostBody).toBe(UNAUTHORIZED_BODY);
+  });
+
+  it('with one installation the host parameter is optional', async () => {
+    const { adapter } = await webhookAdapter();
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented(), { host: null })
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it('with two installations a missing host is rejected', async () => {
+    const { adapter } = await webhookAdapter({
+      host: undefined,
+      apiKey: undefined,
+      botUserId: undefined,
+      botUserName: undefined,
+      webhookSecret: undefined,
+      createApi: undefined,
+      installations: [
+        {
+          host: FIXTURE.host,
+          apiKey: 'k1',
+          botUserId: FIXTURE.bot.id,
+          botUserName: FIXTURE.bot.name,
+          webhookSecret: FIXTURE.webhookSecret,
+        },
+        {
+          host: FIXTURE.otherHost,
+          apiKey: 'k2',
+          botUserId: 998,
+          botUserName: 'Chatbot2',
+          webhookSecret: 'other-secret',
+        },
+      ],
+    });
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented(), { host: null })
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe(UNAUTHORIZED_BODY);
+  });
+
+  it('invalid JSON is rejected with 400', async () => {
+    const { adapter } = await webhookAdapter();
+    const response = await adapter.handleWebhook(
+      webhookRequest(undefined, { body: 'not json' })
+    );
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe('Invalid JSON');
+  });
+
+  it('a JSON body that is not an object is rejected with 400', async () => {
+    const { adapter } = await webhookAdapter();
+    const response = await adapter.handleWebhook(
+      webhookRequest(undefined, { body: '"just a string"' })
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it('an envelope with no numeric type is rejected with 400', async () => {
+    const { adapter } = await webhookAdapter();
+    const response = await adapter.handleWebhook(
+      webhookRequest({ notAType: true })
+    );
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe('Invalid payload');
+  });
+
+  it.each([[14], [17], [99]])(
+    'a bulk update is acknowledged and ignored (type %i)',
+    async (type) => {
+      const { adapter, chat } = await webhookAdapter();
+      const payload =
+        type === 14 ? issueMultiUpdated() : { ...unrelatedActivity(), type };
+
+      const response = await adapter.handleWebhook(webhookRequest(payload));
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('Ignored');
+      expect(chat).not.toHaveDispatched('processMessage');
+    }
+  );
+
+  it('a payload failing its type-specific schema is rejected with 400', async () => {
+    const { adapter } = await webhookAdapter();
+    const payload = issueCommented();
+    delete (payload as Record<string, unknown>)['createdUser'];
+
+    const response = await adapter.handleWebhook(webhookRequest(payload));
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe('Invalid payload');
+  });
+
+  it('a webhook before initialize() has run gets 503', async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented())
+    );
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe('Adapter not initialized');
+  });
+
+  it("the bot's own comment is acknowledged but not dispatched", async () => {
+    const { adapter, chat } = await webhookAdapter();
+    const response = await adapter.handleWebhook(
+      webhookRequest(
+        issueCommented({
+          createdUser: {
+            id: FIXTURE.bot.id,
+            name: FIXTURE.bot.name,
+            userId: FIXTURE.bot.userId,
+          },
+        })
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('OK');
+    expect(chat).not.toHaveDispatched('processMessage');
+  });
+
+  it('a comment from another user is dispatched and answered with 200', async () => {
+    const { adapter, chat } = await webhookAdapter();
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented())
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('OK');
+    expect(chat).toHaveDispatched('processMessage');
+  });
+
+  it('type-4 deletion dispatches processMessageDeleted with platform "backlog"', async () => {
+    const { adapter, chat } = await webhookAdapter();
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueDeleted())
+    );
+
+    expect(response.status).toBe(200);
+    expect(chat).toHaveDispatched('processMessageDeleted');
+    const processMessageDeleted = chat.processMessageDeleted as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    const [event] = processMessageDeleted.mock.calls[0] as [
+      { platform: string; threadId: string; messageId: string },
+    ];
+    expect(event.platform).toBe('backlog');
+    expect(event.threadId).toBe(
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:${FIXTURE.issueId}`
+    );
+    expect(event.messageId).toBe(`${FIXTURE.host}:${FIXTURE.issueId}:i`);
+  });
+});
+
+describe('BacklogAdapter.handleWebhook — dispatch ordering and error handling', () => {
+  it('processing starts after the response is returned', async () => {
+    let releaseProcessing: (() => void) | undefined;
+    const factoryResolved = vi.fn();
+    const processMessage = vi.fn(
+      async (
+        _adapter: Adapter,
+        _threadId: string,
+        message: Message | (() => Promise<Message>)
+      ) => {
+        // A deferred factory, per the plan's acceptance criterion ("assert
+        // ordering with a deferred factory") rather than assuming ordering
+        // from call sequence alone: the factory only resolves once this test
+        // releases it, so `factoryResolved` firing before `handleWebhook`
+        // returns would prove the response waited on processing.
+        if (typeof message === 'function') {
+          await new Promise<void>((resolve) => {
+            releaseProcessing = resolve;
+          });
+          await message();
+          factoryResolved();
+        }
+      }
+    );
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const chat = createMockChatInstance({
+      logger: createMockLogger(),
+      overrides: { processMessage },
+    });
+    await adapter.initialize(chat);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented())
+    );
+
+    // The response already came back although the factory is still blocked
+    // on the deferred promise above — proving §5.1 step 12 ("returned
+    // before processing completes").
+    expect(response.status).toBe(200);
+    expect(factoryResolved).not.toHaveBeenCalled();
+
+    releaseProcessing?.();
+    await vi.waitFor(() => expect(factoryResolved).toHaveBeenCalled());
+  });
+
+  it('a factory that throws is logged at error and does not reject handleWebhook', async () => {
+    const logger = createMockLogger();
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    // `createMockChatInstance`'s default `processMessage` never calls the
+    // factory it is handed, so this override reproduces what the real core
+    // does (`ChatInstance.processMessage` resolves the factory itself,
+    // `.claude/rules/chat-sdk-core-facts.md`) closely enough to exercise a
+    // factory failure: it invokes the factory and lets a rejection surface
+    // as `processMessage`'s own rejection, the shape `handleWebhook`'s
+    // `.catch` is written to log.
+    const chat = createMockChatInstance({
+      logger,
+      overrides: {
+        processMessage: vi.fn(
+          async (
+            _adapter: Adapter,
+            _threadId: string,
+            message: Message | (() => Promise<Message>)
+          ) => {
+            if (typeof message === 'function') {
+              await message();
+            }
+          }
+        ),
+      },
+    });
+    await adapter.initialize(chat);
+    // Forces the factory to reject after `ensureFormattingRule` succeeds, by
+    // making `parseMessage` itself throw — the simplest reliable way to
+    // exercise "a factory that throws" without depending on which internal
+    // step happens to fail for a given fixture.
+    vi.spyOn(adapter, 'parseMessage').mockImplementation(() => {
+      throw new Error('parseMessage exploded');
+    });
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented())
+    );
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(logger.error).toHaveBeenCalledWith(
+        'inbound processing failed',
+        expect.objectContaining({ host: FIXTURE.host })
+      );
+    });
+  });
+});
+
+describe('BacklogAdapter.handleWebhook — fixture-driven §5.3 mapping', () => {
+  it('an assignee change with the bot as the new assignee is a mention', async () => {
+    const { adapter, chat } = await webhookAdapter();
+    const response = await adapter.handleWebhook(
+      webhookRequest(
+        issueUpdated({
+          text: null,
+          changes: [
+            { field: 'assigner', new_value: FIXTURE.bot.name, old_value: '' },
+          ],
+        })
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(chat).toHaveDispatched('processMessage');
+  });
+
+  it('a status-only change dispatches a message the handler can read raw.changes from', async () => {
+    const capturedMessages: unknown[] = [];
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const chat = createMockChatInstance({
+      logger: createMockLogger(),
+      overrides: {
+        processMessage: vi.fn(
+          async (
+            _adapter: Adapter,
+            _threadId: string,
+            message: Message | (() => Promise<Message>)
+          ) => {
+            const resolved =
+              typeof message === 'function' ? await message() : message;
+            capturedMessages.push(resolved);
+          }
+        ),
+      },
+    });
+    await adapter.initialize(chat);
+
+    await adapter.handleWebhook(webhookRequest(statusChanged()));
+    await vi.waitFor(() => expect(capturedMessages).toHaveLength(1));
+
+    const [message] = capturedMessages as [
+      { text: string; raw: { changes: { field: string }[] } },
+    ];
+    expect(message.text).toBe('');
+    expect(message.raw.changes).toEqual([
+      { field: 'status', newValue: '4', oldValue: '3' },
+    ]);
+  });
+
+  it('unknown payload keys survive into raw.payload', async () => {
+    const capturedMessages: unknown[] = [];
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const chat = createMockChatInstance({
+      logger: createMockLogger(),
+      overrides: {
+        processMessage: vi.fn(
+          async (
+            _adapter: Adapter,
+            _threadId: string,
+            message: Message | (() => Promise<Message>)
+          ) => {
+            const resolved =
+              typeof message === 'function' ? await message() : message;
+            capturedMessages.push(resolved);
+          }
+        ),
+      },
+    });
+    await adapter.initialize(chat);
+
+    await adapter.handleWebhook(webhookRequest(issueCommented()));
+    await vi.waitFor(() => expect(capturedMessages).toHaveLength(1));
+
+    const [message] = capturedMessages as [
+      { raw: { payload: Record<string, unknown> } },
+    ];
+    expect(message.raw.payload['notifications']).toEqual([]);
+  });
+
+  it('the same fixture sent to two configured hosts yields two thread ids, two message ids and two ports used', async () => {
+    const otherApi = createInMemoryBacklogApi({
+      projects: [{ ...conformanceFixture.baseProject() }],
+    });
+    const firstApi = createInMemoryBacklogApi({
+      projects: [conformanceFixture.baseProject()],
+    });
+    const createApi = vi
+      .fn()
+      .mockReturnValueOnce(firstApi)
+      .mockReturnValueOnce(otherApi);
+
+    const adapter = createBacklogAdapter({
+      installations: [
+        {
+          host: FIXTURE.host,
+          apiKey: 'k1',
+          botUserId: FIXTURE.bot.id,
+          botUserName: FIXTURE.bot.name,
+          webhookSecret: FIXTURE.webhookSecret,
+        },
+        {
+          host: FIXTURE.otherHost,
+          apiKey: 'k2',
+          botUserId: 998,
+          botUserName: 'Chatbot2',
+          webhookSecret: 'other-secret',
+        },
+      ],
+      createApi,
+    });
+    const capturedMessages: { threadId: string; message: { id: string } }[] =
+      [];
+    const chat = createMockChatInstance({
+      logger: createMockLogger(),
+      overrides: {
+        processMessage: vi.fn(
+          async (
+            _adapter: Adapter,
+            threadId: string,
+            message: Message | (() => Promise<Message>)
+          ) => {
+            const resolved =
+              typeof message === 'function' ? await message() : message;
+            capturedMessages.push({ threadId, message: resolved });
+          }
+        ),
+      },
+    });
+    await adapter.initialize(chat);
+
+    await adapter.handleWebhook(
+      webhookRequest(issueCommented(), { host: FIXTURE.host })
+    );
+    await adapter.handleWebhook(
+      webhookRequest(issueCommented(), {
+        host: FIXTURE.otherHost,
+        token: 'other-secret',
+      })
+    );
+    await vi.waitFor(() => expect(capturedMessages).toHaveLength(2));
+
+    expect(capturedMessages[0]?.threadId).not.toBe(
+      capturedMessages[1]?.threadId
+    );
+    expect(capturedMessages[0]?.message.id).not.toBe(
+      capturedMessages[1]?.message.id
+    );
+    expect(adapter.api(FIXTURE.host)).toBe(firstApi);
+    expect(adapter.api(FIXTURE.otherHost)).toBe(otherApi);
+  });
+});
+
+describe('BacklogAdapter.parseMessage', () => {
+  it('rejects a non-webhook raw message kind as a defect, not a recoverable input', () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    expect(() =>
+      adapter.parseMessage({
+        kind: 'issue',
+        host: FIXTURE.host,
+        issue: {
+          id: FIXTURE.issueId,
+          issueKey: 'EXAMPLE-1',
+          projectId: FIXTURE.projectId,
+          summary: '',
+          description: '',
+          createdUser: { id: 1, name: 'a' },
+          created: '',
+          updated: '',
+        },
+        changes: [],
+      })
+    ).toThrow(ValidationError);
+  });
+});
+
+const CONNECT_BOT_USER_ID = 999;
+
+connectWebhookContract({
+  name: 'backlog',
+  createAdapter: ({ webhookVerifier }) =>
+    createBacklogAdapter({
+      host: FIXTURE.host,
+      apiKey: 'connect-key',
+      botUserId: CONNECT_BOT_USER_ID,
+      botUserName: FIXTURE.bot.name,
+      webhookVerifier,
+      createApi: () =>
+        createInMemoryBacklogApi({
+          projects: [conformanceFixture.baseProject()],
+        }),
+    }),
+  makeWebhookRequest: () => webhookRequest(issueCommented(), { token: null }),
+});
+
+selfMessageContract({
+  name: 'backlog',
+  setup: async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const chat = createMockChatInstance({ logger: createMockLogger() });
+    await adapter.initialize(chat);
+    return { adapter, chat };
+  },
+  makeOtherMessageRequest: () => webhookRequest(issueCommented()),
+  makeSelfMessageRequest: () =>
+    webhookRequest(
+      issueCommented({
+        createdUser: {
+          id: FIXTURE.bot.id,
+          name: FIXTURE.bot.name,
+          userId: FIXTURE.bot.userId,
+        },
+      })
+    ),
 });

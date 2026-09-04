@@ -1,4 +1,5 @@
 import type { BacklogApi } from './client/port';
+import type { RecognisedActivity } from './webhook/payload';
 import type { Logger } from 'chat';
 
 /**
@@ -57,18 +58,15 @@ export interface BacklogChange {
 }
 
 /**
- * Placeholder shapes for the payload and domain objects the raw-message union
- * references. Their full schemas belong to the webhook and client phases
- * (docs/plans/adapter-implementation.md P3/P1); this phase only needs them to
- * exist so `BacklogRawMessage` type-checks.
+ * A webhook body that has passed `src/webhook/payload.ts` validation: one of
+ * the four dispatched activity types (docs/specs/adapter.md §5.1 step 8,
+ * §5.2). Broadened from a P2-era placeholder `{ type: number; content:
+ * Record<string, unknown> }` to the real discriminated union once P3 owned
+ * the schema, per this phase's file list ("You may broaden
+ * `BacklogWebhookPayload` to the full §5.2 shape; that was left to you
+ * deliberately").
  */
-export interface BacklogWebhookPayload {
-  type: number;
-  created: string;
-  project: { id: number; projectKey?: string };
-  createdUser: { id: number; name: string; userId?: string | null };
-  content: Record<string, unknown>;
-}
+export type BacklogWebhookPayload = RecognisedActivity;
 
 export interface BacklogComment {
   id: number;
