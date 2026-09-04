@@ -17,6 +17,25 @@ sections below are the design constraints to follow instead.
 `dist/index.js` in a real Node process. When the placeholder is replaced, that
 smoke test must be updated in the same change or the build job breaks.
 
+## Design documents
+
+The goal state and the route to it are written down, not inferred from this
+file. Read them before touching `src/`:
+
+- [docs/specs/adapter.md](./docs/specs/adapter.md) — what the finished adapter
+  does: id grammar, config, every `Adapter` member's behaviour, webhook
+  response ladder, error mapping, test requirements. Tests are written from it.
+- [docs/plans/adapter-implementation.md](./docs/plans/adapter-implementation.md)
+  — the PR stack that gets there, with acceptance criteria per phase and the
+  decisions still open for the maintainer.
+- `.claude/rules/*.md` — measured Backlog behaviour and verified Chat SDK core
+  behaviour, loaded automatically when a `src/**/*.ts` file is read. When the
+  code contradicts a rule there, re-measure before "fixing" the code.
+
+The sections below are the constraints those documents were written under.
+When a document and this file disagree, the document is newer; fix this file
+in the same PR.
+
 ## Quality gates
 
 Run all five before declaring work done; CI runs exactly these:
@@ -93,7 +112,7 @@ would be `build:` elsewhere is `chore(build)` or `fix(build)`.
 | `ci`        | `.github/workflows/ci.yml` and the Node matrix                                                                            |
 | `release`   | `.github/workflows/release.yml`, `.github/release.yml`, publishing, versioning                                            |
 | `deps`      | dependency and lockfile bumps — what Dependabot opens                                                                     |
-| `docs`      | README, DEVELOPMENT.md, CLAUDE.md/AGENTS.md, the PR template                                                              |
+| `docs`      | README, DEVELOPMENT.md, CLAUDE.md/AGENTS.md, the PR template, `docs/`, `.claude/rules/`                                   |
 
 Tests take the scope of the code they cover, not a scope of their own:
 `test(client)`, never `test(test)`.
