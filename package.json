@@ -34,7 +34,7 @@
     "dist"
   ],
   "scripts": {
-    "preinstall": "npx only-allow pnpm",
+    "preinstall": "only-allow pnpm",
     "prepare": "lefthook install",
     "build": "tsdown",
     "dev": "tsdown --watch",
