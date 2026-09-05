@@ -1374,6 +1374,14 @@ export class BacklogAdapter implements Adapter<
    * shaping live in `src/reads.ts`; this method only decodes the channel id
    * and supplies the host-scoped port and builders, matching every other
    * read member above.
+   *
+   * Issues only, and no companion member lists pull requests (D-PR7): a
+   * pull-request list is keyed by repository, a coordinate no channel id
+   * carries. A caller that has the repository reaches its pull requests
+   * through the public port, `api(host).listPullRequests(projectId,
+   * repositoryId, …)`, which spends the **read** bucket rather than the
+   * `search` bucket Get Issue List below draws on (measured 2026-09-06,
+   * `.claude/rules/backlog-pull-request-facts.md` "Rate limit").
    */
   async listThreads(
     channelId: string,
@@ -1436,11 +1444,16 @@ export class BacklogAdapter implements Adapter<
    * repository) without restarting, since every one of those caches is
    * otherwise permanent (D14).
    *
-   * The repository names are dropped by host rather than by project: the cache
-   * is keyed `` `${host}:${repositoryId}` `` because that is what a pull
-   * request's `repositoryId` gives without a second lookup, so a sibling
-   * project's names go with them. Re-earning one costs a single `read`-bucket
-   * call, while keying by project would spend one on every cache fill instead.
+   * The repository names are dropped by **host prefix**, not by this channel's
+   * project: the key is `` `${host}:${repositoryId}` `` and carries no
+   * project, so a sibling project's cached name goes with them. Keep it that
+   * way rather than narrowing the loop. A repository id already identifies a
+   * repository within a space, so putting the project in the key would buy
+   * exact invalidation at the price of a key the same repository can occupy
+   * twice — once per `projectId` a caller's thread id happened to name — which
+   * leaves a stale name alive under whichever key this call did not clear.
+   * Over-clearing costs one `read`-bucket Get Git Repository per dropped name,
+   * once, and only after a `fetchChannelInfo` somebody asked for.
    */
   async fetchChannelInfo(channelId: string): Promise<ChannelInfo> {
     const { host } = decodeChannelId(channelId);

@@ -1245,7 +1245,13 @@ A second section, behind `BACKLOG_LIVE_PULL_REQUEST=<repositoryId>:<number>`,
 does the same against a scratch pull request minus the deletes (there is no
 delete): Get Git Repository, Get Pull Request, add → edit → star → unstar one
 comment, attach one upload; at most ~8 update-bucket calls. The comments it
-adds stay on the pull request, so the variable must name a scratch one.
+adds stay on the pull request, so the variable must name a scratch one. It also
+needs `BACKLOG_LIVE_ISSUE_ID`, and the pull request has to live in that issue's
+project: every pull-request endpoint is keyed by project + repository + number,
+the variable carries only the last two, and neither Backlog nor the port maps a
+repository id back to its project, so the project comes from one Get Issue in
+`beforeAll`. A third variable would be the alternative; naming the project twice
+for one scratch space is worse than requiring the two to share it.
 
 ## 13. Documentation deliverables
 

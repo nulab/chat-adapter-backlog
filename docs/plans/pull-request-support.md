@@ -583,7 +583,11 @@ written on purpose, stack declared in the first line of the body (CLAUDE.md
 
 ### P4 — pull-request forms of the remaining optional members (`adapter`)
 
-- **Title**: `feat(adapter): read receipts, thread listing hooks and live coverage for pull requests`. Label `enhancement`.
+- **Title**: `test(adapter): pin read receipts, cache invalidation and live coverage for pull requests`.
+  **Unlabeled**: P2 rewrote both members through the subject layer, so this
+  phase adds no capability — every `src/` line it changes is a comment. A
+  `feat` subject and an `enhancement` label would advertise a feature in the
+  generated release notes over a diff a user cannot observe.
 - **Branch**: off `main` after P1–P3 merged.
 - **Scope**: `markAsRead` matching by kind (§3.6), `fetchChannelInfo`
   clearing repository names for the project, `api(host)` documented as the
@@ -596,7 +600,7 @@ written on purpose, stack declared in the first line of the body (CLAUDE.md
   `pullRequestComment.id` on page 1 and page 3, ignores an issue
   notification with the same numeric id, no-ops for `:r`; the live section
   self-skips without the variable and stays within ~8 update calls.
-- **Tests to add**: "marking a pull request comment read matches the pull request notification, not an issue comment with the same id", "clearing channel info forgets the project's repository names".
+- **Tests to add**: "marking a pull request comment read matches the pull request notification, not an issue comment with the same id", "clearing channel info forgets the host's repository names" and "clearing channel info leaves another space untouched" — the key is `host:repositoryId`, so the clear is host-wide and only a second host can tell that apart from clearing everything.
 - **Size**: ~150 lines + ~250 test.
 
 ### P5 — documentation (`docs`)
