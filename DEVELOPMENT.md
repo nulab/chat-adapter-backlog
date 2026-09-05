@@ -306,8 +306,9 @@ form you get in the PR form.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on pushes to `main`, on pull requests
-targeting `main`, and as a reusable workflow called by the release. Four jobs:
+`.github/workflows/ci.yml` runs on pushes to `main`, on **every** pull request
+whatever branch it is based on — so a stacked PR is checked before its parent
+merges — and as a reusable workflow called by the release. Four jobs:
 
 | Job          | What it does                                                                       |
 | ------------ | ---------------------------------------------------------------------------------- |

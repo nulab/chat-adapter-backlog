@@ -3,8 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every pull request, whatever it is based on. Filtering by `branches: [main]`
+  # meant a stacked pull request — the workflow CLAUDE.md tells contributors to
+  # use — got no checks at all until its parent merged and GitHub retargeted it,
+  # which is the moment feedback stops being useful.
   pull_request:
-    branches: [main]
   workflow_call:
 
 permissions:
