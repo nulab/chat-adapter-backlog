@@ -384,6 +384,41 @@ What it does:
 
 A `concurrency` group serializes releases.
 
+### Which version number
+
+The published version tracks `chat`, the same lockstep every first-party
+`@chat-adapter/*` package uses — `@chat-adapter/github@4.39.0` ships alongside
+`chat@4.39.0`. Someone who has `chat@4.39.0` installed can then tell at a
+glance which adapter release was built against it.
+
+This is about the **published number only**. `chat` stays a peer dependency at
+a caret range and is deliberately not pinned exactly the way the first-party
+packages pin it: those ship from a release-locked monorepo, this one releases
+on its own schedule, and an exact pin would make a consumer on `chat@4.40`
+install a second copy of the core and fail the `instanceof` checks in its
+dispatch path.
+
+The version line is not a promise to match `chat` release for release. After
+the baseline, this package bumps on its own changes — a fix ships a patch
+whether or not `chat` moved. Moving onto a later `chat` minor is a deliberate
+act: bump the peer range and the dev dependency together, in one PR, and say
+why in the body.
+
+### The baseline tag, once
+
+`release.yml` bumps **relative to the latest tag** and offers only
+`patch` / `minor` / `major`, so it cannot reach `4.39.0` from `v0.0.0` in one
+step. Place the baseline by hand, once, before the first release:
+
+```sh
+git tag v4.39.0 && git push origin v4.39.0
+```
+
+That tag publishes nothing. It only gives the workflow a floor to bump from,
+so the first *published* release is `v4.39.1` — run `release.yml` with
+`patch`. Do this after the two prerequisites below are in place, not before:
+a release that fails at the publish step leaves the tag behind it.
+
 ### One-time prerequisites, not set up by anything in this repository
 
 Both of these must exist before the first release can succeed, and neither is

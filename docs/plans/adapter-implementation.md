@@ -22,8 +22,10 @@ The project is done when all of the following hold on `main`:
    and paging guarantees (§7.1) each have a test per row.
 5. README, `sample-messages.md`, DEVELOPMENT.md, `.env.example`, CLAUDE.md and
    the CI smoke test match the code (§13).
-6. `v0.1.0` is published from `release.yml` and installs into a consumer that
-   imports `createBacklogAdapter` under Node 20.
+6. A release in the `4.39.x` line is published from `release.yml` and installs
+   into a consumer that imports `createBacklogAdapter` under Node 20. The
+   published version tracks the `chat` release the adapter's contract was
+   verified against, not a `0.x` line of its own (§7).
 
 ## 2. Ground rules recap
 
@@ -364,7 +366,7 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
 | P7a | `docs(docs): document setup, configuration and limitations` | `documentation` | README per §13 (publishing-checklist order), `sample-messages.md`, DEVELOPMENT.md credentials table, `.env.example`, CLAUDE.md "State of the repo" final form, feature matrix values recorded for a future catalog PR. |
 | P7b | `test(adapter): add opt-in live suite against a real space` | none | §12.3 suite, self-skipping; run once locally and paste the `rateLimit(host)` snapshot into the PR. |
 | P7c | `ci(ci): run the live suite on manual dispatch only` (optional) | none | A `workflow_dispatch` input that provides `BACKLOG_*` from repository secrets; never on PRs from forks. Skip if the maintainer prefers local-only. |
-| P7d | `chore(release): prepare v0.1.0` | none | Verify Trusted Publishing and the `production` environment exist (DEVELOPMENT.md prerequisites); run `release.yml` with `minor`. |
+| P7d | `chore(release): publish the first release` | none | Verify Trusted Publishing and the `production` environment exist (DEVELOPMENT.md prerequisites); place the `v4.39.0` baseline tag (§7), then run `release.yml` with `patch`. |
 
 - **Acceptance**: `npm pack --dry-run` contains only `dist/`, `package.json`,
   `README.md`, `LICENSE`; a scratch consumer on Node 20 imports the package
@@ -374,7 +376,7 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
   allowlist entries in `vercel/chat`; vendor-official additionally needs the
   catalog/scaffold entries, a changeset, product docs and an announcement.
   Record the choice in the README "Status" section; it is out of scope for
-  this plan's done criteria (§7 below).
+  this plan's done criteria (§8 below).
 
 ## 4. Cross-cutting checklist (every PR)
 
@@ -406,7 +408,7 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
 | `backlog-js` hides response headers | No rate-limit tracking | Port goes through `request()` or a thin `fetch` wrapper (P1 risk); the port boundary means swapping to plain `fetch` touches no adapter code. |
 | `backlog-js` packaging under `esm-only` attw profile | `pnpm build` fails | Run `pnpm build` in P1 before anything else; if attw objects, mark the dependency external in tsdown and re-check. |
 | Node 20 compatibility | Consumer breakage | Test matrix runs 20; avoid `Array.prototype.toSorted`/`toReversed` in `src/`, use `Buffer`/`Blob`/`FormData` globals only as available in Node 20. |
-| At-least-once delivery and missed deliveries while down | Duplicate or lost events | Core dedupe on `message.id` (10 min); README explains durable dedupe by `message.id` and recommends a durable state adapter; a polling fallback is out of scope (§7). |
+| At-least-once delivery and missed deliveries while down | Duplicate or lost events | Core dedupe on `message.id` (10 min); README explains durable dedupe by `message.id` and recommends a durable state adapter; a polling fallback is out of scope (§8). |
 | Project-key renames | Broken references | Numeric ids only (D8); `issueKey` appears only in metadata and URLs. |
 | Multi-space id collisions | Cross-space dedupe/routing errors | Host in every thread, channel, message and user id (D8); test "same payload to two hosts yields two threads". |
 | Mention false positives (hand-typed `@Chatbot`, name collision) | Bot answers when not asked | Documented; left boundary in the regex; assignment-based mention as the reliable trigger. |
@@ -434,7 +436,46 @@ Each entry names the default assumed by the spec and the phase it blocks.
 | 13 | P0 title scope `docs(docs)` vs `docs(adapter)` | `docs(docs)` (scope table now lists `docs/`) | P0 |
 | 14 | Optional P7c CI live job | Skip unless secrets exist | P7 |
 
-## 7. Out of scope / later
+## 7. Version line
+
+The published version tracks `chat`, in the same lockstep every first-party
+`@chat-adapter/*` package uses: `@chat-adapter/github@4.39.0` ships alongside
+`chat@4.39.0`. A reader who has `chat@4.39.0` installed can then tell at a
+glance which adapter release was built against it, which a parallel `0.x` line
+of our own would not give them.
+
+This is a decision about the **published version only**. The dependency ranges
+stay exactly as D15 specifies — `chat` as a peer at `^4.39.0`, not the exact
+pin the first-party packages carry — because that decision turns on release
+cadence rather than on numbering: those packages ship from Vercel's
+release-locked monorepo, while this one releases on its own schedule, and an
+exact pin would make a consumer on `chat@4.40` install two copies of the core
+and fail the `instanceof` checks in its dispatch path. Matching the number
+costs nothing; matching the pin would cost that.
+
+Two consequences for the mechanics:
+
+- `release.yml` only bumps **relative to the latest git tag** (`v0.0.0` when
+  there is none) and accepts `patch` / `minor` / `major`, so it cannot jump to
+  `4.39.0` on its own. The baseline tag is placed by hand once:
+
+  ```sh
+  git tag v4.39.0 && git push origin v4.39.0
+  ```
+
+  Nothing is published by that tag — it only gives the workflow a floor to bump
+  from. The first *published* release is therefore `v4.39.1`, from
+  `release.yml` with `patch`.
+- The version line is not a promise to match `chat` release for release. Once
+  the baseline exists, this package bumps on its own changes: a fix ships a
+  patch whether or not `chat` moved. Re-basing onto a later `chat` minor is a
+  deliberate act — bump the peer range and the dev dependency in the same PR,
+  and say so in the body.
+
+`package.json` stays at `0.0.0` on `main` either way; git tags remain the
+version of record.
+
+## 8. Out of scope / later
 
 - **Catalog listing** (community or vendor-official) in `vercel/chat`; the
   feature-matrix values are prepared in §13 of the spec.
