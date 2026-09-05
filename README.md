@@ -6,16 +6,16 @@ by commenting.
 
 ## Status
 
-**In progress — not yet installable.** Nothing is published to npm, and the
-package entry still exports only a placeholder, so none of the imports below
-resolve yet. They document the surface the finished adapter exposes, so that
-this file is reviewed alongside the code that implements it rather than written
-afterwards.
+**Complete, not yet published.** Every member of Chat SDK's `Adapter`
+interface that Backlog can support is implemented and tested, and the package
+entry exports the surface documented below — but nothing is on npm yet, so the
+install command does not resolve.
 
-What is on `main` today: the Backlog API client port (with rate-limit buckets,
-typed errors and bounded 429 retry), the id codec, and the Markdown and
-Backlog-notation converters. Webhook ingress and the egress members land behind
-them.
+**Version line:** releases track `chat`, the same lockstep the first-party
+`@chat-adapter/*` packages use, so the adapter release built against
+`chat@4.39.x` carries a `4.39.x` number of its own. `chat` itself stays a peer
+dependency at a caret range rather than an exact pin, so upgrading the core
+does not require a matching adapter release.
 
 The finished behaviour is specified in
 [docs/specs/adapter.md](./docs/specs/adapter.md) and the order of work in
