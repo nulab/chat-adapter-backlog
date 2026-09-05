@@ -42,6 +42,11 @@ file. Read them before touching `src/`:
 - [docs/plans/adapter-implementation.md](./docs/plans/adapter-implementation.md)
   — the PR stack that gets there, with acceptance criteria per phase and the
   decisions still open for the maintainer.
+- [docs/plans/pull-request-support.md](./docs/plans/pull-request-support.md)
+  — the follow-on stack that makes a pull request a thread alongside an
+  issue: the kind-explicit id grammar, the subject layer, activity types
+  18–21, and the measurements that gate the webhook work. Until its P0 amends
+  the spec, it is the specification of record for pull-request behaviour.
 - `.claude/rules/*.md` — measured Backlog behaviour and verified Chat SDK core
   behaviour, loaded automatically when a `src/**/*.ts` file is read. When the
   code contradicts a rule there, re-measure before "fixing" the code.
@@ -431,10 +436,18 @@ persisted cursor and a backoff.
 **Activity types** ([Get
 Activity](https://developer.nulab.com/docs/backlog/api/2/get-activity/)) that
 matter here: **1** Issue Created, **2** Issue Updated, **3** Issue Commented,
-**17** Comment Notification Added. Type 17 is the "project notifications" in the
-package description. Subscribe to these explicitly via `activityTypeIds[]`
-rather than setting `allEvent` — the full range runs to 49 and includes git,
-pull request, wiki and document events this adapter has no meaning for.
+**4** Issue Deleted, **18** Pull Request Added, **19** Pull Request Updated,
+**20** Comment Added on Pull Request. **17** Comment Notification Added is the
+"project notifications" in the package description and is acknowledged, not
+dispatched. **21** is documented as "Pull Request Deleted" and typed by
+`backlog-js` as `PullRequestMerged`; nothing was found to emit it — merge and
+close both arrive as type 19 status changes
+(`.claude/rules/backlog-pull-request-facts.md`). Subscribe explicitly via
+`activityTypeIds[]` rather than setting `allEvent` — the full range runs to 49
+and includes git push, wiki and document events this adapter has no meaning
+for. Pull-request facts (three-coordinate addressing, no comment delete,
+`read`-bucket listing, the `assignee` vs `assigner` field name) live in that
+rules file; do not reason about them from the issue side.
 
 ## Dependency plan
 

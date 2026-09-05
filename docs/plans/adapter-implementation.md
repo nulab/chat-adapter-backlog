@@ -477,6 +477,9 @@ version of record.
 
 ## 8. Out of scope / later
 
+- **Pull requests as threads** (activity types 18–21, the git pull-request
+  endpoints) — planned separately in
+  [docs/plans/pull-request-support.md](./pull-request-support.md).
 - **Catalog listing** (community or vendor-official) in `vercel/chat`; the
   feature-matrix values are prepared in §13 of the spec.
 - **OAuth token acquisition and refresh**: callers supply a resolver; a helper

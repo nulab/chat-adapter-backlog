@@ -10,7 +10,8 @@ constraints both were written under are in [CLAUDE.md](../../CLAUDE.md).
 Measured Backlog behaviour is summarised here only as far as it changes the
 adapter's observable behaviour. The measurements themselves, with dates and
 payload excerpts, live in `.claude/rules/backlog-webhook-facts.md`,
-`.claude/rules/backlog-api-facts.md` and `.claude/rules/chat-sdk-core-facts.md`.
+`.claude/rules/backlog-api-facts.md`, `.claude/rules/backlog-pull-request-facts.md`
+and `.claude/rules/chat-sdk-core-facts.md`.
 Every Backlog API claim below cites a
 [developer.nulab.com](https://developer.nulab.com/docs/backlog/) page or says
 "measured on \<date\>".
@@ -27,11 +28,12 @@ maintainer has not yet confirmed (§15).
 constructs the adapter with a Backlog host, a bot user's credentials and a
 webhook secret (or lets those come from environment variables), registers one
 Backlog project webhook per project pointing at the Chat SDK route, and then
-writes ordinary `Chat` handlers: a mention of the bot in an issue or comment
-reaches `onNewMention`, follow-up comments on subscribed issues reach
-`onSubscribedMessage`, `thread.post()` becomes a comment on the issue,
-`channel.post()` creates an issue, `thread.messages` pages through the issue's
-comments, and every Backlog API failure surfaces as one of
+writes ordinary `Chat` handlers: a mention of the bot in an issue, a pull
+request or a comment on either reaches `onNewMention`, follow-up comments on
+subscribed issues and pull requests reach `onSubscribedMessage`,
+`thread.post()` becomes a comment on the issue or pull request,
+`channel.post()` creates an issue, `thread.messages` pages through the
+thread's comments, and every Backlog API failure surfaces as one of
 `@chat-adapter/shared`'s error classes. One adapter instance serves any number
 of Backlog spaces. `pnpm test` proves all of this with no network.
 
@@ -42,49 +44,79 @@ documents exist.
 **Non-goals** (declared unsupported, not deferred): direct messages, ephemeral
 messages, modals, buttons, slash commands, scheduled messages, nested replies,
 emoji reactions, typing indicators, realtime transport, OAuth token
-acquisition or refresh, webhook registration on behalf of the consumer, and any
+acquisition or refresh, webhook registration on behalf of the consumer, any
 persistent state of the adapter's own (subscriptions and dedupe belong to the
-Chat SDK `StateAdapter`).
+Chat SDK `StateAdapter`), creating, closing or merging pull requests (Backlog
+has no status API, `.claude/rules/backlog-pull-request-facts.md`), treating a
+git repository as a channel (D-PR1), and listing pull requests through
+`listThreads` (D-PR7).
 
 ## 2. Conceptual model
 
 | Backlog | Chat SDK | Id grammar | Notes |
 | --- | --- | --- | --- |
 | Space | (installation) | `host` — a full hostname such as `example.backlog.com`, `example.backlog.jp`, `example.backlogtool.com` | Never a slug; the domain differs per space (CLAUDE.md "Host"). |
-| Project | Channel | `backlog:<host>:<projectId>` | Numeric project id. |
-| Issue | Thread | `backlog:<host>:<projectId>:<issueId>` | Numeric issue id, never the issue key: renaming a project key rewrites every issue key (measured, `.claude/rules/backlog-webhook-facts.md`). |
-| Issue body | Root message of the thread | `<host>:<issueId>:i` | `text` = `summary + "\n\n" + description`, trimmed. |
-| Comment | Message | `<host>:<issueId>:c<commentId>` | Includes Backlog's auto-generated changelog comments (status, assignee, description, attachment changes). |
-| Issue update without a comment | Message with empty text | `<host>:<issueId>:u:<created>` | `created` is the webhook's top-level ISO timestamp verbatim; it contains `:`. |
+| Project | Channel | `backlog:<host>:<projectId>` | Numeric project id. Both kinds of thread belong to the project; a git repository is not a channel (D-PR1). |
+| Issue | Thread | `backlog:<host>:<projectId>:issue:<issueId>` | Numeric issue id, never the issue key: renaming a project key rewrites every issue key (measured, `.claude/rules/backlog-webhook-facts.md`). |
+| Pull request | Thread | `backlog:<host>:<projectId>:pr:<repositoryId>:<number>` | Numeric repository id, never the name (`repoIdOrName` accepts either; names can change); `number` is the per-repository number every pull-request endpoint is keyed by. The global pull-request `id` addresses no endpoint and appears only in raw data and metadata (`.claude/rules/backlog-pull-request-facts.md`). |
+| Issue body / pull-request body | Root message of the thread | `<host>:issue:<issueId>:r` / `<host>:pr:<repositoryId>:<number>:r` | `text` = `summary + "\n\n" + description`, trimmed, for both kinds. |
+| Comment | Message | `<host>:<subject>:c<commentId>` | Includes Backlog's auto-generated changelog comments (status, assignee, description, attachment changes). The kind segment keeps issue and pull-request comment ids distinct: the two are drawn from different sequences and may overlap (measured). |
+| Update without a comment | Message with empty text | `<host>:<subject>:u:<created>` | `created` is the webhook's top-level ISO timestamp verbatim; it contains `:`. |
 | User | User | `<host>:<userId>` | Numeric user id, host-qualified because user ids are per space. |
-| Star on a comment | Reaction | — | One kind only; emoji name is ignored. |
-| Notification (お知らせ) | Read receipt | — | `markAsRead` marks the bot user's own notification for the comment. |
+| Star on a comment | Reaction | — | One kind only; emoji name is ignored. `commentId` or `pullRequestCommentId` by kind. |
+| Notification (お知らせ) | Read receipt | — | `markAsRead` marks the bot user's own notification for the comment, matched by kind. |
 
 The `host` appears in message and user ids because the core's dedupe key is
 `dedupe:<adapter.name>:<message.id>` with no thread component (verified in
 `chat.ts`; see `.claude/rules/chat-sdk-core-facts.md`), and comment ids are
-unique only within one space.
+unique only within one space and one kind.
+
+The kind is an explicit segment on **both** kinds rather than issues being the
+unmarked default (D-PR2): Backlog addresses the two through different endpoint
+families with different coordinates, so nothing may infer the kind from a
+segment count. The shared value every id, raw message and internal call passes
+around is
+
+```ts
+type BacklogSubjectRef =
+  | { kind: 'issue'; issueId: number }
+  | { kind: 'pullRequest'; repositoryId: number; number: number };
+
+interface BacklogThreadId { host: string; projectId: number; subject: BacklogSubjectRef }
+
+type BacklogMessageId = { host: string; subject: BacklogSubjectRef } & (
+  | { part: 'root' }
+  | { part: 'comment'; commentId: number }
+  | { part: 'update'; created: string }
+);
+```
 
 ### 2.1 Grammar
 
 ```
-host       = 1*( lower-alnum / "." / "-" )      ; no ":" "/" scheme, port or path; lowercased
-posint     = ( "1"-"9" ) *DIGIT
-thread-id  = "backlog:" host ":" posint ":" posint          ; projectId, issueId
-channel-id = "backlog:" host ":" posint                     ; projectId
-message-id = host ":" posint ":" ( "i" / "c" posint / "u:" created )
-user-id    = host ":" posint
-created    = 1*VCHAR                                        ; opaque, may contain ":"
+host        = 1*( lower-alnum / "." / "-" )      ; no ":" "/" scheme, port or path; lowercased
+posint      = ( "1"-"9" ) *DIGIT
+subject     = "issue:" posint                    ; issueId
+            / "pr:" posint ":" posint            ; repositoryId, number
+thread-id   = "backlog:" host ":" posint ":" subject   ; projectId, subject
+channel-id  = "backlog:" host ":" posint               ; projectId
+message-id  = host ":" subject ":" part
+part        = "r" / "c" posint / "u:" created
+user-id     = host ":" posint
+created     = 1*VCHAR                                  ; opaque, may contain ":"
 ```
 
 ### 2.2 Rejection rules
 
 `decodeThreadId`, `decodeChannelId`, `decodeMessageId`, `decodeUserId` throw
 `ValidationError("backlog", …)` on any of: wrong prefix or segment count
-(thread: exactly 4 segments, channel: exactly 3), empty or invalid `host`,
-non-`posint` numeric segment, unknown message tag, `i` or `c<id>` followed by
-further segments, `u:` with nothing after it. `decodeUserId` splits on the
-**last** `:`; a bare number is rejected even with a single installation. A host
+(thread: `backlog`, host, project id, then exactly the segments its subject
+keyword takes — one posint after `issue:`, two after `pr:`; channel: exactly
+3), empty or invalid `host`, non-`posint` numeric segment, unknown subject
+keyword, a subject followed by nothing or by an unknown part, `r` or `c<id>`
+followed by further segments, `u:` with nothing after it. `decodeUserId`
+splits on the **last** `:`; a bare number is rejected even with a single
+installation. A host
 that decodes correctly but is not a configured installation is a
 `ResourceNotFoundError("backlog", "installation", host)` at the point of use
 (not a decode error: the id is well-formed).
@@ -101,12 +133,20 @@ Runtime: `BacklogAdapter` (class), `createBacklogAdapter(config?)`,
 `BacklogNotationConverter`, `createInMemoryBacklogApi(seed?)`.
 
 Types: `BacklogAdapterConfig`, `BacklogInstallation`, `BacklogThreadId`,
-`BacklogRawMessage`, `BacklogPostableExtras`, `BacklogChannelPostableExtras`,
+`BacklogSubjectRef`, `BacklogMessageId`, `BacklogRawMessage`,
+`BacklogPostableExtras`, `BacklogChannelPostableExtras`,
 `BacklogWebhookPayload`, `BacklogWebhookVerifier`, `BacklogApi` and the domain
-types it references (`BacklogIssue`, `BacklogComment`, `BacklogProject`,
-`BacklogUserRef`, `BacklogChange`, `BacklogStar`, `BacklogNotification`,
+types it references (`BacklogIssue`, `BacklogPullRequest`,
+`BacklogGitRepository`, `BacklogComment`, `BacklogIssueComment`,
+`BacklogProject`, `BacklogUserRef`, `BacklogChange`, `BacklogStar`,
+`StarTarget`, `PullRequestRef`, `BacklogNotification`,
 `BacklogAttachmentInfo`, `TextFormattingRule`, request/query input types),
 `RateLimitSnapshot`, `BacklogApiErrorDetail`, `InMemoryBacklogSeed`.
+
+Not exported: the internal subject layer (`SubjectClient`,
+`subjectClientFor`) that selects the issue or pull-request endpoint family
+for a thread — it is the seam egress and reads are written against
+(docs/plans/pull-request-support.md §3.4), not a consumer surface.
 
 Not exported: the `backlog-js` client wrapper, zod schemas, the plain-text
 fallback converter, fixtures. Nothing from `backlog-js` or `zod` appears in an
@@ -218,14 +258,30 @@ Extras are read with a strict schema: a present-but-mistyped extra is a
 ```ts
 type BacklogRawMessage =
   | { kind: "webhook"; host: string; payload: BacklogWebhookPayload; changes: BacklogChange[] }
-  | { kind: "comment"; host: string; projectId: number; comment: BacklogComment; changes: BacklogChange[] }
-  | { kind: "issue";   host: string; issue: BacklogIssue; changes: [] };
+  | { kind: "comment"; host: string; projectId: number; subject: BacklogSubjectRef;
+      comment: BacklogRawComment; changes: BacklogChange[] }
+  | { kind: "issue"; host: string; issue: BacklogRawIssue; changes: [] }
+  | { kind: "pullRequest"; host: string; pullRequest: BacklogRawPullRequest; changes: [] };
 ```
+
+`BacklogWebhookPayload` is the union of the recognised issue **and**
+pull-request activities (§5.2); `payload.type` tells them apart. The
+`comment` variant names its `subject` explicitly because a pull-request
+comment carries no parent reference of its own
+(`.claude/rules/backlog-pull-request-facts.md`); `BacklogRawComment` therefore
+has no `issueId`. The two root variants stay flat (`issue`, `pullRequest`)
+rather than one `root` with a nested discriminator, so `raw.issue` is reachable
+after one `kind` check. Raw shapes carry ISO strings where the port's domain
+types carry `Date` (`src/index.ts`).
 
 `changes` is normalised to `{ field: string; newValue: string | null; oldValue: string | null }`.
 Value systems are **not** unified: webhook `status` changes carry ids and
-`assigner` changes carry display names; REST `changeLog` carries display names
-for both (measured 2026-08-28). Consumers read `raw.kind` before interpreting.
+assignee changes carry display names; REST `changeLog` carries display names
+for both (measured 2026-08-28). The assignee field is named **`assigner`** on
+issues and **`assignee`** on pull requests, and a pull request's `summary`
+change carries resolved mention text in the activity but raw `<@U…>` in REST
+(measured 2026-09-06). Consumers read `raw.kind` and the subject kind before
+interpreting.
 
 ### 3.6 Errors thrown
 
@@ -241,7 +297,11 @@ No `ZodError` and no `backlog-js` error class ever escapes the package.
 `Adapter<BacklogThreadId, BacklogRawMessage>` in `chat@4.39.0` has 17 required
 and 27 optional members (CLAUDE.md, verified against the shipped `.d.ts`).
 "Core calls it" lists the runtime call site; "never" means only the adapter or
-the test kit calls it.
+the test kit calls it. Every member accepts an issue thread or a pull-request
+thread; the pull-request form is identical unless §6 or §7 says otherwise, and
+the three that must fail on a pull request (`deleteMessage`, and nothing
+else — `listThreads` and `postChannelMessage` take channel ids and are simply
+issue-scoped) are stated where they differ.
 
 ### 4.1 Required members
 
@@ -257,11 +317,11 @@ the test kit calls it.
 | `renderFormatted(content, target?)` | implemented | Renders mdast with the converter for `target` (thread or channel id) when its rule is cached; otherwise GFM Markdown ⚑. | never |
 | `postMessage(threadId, message)` | implemented | Adds a comment (§6.1). | `thread.post`, object/ephemeral fallbacks, `channel.post` fallback (not taken: `postChannelMessage` exists) |
 | `editMessage(threadId, messageId, message)` | implemented | Updates comment content (§6.2). | `SentMessage.edit` |
-| `deleteMessage(threadId, messageId)` | implemented | Deletes the comment (§6.3). | `SentMessage.delete` |
+| `deleteMessage(threadId, messageId)` | implemented | Deletes the comment (§6.3); on a pull-request thread fails with `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call — Backlog has no such endpoint (D-PR3). | `SentMessage.delete` |
 | `addReaction` / `removeReaction` | partial | One star; emoji ignored (§6.5). | `SentMessage.addReaction` etc. |
 | `startTyping()` | no-op | Resolves immediately. Backlog has no typing indicator. | `thread.startTyping` |
 | `fetchMessages(threadId, options?)` | implemented | Paged comments plus root message (§7.1). | `thread.messages`, `allMessages`, `refresh`, history |
-| `fetchThread(threadId)` | implemented | Issue → `ThreadInfo` (§7.3). | `chat/ai` tools only |
+| `fetchThread(threadId)` | implemented | Issue or pull request → `ThreadInfo` with `metadata.kind` (§7.3). | `chat/ai` tools only |
 
 ### 4.2 Optional members
 
@@ -270,9 +330,9 @@ the test kit calls it.
 | `stream(threadId, textStream, options?)` | **implemented, buffered** (D4) | Consumes the whole stream, joins `markdown_text` chunks, then one `postMessage`; returns its `RawMessage`. Never returns `null` before the stream is consumed (that re-enables the core's 500 ms edit loop). Empty stream → posts `" "`, matching the core's own fallback, so a `SentMessage` always exists ⚑. |
 | `isDM(threadId)` | implemented | Always `false`. |
 | `fetchMessage(threadId, messageId)` | implemented | §7.2. |
-| `fetchSubject(raw)` | implemented | §7.4; the parent issue as `MessageSubject`. |
+| `fetchSubject(raw)` | implemented | §7.4; the parent issue (`type: "issue"`) or pull request (`type: "pull_request"`) as `MessageSubject`. |
 | `fetchChannelInfo(channelId)` | implemented | §7.5; also refreshes the formatting-rule cache. |
-| `listThreads(channelId, options?)` | implemented | §7.6; offset cursor. |
+| `listThreads(channelId, options?)` | implemented | §7.6; offset cursor; **issues only** (D-PR7). |
 | `postChannelMessage(channelId, message)` | implemented | Creates an issue (§6.7). |
 | `getUser(userId)` | implemented | §7.7. |
 | `markAsRead(threadId, messageId, message?)` | implemented | §7.8. |
@@ -307,7 +367,7 @@ secret" from "unknown host" (D2).
 | 5 | If no verifier: `?token=` present and `timingSafeEqual` to the installation's `webhookSecret` after a byte-length check | 401 `Unauthorized` | warn `{reason: "missing_token" \| "token_mismatch"}` |
 | 6 | `JSON.parse(rawBody)` succeeds and yields an object | 400 `Invalid JSON` | warn |
 | 7 | Envelope `{ type: number }` | 400 `Invalid payload` | warn |
-| 8 | `type ∈ {1, 2, 3, 4}` (4 only while deletion is enabled, D10) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
+| 8 | `type ∈ {1, 2, 3, 4, 18, 19, 20}` (4 only while deletion is enabled, D10; 21 is not dispatched, D-PR5) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
 | 9 | Type-specific schema (§5.2) | 400 `Invalid payload` | warn with zod issue paths (no values) |
 | 10 | `initialize()` has run | 503 `Adapter not initialized` ⚑ (a 5xx is the only answer that could make Backlog redeliver; whether it does is undocumented) | error |
 | 11 | `createdUser.id !== botUserId` | 200 `OK` (self message, nothing dispatched) | debug `self message skipped` |
@@ -327,7 +387,7 @@ On success the adapter calls
 `this.chat.processMessage(this, threadId, factory, options)` with
 `factory = async () => { await this.ensureFormattingRule(host, projectId); return this.parseMessage(raw); }`
 and attaches a `.catch` that logs `error` `inbound processing failed`
-`{host, issueId, messageId}` — the core registers the task with
+`{host, threadId, messageId}` — the core registers the task with
 `options.waitUntil` itself. The response does not await the factory.
 Failures inside the factory (formatting-rule lookup, converter) are downgraded
 per §9.2 so a message is delivered rather than lost.
@@ -345,17 +405,22 @@ keys** everywhere (`field_text`, `type` inside `changes[]`, `notifications`,
 
 Required (400 when missing): `type` number; `created` string; `project.id`
 number; `createdUser.id` number; `createdUser.name` string; `content.id`
-number. `content.key_id` and `project.projectKey` are optional — they are
-display data, never identity.
+number; for types 18–20 additionally `content.number` number and
+`content.repository.id` number. `content.key_id`, `project.projectKey` and
+`content.repository.name` are optional — display data, never identity — but
+the last two are **captured** when present (§7.3: they are the names a
+pull-request URL needs and the REST object lacks).
 
-| Field | Type 1 | Type 2/3 | Type 4 |
-| --- | --- | --- | --- |
-| `content.summary`, `content.description` | read (`description` nullable) | ignored | — |
-| `content.assignee` | `{ id, name } \| null`, optional | ignored (assignee changes arrive in `changes`) | — |
-| `content.comment` | absent | `{ id: number, content: string \| null } \| null` | — |
-| `content.changes[]` | absent | `{ field: string, new_value?: string \| number \| null, old_value?: … }[]` optional | — |
-| `content.attachments[]` | `{ id, name, size }[]` optional | same | — |
-| `createdUser.userId` | `string \| null` optional (Nulab-account users have none) | same | same |
+| Field | Type 1 | Type 2/3 | Type 4 | Type 18 | Type 19/20 |
+| --- | --- | --- | --- | --- | --- |
+| `content.summary`, `content.description` | read (`description` nullable) | ignored | — | read | ignored |
+| `content.assignee` | `{ id, name } \| null`, optional | ignored (assignee changes arrive in `changes`) | — | not carried by the activity form (measured 2026-09-06); read if a webhook ever carries it | ignored |
+| `content.comment` | absent | `{ id: number, content: string \| null } \| null` | — | `null` | `{ id, content } \| null` |
+| `content.changes[]` | absent | `{ field: string, new_value?: string \| number \| null, old_value?: … }[]` optional | — | `[]` | same shape as 2/3 |
+| `content.attachments[]` | `{ id, name, size }[]` optional | same | — | optional (not measured on the activity form) | optional |
+| `content.number`, `content.repository.{id,name}` | — | — | — | required / required + optional | same |
+| `content.issue` | — | — | — | `{ id, key_id, issue_key?, summary, description } \| null`, the linked issue; display data (D-PR6) | same |
+| `createdUser.userId` | `string \| null` optional (Nulab-account users have none) | same | same | same | same |
 
 ### 5.3 Activity-type mapping
 
@@ -365,10 +430,21 @@ display data, never identity.
 | 2 | Issue Updated, with `content.comment.id` | `<host>:<issueId>:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` | `changes[field="assigner"].new_value === botUserName` **or** text |
 | 2 | Issue Updated, no comment id | `<host>:<issueId>:u:<created>` | `""` | none | as above |
 | 3 | Issue Commented | `<host>:<issueId>:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` | text |
-| 4 | Issue Deleted (D10, optional phase) | root `<host>:<issueId>:i` | — | — | — → `chat.processMessageDeleted({ adapter, channelId, threadId, messageId, raw, deletedAt: new Date(created) })` |
+| 4 | Issue Deleted (D10, optional phase) | root `<host>:issue:<issueId>:r` | — | — | — → `chat.processMessageDeleted({ adapter, channelId, threadId, messageId, raw, deletedAt: new Date(created) })` |
 | 14 | Issue Multi Updated (bulk) | — | — | — | 200 Ignored: no per-issue comment; measured to carry bulk status changes (2026-08-28) |
 | 17 | Comment Notification Added | — | — | — | 200 Ignored: repeats an existing comment; produced when notifications are added after the fact (measured 2026-09-03) |
-| other | wiki, git, document, … | — | — | — | 200 Ignored |
+| 18 | Pull Request Added | `<host>:pr:<repository.id>:<number>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` if present | text (including the raw `<@U<botUserId>>` form, §5.4) |
+| 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present | `changes[field="assignee"].new_value === botUserName` **or** text |
+| 19 | Pull Request Updated, no comment id | `…:u:<created>` | `""` | none | as above |
+| 20 | Comment Added on Pull Request | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present; a `changes[field="attachment"]` entry names the file but carries no id (§6.6) | text |
+| 21 | Pull Request Deleted (docs) / Merged (`backlog-js`) | — | — | — | 200 Ignored (D-PR5): no operation was found to emit it — merge and close arrive as 19 status changes (measured 2026-09-06) |
+| 12, 13 | Git Pushed, Git Repository Created | — | — | — | 200 Ignored: no thread meaning |
+| other | wiki, document, … | — | — | — | 200 Ignored |
+
+The thread id of a pull-request activity is built from `project.id`,
+`content.repository.id` and `content.number` — never from `content.id` (the
+global id addresses no endpoint) and never from `content.issue` (a linked
+issue is display data; the pull request is its own thread, D-PR6).
 
 Behavioural consequences of measured facts (details and dates in
 `.claude/rules/backlog-webhook-facts.md`):
@@ -399,6 +475,21 @@ Behavioural consequences of measured facts (details and dates in
   carries it (measured 2026-08-28). The schema keeps it optional so replaying
   an activity body works; assignment-based mention then relies on the webhook
   form only.
+- **Pull-request activities** (`.claude/rules/backlog-pull-request-facts.md`,
+  measured 2026-09-06 on the activity API form; the webhook form is
+  unmeasured): merging — by the UI or by pushing the merge to the base branch
+  — and closing both arrive as **19** with `changes[field="status"]` (`1`
+  Open → `3` Merged / `2` Closed, ids as strings) and an empty changelog
+  comment; summary, description and linked-issue changes arrive as 19 with
+  `summary` / `description` / `issue` (issue **keys**) entries and the
+  `PATCH` `comment` text as `comment.content`; an assignee change alone
+  arrives as 19 with `field: "assignee"` by display name (a multi-field
+  update was measured once to omit the `assignee` entry). A comment with
+  `attachmentId[]` arrives as **20** with `changes[field="attachment"]` naming
+  the file. Creating a pull request with `notifiedUserId[]` also creates a
+  system comment (`changeLog[field="notification"]`) that **no activity
+  announces**, so `fetchMessages` returns an entry the webhook path never
+  delivered. Editing a pull-request comment fires no activity, as for issues.
 
 ### 5.4 Mention detection (D9)
 
@@ -417,6 +508,16 @@ API response returns the **resolved** text `@<display name>`; the payload's
 3. Type 2: any `changes[]` entry with `field === "assigner"` and
    `String(new_value ?? "") === botUserName` — Backlog reports the new
    assignee by display name, not id (measured 2026-08-02).
+4. Type 19: as rule 3 with `field === "assignee"` (the pull-request field
+   name, measured 2026-09-06). Type 18 carries no assignee on the activity
+   form, so assignment at creation is a mention only if a webhook body turns
+   out to carry `content.assignee` (unmeasured; the schema reads it when
+   present).
+5. A pull request's **summary is stored without mention rewriting**: `<@U…>`
+   stays literal there while `description` and comments are rewritten to
+   `@<display name>` (measured 2026-09-06). Type-18 `text` is therefore also
+   matched against `<@U<botUserId>>`, and `mentionPattern` alone is not
+   sufficient for it.
 
 `message.isMention` is pre-set from these; the core additionally runs its own
 `@<userName>` regex (case-insensitive) which, because `userName` defaults to
@@ -451,7 +552,11 @@ that notifies without a visible mention.
 ## 6. Egress
 
 Every egress member decodes `threadId`, resolves the installation, and uses the
-port for that host. Non-comment message ids (`:i`, `:u:`) are rejected with
+port for that host through the subject client the thread id's `subject`
+selects (issue endpoints or pull-request endpoints, D-PR2;
+docs/plans/pull-request-support.md §3.4). The behaviour below is the same for
+both kinds unless a subsection says otherwise. Non-comment message ids (`:r`,
+`:u:`) are rejected with
 `ValidationError("backlog", "<id> is not a comment and cannot be edited, deleted or starred")`
 (D12).
 
@@ -464,8 +569,13 @@ port for that host. Non-comment message ids (`:i`, `:u:`) are rejected with
    (§9). Cards render through `cardToFallbackText`.
 3. `POST /issues/:issueId/comments` with `content`, `notifiedUserId[]`,
    `attachmentId[]`
-   ([Add Comment](https://developer.nulab.com/docs/backlog/api/2/add-comment/)).
-4. Return `{ id: <host>:<issueId>:c<comment.id>, threadId, raw: { kind: "comment", … } }`.
+   ([Add Comment](https://developer.nulab.com/docs/backlog/api/2/add-comment/)),
+   or `POST /projects/:projectId/git/repositories/:repositoryId/pullRequests/:number/comments`
+   with the same three parameters
+   ([Add Pull Request Comment](https://developer.nulab.com/docs/backlog/api/2/add-pull-request-comment/);
+   `attachmentId[]` is documented and measured 2026-09-06 although
+   `backlog-js` omits it from its typing).
+4. Return `{ id: <host>:<subject>:c<comment.id>, threadId, raw: { kind: "comment", subject, … } }`.
 
 A failed step rejects; no synthetic message is ever returned. Uploads that
 succeeded before a failed comment are abandoned (Backlog deletes them after an
@@ -484,6 +594,12 @@ only; a foreign comment surfaces as `PermissionError` per §8.5.
 ([Delete Comment](https://developer.nulab.com/docs/backlog/api/2/delete-comment/)).
 Resolves `void`; 404 → `ResourceNotFoundError`.
 
+On a pull-request thread `deleteMessage` throws
+`AdapterError("Backlog has no endpoint to delete a pull request comment", "backlog", "UNSUPPORTED_OPERATION")`
+**before any API call** (D-PR3): the endpoint does not exist — the route
+answers 400 with error code 6 `Undefined resource` (measured 2026-09-06) — and
+`ValidationError` would mislabel a well-formed call as the caller's fault.
+
 ### 6.4 `stream(threadId, textStream, options?)` (D4)
 
 Consume the iterable to completion, concatenating `string` chunks and
@@ -495,16 +611,20 @@ buffered so far if non-empty.
 
 ### 6.5 Reactions
 
-- `addReaction(threadId, messageId, emoji)`: `POST /stars { commentId }`
+- `addReaction(threadId, messageId, emoji)`: `POST /stars { commentId }` on
+  an issue thread, `POST /stars { pullRequestCommentId }` on a pull-request
+  thread
   ([Add Star](https://developer.nulab.com/docs/backlog/api/2/add-star/)).
   The emoji is ignored (one star kind). Before posting, read the comment; if
   the bot already has a star on it, resolve without a call (Backlog allows
   unlimited stars per user, so this is the only way to make the call
   idempotent).
-- `removeReaction(...)`: `GET /issues/:id/comments/:cid`, find `stars[]`
-  entries whose `presenter.id === botUserId`, `DELETE /stars/:starId` for each
+- `removeReaction(...)`: read the comment (§7.2), find `stars[]` entries
+  whose `presenter.id === botUserId`, `DELETE /stars/:starId` for each
   ([Remove Star](https://developer.nulab.com/docs/backlog/api/2/remove-star/)).
   No bot star → resolve without a call. Never deletes another user's star.
+- Reading a single pull-request comment is one list call with a one-element
+  window (§7.2), so both members cost one read on either kind.
 
 ### 6.6 Files and attachments (D11)
 
@@ -513,17 +633,25 @@ Outbound is §6.1 step 1. Inbound attachments are `Attachment` objects:
 | Source | Fields |
 | --- | --- |
 | Webhook types 1–3 `content.attachments[]` | `type: "file"`, `name`, `size`, `url` (API URL, see §5.3), `fetchData` |
-| REST comment `changeLog[]` entries with `field === "attachment"` and `newValue` set (an add; `originalValue` set means a removal and is skipped) | same, `name = newValue`, id from `attachmentInfo.id`; `size` unknown |
+| REST issue comment `changeLog[]` entries with `field === "attachment"` and `newValue` set (an add; `originalValue` set means a removal and is skipped) | same, `name = newValue`, id from `attachmentInfo.id`; `size` unknown |
 | REST issue `attachments[]` | same |
+| Webhook types 18–20 `content.attachments[]`, when present | same, with the pull-request URL below |
+| Webhook type 20 `changes[field="attachment"]` and REST pull-request comment `changeLog[field="attachment"]` | `type: "file"`, `name = new_value / newValue`; **no id is carried** (the pull-request `changeLog` has no `attachmentInfo`, measured 2026-09-06), so `url` and `fetchData` resolve the id lazily through `GET …/pullRequests/:number/attachments` by name — the newest match when names collide ⚑ D-PR10 |
+| REST pull request `attachments[]` | `type: "file"`, `name`, `size`, `url`, `fetchData` |
 
 `fetchData()` calls `GET /issues/:issueId/attachments/:attachmentId`
 ([Get Issue Attachment](https://developer.nulab.com/docs/backlog/api/2/get-issue-attachment/))
+or `GET /projects/:projectId/git/repositories/:repositoryId/pullRequests/:number/attachments/:attachmentId`
+([Download Pull Request Attachment](https://developer.nulab.com/docs/backlog/api/2/download-pull-request-attachment/))
 through the port and returns a `Buffer`. `rehydrateAttachment(attachment)`
 rebuilds `fetchData` from `attachment.url` after a JSON round trip; it accepts
 only URLs whose host is a configured installation and whose path matches
-`/api/v2/issues/<posint>/attachments/<posint>` — anything else is returned
-unchanged (no `fetchData`), which keeps attachment downloads confined to
-configured hosts (§11).
+`/api/v2/issues/<posint>/attachments/<posint>` or
+`/api/v2/projects/<posint>/git/repositories/<posint>/pullRequests/<posint>/attachments/<posint>`
+— anything else is returned unchanged (no `fetchData`), which keeps
+attachment downloads confined to configured hosts (§11). Each subject
+module owns both the URL builder and the matching pattern so the two cannot
+drift.
 
 ### 6.7 `postChannelMessage(channelId, message)` — issue creation
 
@@ -550,9 +678,12 @@ Backlog requires `projectId`, `summary`, `issueTypeId`, `priorityId`
 ### 6.8 Unsupported egress
 
 `openDM`, `postEphemeral`, `openModal`, `scheduleMessage`, `reply`,
-`postObject`/`editObject`, editing the issue body (`editMessage(:i)` is a
-`ValidationError`), emoji reactions (no API; UI-only per the support article
-cited in `.claude/rules/backlog-api-facts.md`).
+`postObject`/`editObject`, editing the issue or pull-request body
+(`editMessage(:r)` is a `ValidationError`), deleting a pull-request comment
+(§6.3), emoji reactions (no API; UI-only per the support article cited in
+`.claude/rules/backlog-api-facts.md`), and changing a pull request's status
+(no API: `statusId` on Update Pull Request is `error.unknownParameter`,
+measured 2026-09-06).
 
 ## 7. Reads
 
@@ -572,6 +703,14 @@ so a backward page is `order=desc&maxId=` and a forward page is
 | `direction` | Default `"backward"`. |
 | `cursor` | Must match `^(0\|[1-9]\d*)$`; anything else → `ValidationError`. It is a comment id (or `0` meaning "before the first comment", forward only). |
 | `threadId` that is a channel id | `ValidationError` (see §4.2 `fetchChannelMessages`). |
+
+On a pull-request thread the same algorithm runs against
+[Get Pull Request Comment](https://developer.nulab.com/docs/backlog/api/2/get-pull-request-comment/)
+(same `minId`/`maxId`/`count`/`order` parameters, same exclusive bounds and
+head-cut `count`, measured 2026-09-06) and the root message is the pull
+request. The list includes Backlog's changelog comments and the
+`notification` system comment a `notifiedUserId[]` on creation produces
+(`.claude/rules/backlog-pull-request-facts.md`).
 
 Algorithm: `startsWithRoot = direction === "forward" && cursor === undefined`;
 `commentLimit = startsWithRoot ? limit - 1 : limit`; request
@@ -593,24 +732,52 @@ moves on any field change and does not indicate a body edit.
 
 ### 7.2 `fetchMessage(threadId, messageId)`
 
-Both ids decoded; `null` without an API call when the message's host or issue
-differs from the thread's, and for `:u:` ids (no single-fetch API exists for
-an update event, D12). `:c<id>` → [Get Comment](https://developer.nulab.com/docs/backlog/api/2/get-comment/);
-`:i` → [Get Issue](https://developer.nulab.com/docs/backlog/api/2/get-issue/).
-`ResourceNotFoundError` → `null`; other errors propagate.
+Both ids decoded; `null` without an API call when the message's host or
+subject differs from the thread's, and for `:u:` ids (no single-fetch API
+exists for an update event, D12). Issue thread: `:c<id>` →
+[Get Comment](https://developer.nulab.com/docs/backlog/api/2/get-comment/);
+`:r` → [Get Issue](https://developer.nulab.com/docs/backlog/api/2/get-issue/).
+Pull-request thread: `:r` →
+[Get Pull Request](https://developer.nulab.com/docs/backlog/api/2/get-pull-request/);
+`:c<id>` → the comment list with `minId = id - 1`, `maxId = id + 1`,
+`count = 1` — Backlog has no single-comment endpoint for pull requests (the
+route is 400/6 `Undefined resource`), and the exclusive bounds return exactly
+that comment or nothing (measured 2026-09-06); an empty page is `null`, and a
+returned element whose `id` differs is treated as not found rather than
+trusted. `ResourceNotFoundError` → `null`; other errors propagate.
 
 ### 7.3 `fetchThread(threadId)`
 
-One Get Issue. Returns
+Issue thread: one Get Issue. Returns
 `{ id, channelId: backlog:<host>:<projectId>, channelName: <projectKey from issueKey up to its last "-">, isDM: false, metadata }`
-with `metadata = { host, issueId, issueKey, projectId, summary, description, status: { id, name }, assignee: { id, name } | null, issueType: { id, name }, priority: { id, name }, createdUserId, created, updated, url: https://<host>/view/<issueKey> }`.
+with `metadata = { kind: "issue", host, issueId, issueKey, projectId, summary, description, status: { id, name }, assignee: { id, name } | null, issueType: { id, name }, priority: { id, name }, createdUserId, created, updated, url: https://<host>/view/<issueKey> }`.
+
+Pull-request thread: one Get Pull Request, plus the two names its web URL
+needs and the object lacks — `projectKey` and the repository name
+(`.claude/rules/backlog-pull-request-facts.md` "Addressing"). Both come from
+caches the adapter already keeps or fills for free: the per-channel project
+cache (§9.1, which stores `projectKey` beside `textFormattingRule` from the
+same Get Project) and a `host:repositoryId → name` cache populated from
+`content.repository.name` on every pull-request webhook and, on a miss, by one
+[Get Git Repository](https://developer.nulab.com/docs/backlog/api/2/get-git-repository/)
+(read bucket; cached until `fetchChannelInfo` clears the project's entries).
+A name lookup that fails is not cached, logs `warn`, and yields a `ThreadInfo`
+without `url` rather than a failed read. Returns
+`{ id, channelId, channelName: <projectKey>, isDM: false, metadata }` with
+`metadata = { kind: "pullRequest", host, projectId, repositoryId, repositoryName?, number, id, summary, description, status: { id, name }, assignee: { id, name } | null, base, branch, issue: { id, issueKey } | null, baseCommit, branchCommit, mergeCommit, closeAt, mergeAt, createdUserId, created, updated, url?: https://<host>/git/<projectKey>/<repositoryName>/pullRequests/<number> }`.
+Statuses are `1 Open`, `2 Closed`, `3 Merged` (measured 2026-09-06).
 
 ### 7.4 `fetchSubject(raw)`
 
-Resolves the issue that `raw` belongs to (one Get Issue; for `kind: "issue"`
-no call) and returns
-`{ id: <threadId>, type: "issue", title: summary, description, status: status.name, url: https://<host>/view/<issueKey>, author: { id: <host>:<createdUser.id>, name }, assignee?: { id, name }, labels: [issueType.name, priority.name], raw: issue }`.
-The core calls this lazily from `message.subject` and turns errors into `null`.
+Resolves the issue or pull request that `raw` belongs to (one Get Issue or Get
+Pull Request; for `kind: "issue"` / `kind: "pullRequest"` no call) and returns,
+for an issue,
+`{ id: <threadId>, type: "issue", title: summary, description, status: status.name, url: https://<host>/view/<issueKey>, author: { id: <host>:<createdUser.id>, name }, assignee?: { id, name }, labels: [issueType.name, priority.name], raw: issue }`
+and, for a pull request,
+`{ id: <threadId>, type: "pull_request", title: summary, description, status: status.name, url?: <as §7.3>, author, assignee?, labels: [status.name, "<base> ← <branch>"], raw: pullRequest }`.
+`type: "pull_request"` is the string `@chat-adapter/github` uses; the core
+types `MessageSubject.type` as a free `string` (D-PR8). The core calls this
+lazily from `message.subject` and turns errors into `null`.
 
 ### 7.5 `fetchChannelInfo(channelId)`
 
@@ -624,7 +791,11 @@ policy).
 [Get Issue List](https://developer.nulab.com/docs/backlog/api/2/get-issue-list/)
 with `projectId[]`, `count` (default 50, clamped `[1, 100]`), `offset`
 (cursor, `^(0|[1-9]\d*)$` else `ValidationError`). This endpoint draws on the
-**search** bucket (150/min documented example), not read. Ordering is Backlog's
+**search** bucket (150/min documented example), not read. **Pull requests are
+not listed** (D-PR7): a pull-request list is per repository, a coordinate the
+channel id does not carry; `api(host).listPullRequests(projectId, repositoryId, …)`
+is the route to one, and it spends `read`, not `search` (measured
+2026-09-06). Ordering is Backlog's
 default for the endpoint (`order=desc` on its unstated default sort key); no
 status filter, closed issues included — documented, not "open first". Each
 issue → `{ id: threadId, rootMessage: <issue root message>, lastReplyAt: new Date(issue.updated) }`;
@@ -644,10 +815,16 @@ adapter (the core infers adapters from id shape and does not know
 Notifications are the **bot user's** feed
 ([Get Notification](https://developer.nulab.com/docs/backlog/api/2/get-notification/));
 each entry carries `comment?.id` for comment-originated notifications
-(measured 2026-08-20). Algorithm: comment id from `messageId` (or
-`message.raw` when given — they must agree); `:i`/`:u:` → return without a
-call (debug log). Page `GET /notifications?count=100[&maxId=]` newest-first, at
-most 3 pages, until an entry with `comment.id === commentId` is found. Found and
+(measured 2026-08-20) and, for pull requests, `pullRequestComment?.id` and
+`pullRequest?` ([Get Notification](https://developer.nulab.com/docs/backlog/api/2/get-notification/);
+reasons 10–13; the fields exist on every item, a populated one is unmeasured).
+Algorithm: comment id and kind from `messageId` (or `message.raw` when given —
+they must agree); `:r`/`:u:` → return without a call (debug log). Page
+`GET /notifications?count=100[&maxId=]` newest-first, at most 3 pages, until
+an entry matches: `comment.id === commentId` for an issue thread,
+`pullRequestComment.id === commentId` for a pull-request thread — never the
+other field, because the two comment id sequences are distinct and may overlap
+(measured 2026-09-06). Found and
 `alreadyRead` → no call. Found and unread →
 [Read Notification](https://developer.nulab.com/docs/backlog/api/2/read-notification/)
 `POST /notifications/:id/markAsRead`. Not found → `info` log and return.
@@ -681,7 +858,22 @@ types), throws only §3.6 classes, and is implemented twice (§8.2, §8.3).
 | `markNotificationAsRead(id)` | `POST /notifications/:id/markAsRead` | update |
 | `uploadAttachment(filename, data, mimeType?)` | `POST /space/attachment` (multipart) | update |
 | `downloadAttachment(issueId, attachmentId)` | `GET /issues/:id/attachments/:aid` | read |
+| `listGitRepositories(projectId)` | `GET /projects/:id/git/repositories` | read |
+| `getGitRepository(projectId, repositoryId)` | `GET /projects/:id/git/repositories/:rid` | read |
+| `listPullRequests(projectId, repositoryId, { count, offset?, statusId? })` | `GET …/pullRequests` | read (measured 2026-09-06, not search) |
+| `getPullRequest(ref)` — `ref = { projectId, repositoryId, number }` | `GET …/pullRequests/:number` | read |
+| `listPullRequestComments(ref, { count, order, minId?, maxId? })` | `GET …/pullRequests/:number/comments` | read |
+| `addPullRequestComment(ref, { content, notifiedUserId?, attachmentId? })` | `POST …/pullRequests/:number/comments` | update |
+| `updatePullRequestComment(ref, commentId, content)` | `PATCH …/pullRequests/:number/comments/:cid` | update |
+| `listPullRequestAttachments(ref)` | `GET …/pullRequests/:number/attachments` | read |
+| `downloadPullRequestAttachment(ref, attachmentId)` | `GET …/pullRequests/:number/attachments/:aid` | read |
 | `rateLimit()` | none | — snapshot of §8.4 |
+
+`addStar` takes a discriminated `StarTarget` (`{ commentId }` or
+`{ pullRequestCommentId }`) rather than a bare number, so the kind cannot be
+lost between the subject layer and the request. No method deletes a
+pull-request comment or fetches one by id: neither route exists
+(`.claude/rules/backlog-pull-request-facts.md`).
 
 Bucket assignment follows the rule on the
 [Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/) page:
@@ -693,6 +885,16 @@ added later is classified without editing a table of names.
 Domain types normalise nullish API fields: `issue.description ?? ""`,
 `comment.content: string | null` (assignee-change comments are `null`),
 `comment.changeLog ?? []`, `comment.stars ?? []`, `user.userId ?? null`.
+`BacklogComment` is the shape both endpoint families share (`id, content,
+changeLog, createdUser, created, updated, stars`); `BacklogIssueComment`
+extends it with `issueId`, which pull-request comments do not have.
+`BacklogPullRequest` carries `id, projectId, repositoryId, number, summary,
+description, base, branch, status, assignee | null, issue: { id, issueKey } | null,
+baseCommit | null, branchCommit | null, mergeCommit | null, closeAt | null,
+mergeAt | null, createdUser, created, updated, stars` — the `issue` field is a
+full Issue on every endpoint (the list page's stub example is wrong, measured
+2026-09-06) and is normalised to the two identity fields. `BacklogGitRepository`
+carries `id, projectId, name, description`.
 Responses are validated with zod because `backlog-js` declarations diverge from
 the live API; a validation failure is an `AdapterError("backlog", …, "SCHEMA")`
 naming the endpoint and the failing path, never a `ZodError`.
@@ -722,7 +924,9 @@ implementation uses an `AbortSignal` (default 30 s) and maps aborts to
 `createInMemoryBacklogApi(seed?)` is exported for consumers' tests. Seed:
 `projects`, `issues`, `comments`, `users`, `issueTypes` per project,
 `priorities` (default `High/Normal/Low` with ids 2/3/4, matching the
-documented example), `notifications`, `me` (the bot user), `now()`. It exposes
+documented example), `notifications`, `repositories`, `pullRequests`,
+`pullRequestComments` (keyed by `{ repositoryId, number }`), `me` (the bot
+user), `now()`. It exposes
 `state` (issues, comments, stars, uploads, recorded inputs) for assertions,
 allocates ids from a single counter initialised above every seeded id (issues
 included), applies exclusive `minId`/`maxId`, sorts by `order`, mirrors
@@ -789,7 +993,15 @@ with `comment.id`, exclusive `maxId`, markable as read; upload returns
 bucket and a `GET /issues` call updates `search`, not `read`; 429 with a
 near `reset` is retried once and then succeeds; 429 with a distant `reset`
 throws `AdapterRateLimitError` without waiting; code→class table of §8.5;
-schema mismatch → `AdapterError("SCHEMA")`, not `ZodError`.
+schema mismatch → `AdapterError("SCHEMA")`, not `ZodError`. Pull requests: a
+repository and a pull request fetch, and 404 → `ResourceNotFoundError`; the
+pull-request list pages with `count`/`offset` and spends `read`; pull-request
+comments page with exclusive `minId`/`maxId` and head-cut `count`;
+`addPullRequestComment` accepts `notifiedUserId`/`attachmentId`; a one-element
+window returns exactly the named comment; `addStar({ pullRequestCommentId })`
+stars the pull-request comment and `addStar({ commentId })` an issue comment;
+a notification carries `pullRequestComment.id`; a pull-request attachment
+downloads.
 
 ### 8.7 Auth modes
 
@@ -915,8 +1127,12 @@ plain text. Documented in README under "Limitations".
 - **Body size**: bounded by `maxWebhookBodyBytes` (description edits can carry
   two full bodies).
 - **Webhook URL hygiene**: README instructs registering
-  `activityTypeIds: [1, 2, 3]` (plus 4 if deletion events are wanted), never
-  `allEvent` (D10), so unrelated project activity never reaches the endpoint.
+  `activityTypeIds: [1, 2, 3, 18, 19, 20]` (plus 4 if deletion events are
+  wanted; 21 is never emitted as far as measured, D-PR5), never `allEvent`
+  (D10), so unrelated project activity never reaches the endpoint. A
+  deployment that wants issues only registers issue types only — that
+  subscription is the switch, and the adapter has no option duplicating it
+  (D-PR4).
 
 ## 12. Testing specification
 
@@ -989,6 +1205,23 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   subscribed handler with `raw.changes`.
 - **entry point**: `createBacklogAdapter` and `BacklogAdapter` exported;
   `adapter.name === "backlog"`; absent optional members are `undefined`.
+- **pull requests** (each mirroring an issue-side test through the same
+  table-driven suites where one exists): thread ids round-trip for both kinds
+  with pinned encodings; every §2.2 rejection for the `pr:` keyword; type 18,
+  19 (comment / no comment / status / assignee / summary+description+issue)
+  and 20 (plain / with attachment) fixture rows; 12, 13 and 21 ignored; a
+  type-18 body without `content.repository.id` is a 400; a linked issue does
+  not change the thread id; `<@U<botUserId>>` in a type-18 summary is a
+  mention; a reply on a pull-request thread is one `addPullRequestComment`;
+  `deleteMessage` on a pull-request thread fails before any call; stars use
+  `pullRequestCommentId`; the §7.1 sweep passes for pull-request threads;
+  `fetchMessage(:c)` uses a one-element window and is `null` on an empty page;
+  `fetchThread`/`fetchSubject` carry `kind`/`type` for both kinds and omit
+  `url` when a name lookup fails; the repository name from a webhook spares
+  the next `fetchThread` a Get Git Repository; `markAsRead` matches
+  `pullRequestComment.id` and ignores an issue notification with the same
+  numeric id; `rehydrateAttachment` accepts both URL shapes; kind dispatch
+  exists in exactly one module (grep-asserted).
 
 ### 12.3 Opt-in live suite
 
@@ -998,6 +1231,12 @@ edit → star → unstar → delete one comment, upload one small attachment and
 attach it, then delete that comment; assert `rateLimit(host)` shows `read` and
 `update` buckets populated. Never creates issues or touches notifications.
 
+A second section, behind `BACKLOG_LIVE_PULL_REQUEST=<repositoryId>:<number>`,
+does the same against a scratch pull request minus the deletes (there is no
+delete): Get Git Repository, Get Pull Request, add → edit → star → unstar one
+comment, attach one upload; at most ~8 update-bucket calls. The comments it
+adds stay on the pull request, so the variable must name a scratch one.
+
 ## 13. Documentation deliverables
 
 - **README.md**, following Chat SDK's publishing checklist order: title and
@@ -1006,9 +1245,11 @@ attach it, then delete that comment; assert `rateLimit(host)` shows `read` and
   six `BACKLOG_*` variables, required/optional); configuration reference (§3.2
   table); platform setup (create bot user, add to project, issue API key,
   register webhook `https://<app>/api/webhooks/backlog?host=<host>&token=<secret>`
-  with `activityTypeIds` 1, 2, 3 (+4), never `allEvent`; where to find the
-  bot's numeric id); features and limitations (§4 as a matrix, D18 "comment
-  edits fire no webhook", weaker webhook authenticity, durable state adapter
+  with `activityTypeIds` 1, 2, 3, 18, 19, 20 (+4), never `allEvent`; where
+  to find the bot's numeric id); features and limitations (§4 as a matrix,
+  D18 "comment edits fire no webhook", pull-request comments cannot be
+  deleted, `listThreads` lists issues only, pull requests cannot be closed or
+  merged from Chat, weaker webhook authenticity, durable state adapter
   recommendation, `streamingUpdateIntervalMs` irrelevant because `stream` is
   buffered, `chat.getUser` vs `adapter.getUser`, read receipts are not
   automatic, `recentMessages` vs `messages` cost); id formats (§2); mentions
@@ -1038,7 +1279,9 @@ attach it, then delete that comment; assert `rateLimit(host)` shows `read` and
   `ephemeralMessages no`, `userLookup yes`, `parentSubject yes`,
   `nativeClient yes`, `customApiEndpoint yes`, `fetchMessages yes`,
   `fetchSingleMessage yes`, `fetchThreadInfo yes`, `fetchChannelMessages no`,
-  `listThreads yes`, `fetchChannelInfo yes`, `postChannelMessage {yes, "Creates an issue"}`.
+  `listThreads {partial, "Issues only"}`, `fetchChannelInfo yes`,
+  `postChannelMessage {yes, "Creates an issue"}`,
+  `deleteMessage {partial, "Issue comments only"}`.
 
 ## 14. Design decisions and rejected alternatives
 
@@ -1061,7 +1304,17 @@ attach it, then delete that comment; assert `rateLimit(host)` shows `read` and
 | D15 | `chat` peer `^4.39.0`; `@chat-adapter/shared` dep `^4.39.0`; `backlog-js` `^0.20.1`; `zod` `^4`; `engines.node >=20`. The **published version** tracks `chat` (`4.39.x`), while the **ranges** stay as above. | The docs prescribe the peer range for external packages; the exact pin only works inside Vercel's fixed-version monorepo. `4.39.0` is the version whose contract was verified. Matching the first-party packages' *number* costs nothing and tells a reader which core the release was built against; matching their *pin* would make a consumer on `chat@4.40` install a second copy of the core. The two are separable, so only the number is copied. | Exact pins (breaks consumers on 4.40); a `0.x` line of our own (hides which core the release targets). |
 | D16 | Layout `src/{adapter,ids,types,index}.ts`, `src/webhook/*`, `src/client/*`, `src/format/*`, `src/test/fixtures/*` | Directories mirror the PR scopes `adapter`/`webhook`/`client`/`format`, so a change's scope is its path. | Flat `src/`. |
 | D17 | Measurements live in `.claude/rules/*.md`, referenced here | One place to re-measure; this spec states consequences, not evidence. | Duplicating measurements here. |
-| D18 | `processMessageUpdated` unsupported | Comment edits emit no webhook (measured 2026-09-03); there is nothing to deliver. | Polling for edits (search-bucket cost, no cursor finer than a day). |
+| D18 | `processMessageUpdated` unsupported | Comment edits emit no webhook (measured 2026-09-03; pull-request comment edits likewise, 2026-09-06); there is nothing to deliver. | Polling for edits (search-bucket cost, no cursor finer than a day). |
+| D-PR1 | The channel of a pull-request thread is its **project** | Webhooks carry `project.id`; the formatting rule is per project; `channelIdFromThreadId` stays "first three segments". | The repository as channel (N+1 channels per project, no formatting rule of its own). |
+| D-PR2 | Kind-explicit ids for **both** kinds; one nested `subject: BacklogSubjectRef` shared by thread ids, message ids, raws and the subject layer | Backlog addresses issues and pull requests through different endpoint families with different coordinates and separate comment id sequences; the GitHub adapter's "PR is the unmarked default" is back-compat debt its maintainers annotate as such. | Flat `{ kind, issueId?, repositoryId?, number? }`; keeping issues unmarked. |
+| D-PR3 | `deleteMessage` on a pull-request thread throws `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call | The endpoint does not exist (400/6 `Undefined resource`, measured); `ValidationError` would blame a correct call; silent success is a fabricated result; the member is required. | `ValidationError`; no-op; omitting `deleteMessage`. |
+| D-PR4 | No adapter option selecting kinds | The webhook subscription already is that switch; a mismatch between an option and the subscription would silently drop delivered events. | `subjects: ('issue' \| 'pullRequest')[]` config. |
+| D-PR5 | Type 21 is 200 Ignored and not in the registration guidance | No operation was found to emit it: merge (UI or git push) and close both arrive as type 19 status changes; the docs and `backlog-js` disagree on its very name (measured 2026-09-06). | `processMessageDeleted` on 21 (nothing to test it against). |
+| D-PR6 | A pull request linked to an issue is its own thread; the link is metadata | The link can be changed (`changes[field="issue"]`, measured); routing by it would move a thread. | Routing pull-request activity into the linked issue's thread. |
+| D-PR7 | `listThreads` lists issues only | A pull-request list is per repository, a coordinate the channel id lacks; `api(host).listPullRequests` covers it. | Interleaving every repository's pull requests (N+1 reads, two cursor grammars); listing pull requests only. |
+| D-PR8 | `fetchSubject().type` is `"pull_request"` | The `@chat-adapter/github` convention; the core types it as a free string, so bot authors already branch on that literal. | `"pullRequest"` (matches our `kind`, not the ecosystem). |
+| D-PR9 | Root part tag `r` for both kinds (was `i`) | `i` meant "issue" and would mislead on a pull request; a tagless root makes the grammar irregular. | Keep `i`; no tag. |
+| D-PR10 ⚑ | Pull-request comment attachments resolve their id by **name** through the attachment list, newest match first | Neither the type-20 `changes[]` nor the REST `changeLog` carries an attachment id for pull requests (measured 2026-09-06); the list is the only id source and names are not unique. | Omitting `fetchData` on pull-request comment attachments (loses the file entirely); one list call per comment eagerly (a read per message). |
 | — | Self messages are not dispatched by the adapter | `selfMessageContract` asserts nothing is dispatched; the core's own `isMe` skip is a second line of defence. | Relying on the core alone. |
 | — ⚑ | No timestamp-staleness window | See §5.1: unsigned timestamps give no protection and would drop measured late redeliveries. | Rejecting payloads older than N minutes. |
 
@@ -1092,3 +1345,13 @@ attach it, then delete that comment; assert `rateLimit(host)` shows `read` and
     `BACKLOG_LIVE_ISSUE_ID` (assumed).
 12. **No staleness window** (§5.1) — accept the documented departure from
     CLAUDE.md's "Don't" list.
+13. **D-PR10 attachment resolution by name**: lazy list-and-match (assumed),
+    eager list per comment, or no `fetchData` for pull-request comment
+    attachments?
+14. **D-PR2 nested `subject`** versus a flat thread-id shape — confirm before
+    the id grammar lands (docs/plans/pull-request-support.md P2).
+15. **D-PR7 `listThreads` issues only** — confirm, or name the alternative.
+16. **Webhook form of types 18–20**: the activity API form is measured; if a
+    webhook body turns out to add `content.assignee` (as type 1 does), rule 4
+    of §5.4 gains an assignment-at-creation mention. Measure before P3
+    (docs/plans/pull-request-support.md §5).
