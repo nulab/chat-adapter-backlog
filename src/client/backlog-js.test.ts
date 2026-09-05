@@ -79,6 +79,51 @@ describe('createBacklogJsApi', () => {
     );
   });
 
+  it('an array query parameter is sent once, not with doubled brackets', async () => {
+    const requests: { url: URL }[] = [];
+    const server = createFakeBacklogServer({
+      onRequest: (request) => requests.push(request),
+    });
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: server.fetch,
+    });
+
+    await api.listIssues(projectId, { count: 10 });
+
+    const search = requests[0]?.url.search ?? '';
+    expect(decodeURIComponent(search)).toContain(`projectId[]=${projectId}`);
+    expect(decodeURIComponent(search)).not.toContain('projectId[][]');
+  });
+
+  it('an array form parameter is sent once, not with doubled brackets', async () => {
+    const bodies: string[] = [];
+    const server = createFakeBacklogServer();
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: (input, init) => {
+        if (typeof init?.body === 'string') {
+          bodies.push(init.body);
+        }
+        return server.fetch(input, init);
+      },
+    });
+
+    await api.addComment(issueId, {
+      content: 'Hello',
+      notifiedUserId: [100, 101],
+      attachmentId: [7],
+    });
+
+    const body = decodeURIComponent(bodies[0] ?? '');
+    expect(body).toContain('notifiedUserId[]=100');
+    expect(body).toContain('notifiedUserId[]=101');
+    expect(body).toContain('attachmentId[]=7');
+    expect(body).not.toContain('[][]');
+  });
+
   it('an issue-list call spends the search bucket, not read', async () => {
     const server = createFakeBacklogServer();
     const api = createBacklogJsApi({

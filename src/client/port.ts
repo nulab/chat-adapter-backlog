@@ -50,10 +50,16 @@ export interface BacklogStar {
   created: Date;
 }
 
+/**
+ * The attachment a `changeLog[]` entry names. Only `id` identifies it; `name`
+ * and `size` are optional because the two doc pages disagree on whether a
+ * `changeLog` carries them at all (see `src/client/schemas.ts`), and a comment
+ * whose attachment is described the other way must still parse.
+ */
 export interface BacklogAttachmentInfo {
   id: number;
-  name: string;
-  size: number;
+  name?: string | undefined;
+  size?: number | undefined;
 }
 
 export interface BacklogChange {

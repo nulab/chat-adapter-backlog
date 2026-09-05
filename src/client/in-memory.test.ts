@@ -18,6 +18,7 @@ const {
   baseProject,
   baseIssue,
   baseComment,
+  statusChangeLog,
 } = conformanceFixture;
 
 function seed(): InMemoryBacklogSeed {
@@ -32,7 +33,12 @@ function seed(): InMemoryBacklogSeed {
     comments: [
       baseComment({ id: 1, issueId }),
       baseComment({ id: 2, issueId, createdUser: bob }),
-      baseComment({ id: 3, issueId, createdUser: bob }),
+      baseComment({
+        id: 3,
+        issueId,
+        createdUser: bob,
+        changeLog: statusChangeLog,
+      }),
       baseComment({ id: 4, issueId: otherIssueId }),
     ],
     issueTypes: { [projectId]: [{ id: 1, name: 'Task' }] },
