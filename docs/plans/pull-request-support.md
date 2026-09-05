@@ -393,9 +393,18 @@ adapter deliberately keys on ids. Two small caches, both owned by
 - `repositoryNameCache: Map<`${host}:${repositoryId}`, string>` —
   populated for free from `content.repository.name` on every pull-request
   webhook, and on a miss by one `getGitRepository` (read bucket), cached
-  forever; `fetchChannelInfo` clears the project's entries. A lookup failure
-  is not cached and yields a URL-less `ThreadInfo`/`MessageSubject` (`url`
-  is optional on both) plus one `warn`, rather than failing the read.
+  forever; `fetchChannelInfo` clears **every entry for the host**, not the
+  calling channel's project. The key carries no project, and that is on
+  purpose: a repository id already identifies a repository within a space, so
+  putting the project into the key would buy exact invalidation at the price of
+  a key the same repository can occupy twice — once per `projectId` a caller's
+  thread id happened to name — leaving a stale name alive under whichever key
+  the clear missed. Over-clearing costs one `read`-bucket Get Git Repository
+  per dropped name, once, and only after a `fetchChannelInfo` somebody asked
+  for. `src/adapter.ts` states the same trade at the member; keep the two in
+  step. A lookup failure is not cached and yields a URL-less
+  `ThreadInfo`/`MessageSubject` (`url` is optional on both) plus one `warn`,
+  rather than failing the read.
 
 ### 3.9 Public surface changes
 
@@ -414,17 +423,39 @@ test does not change (it constructs the adapter and reads `name`), but the
 ```
 P0 docs ─────────────────────────────────────────────────────────────┐
 P1 client ──► P2 adapter (subject layer, id grammar) ──► P3 webhook ─┼──► P4 adapter (PR-only members) ──► P5 docs
-M  measurements (needs a real space; feeds P0's rules file, gates P3)─┘
+M  measurements (real space; feeds P0's rules file; gated P3, waived)┘
 ```
 
-P1→P2→P3 is one stack of depth three, merged bottom-up promptly; P4 and P5
-follow off `main`. The measurements (§5) landed in P0 as
+P1→P2→P3 was planned as one stack of depth three, merged bottom-up promptly,
+with P4 and P5 off `main`. The measurements (§5) landed in P0 as
 `.claude/rules/backlog-pull-request-facts.md`; every one except the webhook
 body itself (M1's webhook half) and the bot's own notification feed (M9) is
-recorded. **P3 must not merge before the webhook form is captured**: the
-issue-side schemas were written from measured webhook payloads and the same
-bar applies. The activity form is known, so the capture is a diff, not a
-discovery — see §5 for the method.
+recorded. The gate that read **"P3 must not merge before the webhook form is
+captured"** was **waived by the maintainer** (2026-09-06) rather than
+satisfied; P3 states the waiver and what it costs, §5 M1 keeps the method for
+whoever captures a body, and the `Unmeasured` entry in the rules file stands.
+
+**Status** (2026-09-06, as this plan's P5 is written):
+
+| PR | Branch | State |
+| --- | --- | --- |
+| P0 docs | `lollipop-onl/PR-activity-support` | **merged to `main`** (`fe5a75b`) |
+| P1 client | `lollipop-onl/pr-client` | written and pushed; below P5 in the stack, not yet on `main` |
+| P2 adapter | `lollipop-onl/pr-subject-layer` | written and pushed; not yet on `main` |
+| P3 webhook | `lollipop-onl/pr-webhook` | written and pushed; not yet on `main` — shipped with **M1's webhook half waived, not measured** |
+| P4 adapter | `lollipop-onl/pr-optional-members` | written and pushed; not yet on `main` |
+| P5 docs | `lollipop-onl/pr-docs` | this PR |
+
+Two things differ from the plan above and are worth knowing before the next
+rebase. The stack is six deep, not three: `ci(ci): run checks on every pull
+request, not only those based on main` and `fix(client): use the wire shapes
+Backlog actually sends and accepts` sit **below** P1, the first because CI
+skipped stacked PRs entirely and the second because P1's conformance work
+found the issue-side wire shapes wrong. And P4 and P5 were branched on top of
+P3 instead of off `main`, because P4 touches `fetchChannelInfo` and
+`markAsRead`, both of which P2 rewrote, and P5 documents what P3 dispatches —
+so every squash below still costs a `git rebase --onto` on everything above it
+(CLAUDE.md "Stacked PRs"). Nothing in the stack may merge out of order.
 
 Every PR: five gates green, title with scope, label from type, squash body
 written on purpose, stack declared in the first line of the body (CLAUDE.md
@@ -583,15 +614,21 @@ written on purpose, stack declared in the first line of the body (CLAUDE.md
 
 ### P4 — pull-request forms of the remaining optional members (`adapter`)
 
-- **Title**: `test(adapter): pin read receipts, cache invalidation and live coverage for pull requests`.
-  **Unlabeled**: P2 rewrote both members through the subject layer, so this
-  phase adds no capability — every `src/` line it changes is a comment. A
-  `feat` subject and an `enhancement` label would advertise a feature in the
-  generated release notes over a diff a user cannot observe.
-- **Branch**: off `main` after P1–P3 merged.
+- **Title**: shipped as `test(adapter): pin read receipts, cache invalidation
+  and live coverage for pull requests`, **unlabeled**. Two corrections to what
+  this bullet originally said: "cache invalidation" replaced "thread listing
+  hooks", because `listThreads` needed no hook at all (D-PR7 leaves it
+  issue-scoped) while `fetchChannelInfo` did (§3.8); and the type is `test`,
+  not `feat`, because P2 had already rewritten both members through the subject
+  layer — every `src/` line this phase changes is a comment, so a `feat`
+  subject and an `enhancement` label would advertise a feature in the generated
+  release notes over a diff a user cannot observe.
+- **Branch**: off P3, not off `main`: it edits `fetchChannelInfo` and
+  `markAsRead`, both rewritten by P2.
 - **Scope**: `markAsRead` matching by kind (§3.6), `fetchChannelInfo`
-  clearing repository names for the project, `api(host)` documented as the
-  route to `listPullRequests`, `src/test/live.test.ts` gaining an opt-in
+  clearing every repository name cached for the host (§3.8), `api(host)`
+  documented as the route to `listPullRequests`, `src/test/live.test.ts`
+  gaining an opt-in
   pull-request section behind `BACKLOG_LIVE_PULL_REQUEST=<repositoryId>:<number>`
   (Get Repository, Get Pull Request, add → edit → star → unstar one comment,
   attach one upload, **no delete — record the 404/absent-endpoint outcome as
@@ -625,7 +662,7 @@ vocabulary `example.backlog.com`, project 500, repository 700, pull request
 
 | # | Question | Status |
 | --- | --- | --- |
-| M1 | Exact `content` of 18, 19, 20 | **Measured on the activity API form**: `{ id, number, summary, description, comment, changes, issue, repository }`, no `assignee`/`attachments`/`status`/`base`/`branch`. **Webhook form UNMEASURED** — register a project webhook with `activityTypeIds[]=18,19,20,12` at a receiver that stores raw bodies, repeat the operations in the rules file's table, and diff each body against `GET /projects/:id/activities`. Gates P3. |
+| M1 | Exact `content` of 18, 19, 20 | **Measured on the activity API form**: `{ id, number, summary, description, comment, changes, issue, repository }`, no `assignee`/`attachments`/`status`/`base`/`branch`. **Webhook form still UNMEASURED** — register a project webhook with `activityTypeIds[]=18,19,20,21` (21 for the capture only) at a receiver Backlog's servers can reach that stores raw bodies, repeat the operations in the rules file's table, and diff each body against `GET /projects/:id/activities`. Gated P3; the gate was **waived** (see §4, P3), so this is now a diff against a shape the shipped schemas already encode, not a prerequisite. |
 | M2 | Does 18 carry `content.assignee`? | Activity form: **no** (measured with an assignee set). Webhook form: part of M1. |
 | M3 | 19 change fields and value systems | **Measured**: `assignee` (display name; absent from a multi-field update once), `status` (id strings `1`/`2`/`3`), `summary`, `description` (full bodies), `issue` (issue keys). Every change carried a changelog `comment.id`. |
 | M4 | PR comment paging semantics | **Measured**: exclusive `minId`/`maxId`, `count` cut from the head of `order`, one-element window works. |

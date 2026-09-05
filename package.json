@@ -1,7 +1,7 @@
 {
   "name": "@nulab/chat-adapter-backlog",
   "version": "0.0.0",
-  "description": "Backlog adapter for Chat SDK with support for issues, comments, and project notifications.",
+  "description": "Backlog adapter for Chat SDK with support for issues, pull requests, comments, and project notifications.",
   "keywords": [
     "nulab",
     "backlog",

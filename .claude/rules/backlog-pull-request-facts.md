@@ -155,12 +155,36 @@ Measured on six comments with consecutive ids `n…n+5`:
 
 - **Webhook body vs activity body for types 18–20.** Only the activity API
   form above was captured; whether the webhook adds fields (as it adds
-  `assignee` to type 1) is UNMEASURED. Method: register a project webhook
-  with `activityTypeIds[]=18,19,20,21` at a receiver that stores raw bodies
-  (21 included **for the measurement only**, so a delivery would be caught if
-  one exists — the adapter's registration guidance omits it), repeat the
-  operations in the table, diff each body against
-  `GET /projects/:id/activities`.
+  `assignee` to type 1) is UNMEASURED. The adapter nevertheless ships code
+  written against the activity form — the zod schemas in
+  `src/webhook/payload.ts`, which require `content.id`, `content.number` and
+  `content.repository.id` and treat every other key as optional while
+  tolerating unknown ones — so this is a **diff against a known shape**, not a
+  discovery: a webhook body carrying more parses today, one carrying less than
+  those three identity fields is the 400 it should be, and what the capture
+  settles is whether a delivery offers a field the adapter would want (an
+  `assignee` on 18 being the one that would change behaviour, per §5.4 rule 4
+  of docs/specs/adapter.md). Method:
+
+  1. Stand up a receiver Backlog's servers can reach (public HTTPS; private
+     addresses are rejected — `backlog-webhook-facts.md` § Delivery
+     semantics) that writes each raw request body to a file, verbatim and
+     unparsed.
+  2. `POST /projects/:projectIdOrKey/webhooks` with `hookUrl` pointing at it
+     and `activityTypeIds[]=18,19,20,21` — 21 included **for the measurement
+     only**, so a delivery would be caught if one exists; the adapter's
+     registration guidance omits it (D-PR5), so do not copy this list into
+     docs.
+  3. Replay every row of the "What each pull-request operation emits" table
+     above on that project, in that order, noting the wall-clock time of each
+     so a redelivery (~20 min later, at-least-once) is not mistaken for a
+     second event.
+  4. For each captured body, fetch the same activity from
+     `GET /projects/:id/activities` and diff the two JSON objects key by key.
+     Record **both** directions: keys the webhook adds, and keys it omits.
+  5. Write the result into the table above with its date, delete this bullet
+     only if the diff is empty, and if it is not, amend
+     `src/webhook/payload.ts` and §5.2/§5.3 of the spec in the same PR.
 - **Notifications in the bot's own feed** (`GET /notifications` items with
   `pullRequest` / `pullRequestComment` / `repository` set; reasons 10–13):
   the fields exist on every item (measured `null` here) but a populated one

@@ -15,16 +15,30 @@ neighbouring module before adding to one.
 Layout, mirroring the PR scopes so a change's scope is its path:
 `src/adapter.ts` (the class and `createBacklogAdapter`), `src/ids.ts` (the id
 grammar), `src/types.ts` (public types, including the serialisable raw-message
-shapes), `src/egress.ts` and `src/reads.ts`, `src/webhook/*` (ingress),
-`src/client/*` (the Backlog API port), `src/format/*` (the converters), and
-`src/test/fixtures/*`.
+shapes), `src/egress.ts` and `src/reads.ts`, `src/subject/*` (the issue and
+pull-request halves of a thread behind one `SubjectClient`), `src/webhook/*`
+(ingress), `src/client/*` (the Backlog API port), `src/format/*` (the
+converters), and `src/test/fixtures/*`.
+
+`src/subject/*` is where behaviour that differs between an issue and a pull
+request belongs, and nowhere else: `subjectClientFor` in
+`src/subject/client.ts` picks the half once, and every member reaches Backlog
+as `decode -> subjectClientFor -> one code path for both kinds`. Exactly one
+other module may ask what kind a subject is: the codec `src/ids.ts`, which has
+to write `issue:<id>` versus `pr:<repositoryId>:<number>` and has no port to
+route through. `src/subject/containment.test.ts` greps `src/` for a
+dispatch on `.kind` and fails on a third module, so the rule is executable
+rather than remembered (D-PR2, docs/specs/adapter.md §14).
 
 One split is worth knowing before you touch either side: `src/client/port.ts`
 owns the **API domain** types, which carry `Date` objects, while `src/types.ts`
 owns the **raw-message** types reachable from `message.raw`, which carry ISO
-strings so a serialised `Message` survives the queue round trip.
-`BacklogIssue`, `BacklogComment` and `BacklogChange` therefore exist twice on
-purpose; `src/index.ts` exports the port's and explains why.
+strings so a serialised `Message` survives the queue round trip. The root and
+comment shapes say which side they are on in their own names —
+`BacklogRawIssue`, `BacklogRawComment`, `BacklogRawPullRequest` — so only
+`BacklogChange` and `TextFormattingRule` are declared on both sides. Which of
+the two the barrel exports, and why, is written at the top of `src/index.ts`;
+read it there rather than trusting a second copy of it here.
 
 `.github/workflows/ci.yml` builds the bundle, imports it in a real Node
 process, constructs an adapter from it and asserts `adapter.name === 'backlog'`.
@@ -45,8 +59,10 @@ file. Read them before touching `src/`:
 - [docs/plans/pull-request-support.md](./docs/plans/pull-request-support.md)
   — the follow-on stack that makes a pull request a thread alongside an
   issue: the kind-explicit id grammar, the subject layer, activity types
-  18–20, and the measurements that gate the webhook work. Until its P0 amends
-  the spec, it is the specification of record for pull-request behaviour.
+  18–20, and the measurements behind them. Its P0 has landed, so the spec
+  above is the specification of record for pull-request behaviour too; this
+  plan now carries the stack's status, the rationale per PR, and the
+  measurement that was waived rather than satisfied (§4, P3).
 - `.claude/rules/*.md` — measured Backlog behaviour and verified Chat SDK core
   behaviour, loaded automatically when a `src/**/*.ts` file is read. When the
   code contradicts a rule there, re-measure before "fixing" the code.
@@ -442,10 +458,16 @@ matter here: **1** Issue Created, **2** Issue Updated, **3** Issue Commented,
 dispatched. **21** is documented as "Pull Request Deleted" and typed by
 `backlog-js` as `PullRequestMerged`; it was not observed — merge and close
 both arrive as type 19 status changes, and no delete operation exists in the
-UI or the API (`.claude/rules/backlog-pull-request-facts.md`). Subscribe explicitly via
-`activityTypeIds[]` rather than setting `allEvent` — the full range runs to 49
-and includes git push, wiki and document events this adapter has no meaning
-for. Pull-request facts (three-coordinate addressing, no comment delete,
+UI or the API (`.claude/rules/backlog-pull-request-facts.md`), so it is
+neither dispatched nor named in the registration guidance (D-PR5). Subscribe
+explicitly via `activityTypeIds[]` rather than setting `allEvent` — the full
+range runs to 49 and includes git push, wiki and document events this adapter
+has no meaning for. The guidance users are given is
+`activityTypeIds: [1, 2, 3, 18, 19, 20]`, plus **4** when deletion events are
+wanted; what the code accepts is `DISPATCHED_ACTIVITY_TYPES` in
+`src/webhook/payload.ts` (`[1, 2, 3, 4, 18, 19, 20]` — 4 is always dispatched
+when it arrives), and every other type, 21 included, is answered 200 Ignored.
+Pull-request facts (three-coordinate addressing, no comment delete,
 `read`-bucket listing, the `assignee` vs `assigner` field name) live in that
 rules file; do not reason about them from the issue side.
 
