@@ -18,7 +18,11 @@ import type {
   ListCommentsOptions,
   StarTarget,
 } from '../client/port';
-import type { BacklogRawMessage, BacklogSubjectRef } from '../types';
+import type {
+  BacklogChange,
+  BacklogRawMessage,
+  BacklogSubjectRef,
+} from '../types';
 import type {
   SubjectClient,
   SubjectContext,
@@ -183,6 +187,19 @@ export function createIssueSubjectClient(
         url: issueAttachmentUrl(host, issueId, attachment.id),
         fetchData: () => downloadAttachment(attachment.id),
       };
+    },
+
+    /**
+     * Nothing, on every entry: an issue webhook carries no
+     * `changes[field="attachment"]` at all. An attachment add arrives as a
+     * type-2 changelog comment whose change is visible only in that comment's
+     * REST `changeLog` (measured 2026-08,
+     * `.claude/rules/backlog-webhook-facts.md`), which is why §6.6's issue row
+     * names the REST source and no webhook one — the file is not missing here,
+     * it was never in the payload.
+     */
+    webhookChangeAttachment(_change: BacklogChange): Attachment | undefined {
+      return undefined;
     },
 
     channelName(root: SubjectRoot, _names: SubjectNames): string | undefined {

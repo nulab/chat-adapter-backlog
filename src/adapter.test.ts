@@ -21,10 +21,15 @@ import { conformanceFixture } from './client/conformance';
 import { encodeMessageId } from './ids';
 import {
   FIXTURE,
+  gitPushed,
   issueCommented,
   issueDeleted,
   issueMultiUpdated,
   issueUpdated,
+  pullRequestAdded,
+  pullRequestAssigneeChanged,
+  pullRequestCommented,
+  pullRequestDeleted,
   statusChanged,
   unrelatedActivity,
   webhookRequest,
@@ -856,6 +861,119 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
   });
 });
 
+describe('BacklogAdapter.handleWebhook — identity fields that are not ids (§5.1 step 9)', () => {
+  /**
+   * Resolves to whatever the call produced — the `Response` or the reason it
+   * rejected with — so "it threw instead of answering" is an assertable value
+   * rather than a test that fails with the adapter's own error.
+   */
+  async function outcomeOf(
+    adapter: BacklogAdapter,
+    payload: unknown
+  ): Promise<unknown> {
+    return adapter
+      .handleWebhook(webhookRequest(payload))
+      .catch((cause: unknown) => cause);
+  }
+
+  async function expectInvalidPayload(outcome: unknown): Promise<void> {
+    expect(outcome).toBeInstanceOf(Response);
+    const response = outcome as Response;
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe('Invalid payload');
+  }
+
+  const NOT_AN_ID: readonly [string, number][] = [
+    ['zero', 0],
+    ['negative', -1],
+    ['fractional', 1.5],
+  ];
+
+  it.each(NOT_AN_ID)(
+    'a webhook whose issue id is %s is rejected with 400',
+    async (_label, id) => {
+      const { adapter, chat } = await webhookAdapter();
+      const payload = issueCommented();
+      (payload['content'] as Record<string, unknown>)['id'] = id;
+
+      await expectInvalidPayload(await outcomeOf(adapter, payload));
+      expect(chat).not.toHaveDispatched('processMessage');
+    }
+  );
+
+  it.each(NOT_AN_ID)(
+    'a deletion whose issue id is %s is rejected with 400 rather than throwing',
+    async (_label, id) => {
+      // The type-4 branch decodes the thread id it just built synchronously,
+      // outside the dispatched promise, so an id the codec rejects surfaced
+      // here as a rejected `handleWebhook` — a 500 from a host route that
+      // awaits it, an unhandled rejection from one that does not.
+      const { adapter, chat } = await webhookAdapter();
+      const payload = issueDeleted();
+      (payload['content'] as Record<string, unknown>)['id'] = id;
+
+      await expectInvalidPayload(await outcomeOf(adapter, payload));
+      expect(chat).not.toHaveDispatched('processMessageDeleted');
+    }
+  );
+
+  it.each(NOT_AN_ID)(
+    'a pull request webhook whose number is %s is rejected with 400',
+    async (_label, number) => {
+      const { adapter, chat } = await webhookAdapter();
+      const payload = pullRequestAdded();
+      (payload['content'] as Record<string, unknown>)['number'] = number;
+
+      await expectInvalidPayload(await outcomeOf(adapter, payload));
+      expect(chat).not.toHaveDispatched('processMessage');
+    }
+  );
+
+  it.each(NOT_AN_ID)(
+    'a pull request webhook whose repository id is %s is rejected with 400',
+    async (_label, id) => {
+      const { adapter, chat } = await webhookAdapter();
+      const payload = pullRequestCommented();
+      const content = payload['content'] as Record<string, unknown>;
+      (content['repository'] as Record<string, unknown>)['id'] = id;
+
+      await expectInvalidPayload(await outcomeOf(adapter, payload));
+      expect(chat).not.toHaveDispatched('processMessage');
+    }
+  );
+
+  it('every one of them answers with a Response instead of rejecting', async () => {
+    const { adapter } = await webhookAdapter();
+    const bodies = [
+      (): unknown => {
+        const payload = issueCommented();
+        (payload['content'] as Record<string, unknown>)['id'] = 0;
+        return payload;
+      },
+      (): unknown => {
+        const payload = issueDeleted();
+        (payload['content'] as Record<string, unknown>)['id'] = 0;
+        return payload;
+      },
+      (): unknown => {
+        const payload = pullRequestAdded();
+        (payload['content'] as Record<string, unknown>)['number'] = 0;
+        return payload;
+      },
+      (): unknown => {
+        const payload = pullRequestCommented();
+        const content = payload['content'] as Record<string, unknown>;
+        (content['repository'] as Record<string, unknown>)['id'] = 0;
+        return payload;
+      },
+    ];
+
+    for (const body of bodies) {
+      expect(await outcomeOf(adapter, body())).toBeInstanceOf(Response);
+    }
+  });
+});
+
 describe('BacklogAdapter.handleWebhook — dispatch ordering and error handling', () => {
   it('processing starts after the response is returned', async () => {
     let releaseProcessing: (() => void) | undefined;
@@ -1099,6 +1217,286 @@ describe('BacklogAdapter.handleWebhook — fixture-driven §5.3 mapping', () => 
     expect(capturedMessages[0]?.message.id).not.toBe(
       capturedMessages[1]?.message.id
     );
+    expect(adapter.api(FIXTURE.host)).toBe(firstApi);
+    expect(adapter.api(FIXTURE.otherHost)).toBe(otherApi);
+  });
+});
+
+/**
+ * Activity types Backlog emits around a pull request that name no thread.
+ *
+ * Type 21 is the interesting one: the Get Activity page calls it "Pull Request
+ * Deleted" and `backlog-js` 0.20.1 calls it `PullRequestMerged`, and **neither
+ * was observed** — merging (from the UI or by pushing the merge to the base
+ * branch) and closing both arrive as type 19 status changes, no operation
+ * deleting a pull request exists in the UI or the API, and the whole activity
+ * history of the measured project holds no type 21 (measured 2026-09-06,
+ * `.claude/rules/backlog-pull-request-facts.md`). Acknowledging it and
+ * dropping it (D-PR5) is the only answer that does not guess which of the two
+ * meanings a delivery would have.
+ */
+describe('BacklogAdapter.handleWebhook — git and pull-request activities with no thread meaning', () => {
+  it('a git push is acknowledged and ignored', async () => {
+    const { adapter, chat } = await webhookAdapter();
+
+    const response = await adapter.handleWebhook(webhookRequest(gitPushed()));
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('Ignored');
+    expect(chat).not.toHaveDispatched('processMessage');
+  });
+
+  it('a git repository creation is acknowledged and ignored', async () => {
+    const { adapter, chat } = await webhookAdapter();
+    // No type-13 body was captured, and none is needed: the type gate answers
+    // before any schema runs, so the git-shaped body under a type 13 exercises
+    // exactly what this asserts.
+    const response = await adapter.handleWebhook(
+      webhookRequest({ ...gitPushed(), type: 13 })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('Ignored');
+    expect(chat).not.toHaveDispatched('processMessage');
+  });
+
+  it('a pull request deletion activity is acknowledged and ignored', async () => {
+    const { adapter, chat } = await webhookAdapter();
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(pullRequestDeleted())
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('Ignored');
+    expect(chat).not.toHaveDispatched('processMessage');
+  });
+});
+
+/**
+ * Captures what `handleWebhook` dispatches, resolved the way the core resolves
+ * it. `createMockChatInstance`'s default `processMessage` never calls the
+ * factory it is handed, while the real `ChatInstance.processMessage` resolves
+ * it itself (`.claude/rules/chat-sdk-core-facts.md`), so a test asserting on
+ * the message rather than on the fact of dispatch has to stand in for that
+ * step. Takes an already-built adapter because a two-installation adapter
+ * cannot be expressed as an override of the single-space config.
+ */
+async function initializeCapturingDispatches(
+  adapter: BacklogAdapter
+): Promise<{ threadId: string; message: Message }[]> {
+  const dispatched: { threadId: string; message: Message }[] = [];
+  const chat = createMockChatInstance({
+    logger: createMockLogger(),
+    overrides: {
+      processMessage: vi.fn(
+        async (
+          _adapter: Adapter,
+          threadId: string,
+          message: Message | (() => Promise<Message>)
+        ) => {
+          const resolved =
+            typeof message === 'function' ? await message() : message;
+          dispatched.push({ threadId, message: resolved });
+        }
+      ),
+    },
+  });
+  await adapter.initialize(chat);
+  return dispatched;
+}
+
+describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () => {
+  it('a new pull request is a root message on a pull request thread', async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(
+        pullRequestAdded({
+          summary: 'Retry the deploy step on a 5xx',
+          description: 'Fixes the flaky staging deploy.',
+        })
+      )
+    );
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+    expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
+    expect(dispatched[0]?.message.id).toBe(
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: PULL_REQUEST_SUBJECT,
+        part: 'root',
+      })
+    );
+    expect(dispatched[0]?.message.text).toBe(
+      'Retry the deploy step on a 5xx\n\nFixes the flaky staging deploy.'
+    );
+  });
+
+  it("a comment on a pull request is dispatched to the pull request's thread", async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(
+        pullRequestCommented({
+          commentId: 7000001,
+          text: 'Looks good, one question about the timeout.',
+        })
+      )
+    );
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+    expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
+    expect(dispatched[0]?.message.id).toBe(
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: PULL_REQUEST_SUBJECT,
+        part: 'comment',
+        commentId: 7000001,
+      })
+    );
+    expect(dispatched[0]?.message.text).toBe(
+      'Looks good, one question about the timeout.'
+    );
+  });
+
+  it("a pull request linked to an issue does not route to the issue's thread", async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(pullRequestAdded({ linkedIssue: true }))
+    );
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+    expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
+    expect(dispatched[0]?.threadId).not.toBe(
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`
+    );
+    // The link itself still reaches a handler; it is display data, not
+    // routing (D-PR6), and the pull request stays its own thread.
+    const raw = dispatched[0]?.message.raw as {
+      payload: { content: { issue: { id: number } | null } };
+    };
+    expect(raw.payload.content.issue?.id).toBe(FIXTURE.issueId);
+  });
+
+  it('assigning the bot to a pull request is a mention', async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(
+        pullRequestAssigneeChanged({ assigneeName: FIXTURE.bot.name })
+      )
+    );
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+    expect(dispatched[0]?.message.isMention).toBe(true);
+  });
+
+  it('a pull request payload missing its repository is rejected with 400', async () => {
+    const { adapter, chat } = await webhookAdapter();
+    const payload = pullRequestAdded();
+    const content = payload['content'] as Record<string, unknown>;
+    delete content['repository'];
+
+    const response = await adapter.handleWebhook(webhookRequest(payload));
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe('Invalid payload');
+    expect(chat).not.toHaveDispatched('processMessage');
+  });
+
+  it('a pull request payload missing its number is rejected with 400', async () => {
+    const { adapter } = await webhookAdapter();
+    const payload = pullRequestCommented();
+    const content = payload['content'] as Record<string, unknown>;
+    delete content['number'];
+
+    const response = await adapter.handleWebhook(webhookRequest(payload));
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe('Invalid payload');
+  });
+
+  it('the repository name from a webhook spares the next thread read a lookup', async () => {
+    const calls: string[] = [];
+    const { adapter } = egressAdapter({
+      seed: pullRequestSeed(),
+      wrapApi: (api) => recordPortCalls(api, calls),
+    });
+    await initializeCapturingDispatches(adapter);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(pullRequestCommented())
+    );
+    expect(response.status).toBe(200);
+
+    const thread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
+
+    expect(thread.metadata).toMatchObject({
+      repositoryName: FIXTURE.repositoryName,
+      url: `https://${FIXTURE.host}/git/${FIXTURE.projectKey}/${FIXTURE.repositoryName}/pullRequests/${FIXTURE.pullRequestNumber}`,
+    });
+    expect(calls).toContain('getPullRequest');
+    expect(calls).not.toContain('getGitRepository');
+  });
+
+  it('the same pull request payload sent to two configured hosts yields two thread ids and two ports used', async () => {
+    const firstApi = createInMemoryBacklogApi({
+      projects: [conformanceFixture.baseProject()],
+    });
+    const otherApi = createInMemoryBacklogApi({
+      projects: [{ ...conformanceFixture.baseProject() }],
+    });
+    const createApi = vi
+      .fn()
+      .mockReturnValueOnce(firstApi)
+      .mockReturnValueOnce(otherApi);
+    const adapter = createBacklogAdapter({
+      installations: [
+        {
+          host: FIXTURE.host,
+          apiKey: 'k1',
+          botUserId: FIXTURE.bot.id,
+          botUserName: FIXTURE.bot.name,
+          webhookSecret: FIXTURE.webhookSecret,
+        },
+        {
+          host: FIXTURE.otherHost,
+          apiKey: 'k2',
+          botUserId: 998,
+          botUserName: 'Chatbot2',
+          webhookSecret: 'other-secret',
+        },
+      ],
+      createApi,
+    });
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    await adapter.handleWebhook(
+      webhookRequest(pullRequestAdded(), { host: FIXTURE.host })
+    );
+    await adapter.handleWebhook(
+      webhookRequest(pullRequestAdded(), {
+        host: FIXTURE.otherHost,
+        token: 'other-secret',
+      })
+    );
+    await vi.waitFor(() => expect(dispatched).toHaveLength(2));
+
+    expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
+    expect(dispatched[1]?.threadId).toBe(
+      `backlog:${FIXTURE.otherHost}:${FIXTURE.projectId}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}`
+    );
+    expect(dispatched[0]?.message.id).not.toBe(dispatched[1]?.message.id);
     expect(adapter.api(FIXTURE.host)).toBe(firstApi);
     expect(adapter.api(FIXTURE.otherHost)).toBe(otherApi);
   });
@@ -2403,6 +2801,34 @@ selfMessageContract({
   makeSelfMessageRequest: () =>
     webhookRequest(
       issueCommented({
+        createdUser: {
+          id: FIXTURE.bot.id,
+          name: FIXTURE.bot.name,
+          userId: FIXTURE.bot.userId,
+        },
+      })
+    ),
+});
+
+/**
+ * The same contract over a pull-request activity. The self-skip reads
+ * `createdUser.id` off the envelope, which every activity type carries, so
+ * this run cannot fail while the type-3 run above passes — unless the
+ * pull-request path ever grows a skip of its own, which is exactly the
+ * regression worth catching.
+ */
+selfMessageContract({
+  name: 'backlog (pull request)',
+  setup: async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const chat = createMockChatInstance({ logger: createMockLogger() });
+    await adapter.initialize(chat);
+    return { adapter, chat };
+  },
+  makeOtherMessageRequest: () => webhookRequest(pullRequestCommented()),
+  makeSelfMessageRequest: () =>
+    webhookRequest(
+      pullRequestCommented({
         createdUser: {
           id: FIXTURE.bot.id,
           name: FIXTURE.bot.name,

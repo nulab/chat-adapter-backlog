@@ -419,6 +419,19 @@ describe('the issue subject client', () => {
     });
   });
 
+  it("an issue webhook's changes carry no attachment", () => {
+    const { subject, calls } = clientWith();
+
+    expect(
+      subject.webhookChangeAttachment({
+        field: 'attachment',
+        newValue: 'trace.log',
+        oldValue: '',
+      })
+    ).toBeUndefined();
+    expect(calls).toEqual([]);
+  });
+
   it('names the channel from the issue key rather than looking the project up', () => {
     const { subject, calls } = clientWith();
 

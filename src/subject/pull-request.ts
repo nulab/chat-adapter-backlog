@@ -23,7 +23,11 @@ import type {
   PullRequestRef,
   StarTarget,
 } from '../client/port';
-import type { BacklogRawMessage, BacklogSubjectRef } from '../types';
+import type {
+  BacklogChange,
+  BacklogRawMessage,
+  BacklogSubjectRef,
+} from '../types';
 import type {
   SubjectClient,
   SubjectContext,
@@ -104,6 +108,23 @@ export function createPullRequestSubjectClient(
       throw new ResourceNotFoundError('backlog', 'pullRequestAttachment', name);
     }
     return downloadAttachment(attachment.id);
+  }
+
+  /**
+   * The `Attachment` a file **name** stands for, which is all a pull request
+   * ever carries: neither a comment's `changeLog` nor a type-20 activity's
+   * `changes[]` holds an id (measured 2026-09-06), so there is no `url` to
+   * build here and the list call that could find one is deferred into
+   * `fetchData` — eager resolution would spend a read per comment on every
+   * page of `fetchMessages`, and a name matching nothing is a failure only
+   * the reader of that file should see (D-PR10).
+   */
+  function namedAttachment(name: string): Attachment {
+    return {
+      type: 'file',
+      name,
+      fetchData: () => downloadNamed(name),
+    };
   }
 
   /**
@@ -226,18 +247,7 @@ export function createPullRequestSubjectClient(
         if (change.field !== 'attachment' || change.newValue === null) {
           continue;
         }
-        // A pull request's `changeLog` has no `attachmentInfo` (measured
-        // 2026-09-06), so there is no id to build a `url` from here and the
-        // list call that could find one is deferred into `fetchData`: eager
-        // resolution would spend a read per comment on every page of
-        // `fetchMessages`, and a name matching nothing is a failure only the
-        // reader of that file should see (D-PR10).
-        const name = change.newValue;
-        attachments.push({
-          type: 'file',
-          name,
-          fetchData: () => downloadNamed(name),
-        });
+        attachments.push(namedAttachment(change.newValue));
       }
       return attachments;
     },
@@ -260,6 +270,20 @@ export function createPullRequestSubjectClient(
         ),
         fetchData: () => downloadAttachment(attachment.id),
       };
+    },
+
+    /**
+     * The same file the REST `changeLog` would name, through the same
+     * name-resolving builder: a comment posted with `attachmentId[]` arrives
+     * as type 20 with `changes[{ field: "attachment", new_value: "<name>" }]`
+     * and no `content.attachments` key at all (measured 2026-09-06,
+     * `.claude/rules/backlog-pull-request-facts.md`), so the webhook message
+     * and the read of the same comment carry the same attachment (§6.6).
+     */
+    webhookChangeAttachment(change: BacklogChange): Attachment | undefined {
+      return change.newValue === null
+        ? undefined
+        : namedAttachment(change.newValue);
     },
 
     channelName(_root: SubjectRoot, names: SubjectNames): string | undefined {

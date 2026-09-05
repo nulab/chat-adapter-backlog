@@ -1,6 +1,11 @@
 import { root, paragraph, text as textNode } from 'chat';
 
-import { encodeMessageId, encodeThreadId, mentionPattern } from '../ids';
+import {
+  encodeMessageId,
+  encodeThreadId,
+  mentionPattern,
+  mentionUser,
+} from '../ids';
 
 import type {
   ActivityAttachment,
@@ -8,6 +13,8 @@ import type {
   ActivityCreatedUser,
   IssueCreatedActivity,
   IssueUpdatedOrCommentedActivity,
+  PullRequestAddedActivity,
+  PullRequestUpdatedOrCommentedActivity,
 } from './payload';
 import type { SubjectClient } from '../subject/client';
 import type {
@@ -16,6 +23,26 @@ import type {
   BacklogWebhookPayload,
 } from '../types';
 import type { Attachment, Author, Message, MessageData } from 'chat';
+
+/**
+ * The activity types whose message is a subject's **root**: an issue's
+ * creation (1) and a pull request's (18). Both carry `summary` and
+ * `description` and nothing else the mapping reads (docs/specs/adapter.md
+ * §5.3).
+ */
+type RootActivity = IssueCreatedActivity | PullRequestAddedActivity;
+
+/**
+ * The activity types whose message is a **comment** — or a field change whose
+ * changelog comment Backlog left out: issues (2, 3) and pull requests
+ * (19, 20).
+ */
+type CommentOrUpdateActivity =
+  | IssueUpdatedOrCommentedActivity
+  | PullRequestUpdatedOrCommentedActivity;
+
+/** Every activity type §5.3 maps to a `Message`; type 4 is a deletion, not one. */
+export type InboundActivity = RootActivity | CommentOrUpdateActivity;
 
 /**
  * One §5.3 row's outcome before it becomes a `Message`: everything the
@@ -32,11 +59,61 @@ export interface InboundMessageFields {
   dateSent: Date;
 }
 
+/**
+ * The `content` fields the mapping reads off an activity of either kind, as
+ * the widest shape that carries them. Written structurally rather than as a
+ * union of the schemas' types so a field one schema does not declare — a
+ * pull-request `assignee`, which the activity form was measured never to
+ * carry (2026-09-06) — costs a `undefined` here instead of a second builder.
+ */
+interface OptionalContent {
+  assignee?: { id: number } | null | undefined;
+  attachments?: ActivityAttachment[] | undefined;
+}
+
+function assigneeIdOf(content: OptionalContent): number | undefined {
+  return content.assignee?.id;
+}
+
 function toAttachments(
   subject: SubjectClient,
-  raw: ActivityAttachment[] | undefined
+  content: OptionalContent
 ): Attachment[] {
-  return (raw ?? []).map((attachment) => subject.webhookAttachment(attachment));
+  return (content.attachments ?? []).map((attachment) =>
+    subject.webhookAttachment(attachment)
+  );
+}
+
+/**
+ * The files a comment's `changes[]` names, for the kind that names any there
+ * (§6.6). A pull-request comment posted with `attachmentId[]` arrives as type
+ * 20 with `changes: [{ field: "attachment", new_value: "<file name>" }]` and
+ * **no `content.attachments` key at all** (measured 2026-09-06,
+ * `.claude/rules/backlog-pull-request-facts.md` "What each pull-request
+ * operation emits"), so a webhook message that read only `content.attachments`
+ * would drop the file the same comment hands back through `fetchMessages`.
+ * An empty `newValue` is a removal, which names a file the subject no longer
+ * has.
+ */
+function changeAttachments(
+  subject: SubjectClient,
+  changes: readonly BacklogChange[]
+): Attachment[] {
+  const attachments: Attachment[] = [];
+  for (const change of changes) {
+    if (
+      change.field !== 'attachment' ||
+      change.newValue === null ||
+      change.newValue.length === 0
+    ) {
+      continue;
+    }
+    const attachment = subject.webhookChangeAttachment(change);
+    if (attachment !== undefined) {
+      attachments.push(attachment);
+    }
+  }
+  return attachments;
 }
 
 function normaliseChanges(raw: ActivityChange[] | undefined): BacklogChange[] {
@@ -48,27 +125,63 @@ function normaliseChanges(raw: ActivityChange[] | undefined): BacklogChange[] {
 }
 
 /**
+ * The `changes[]` field name reporting a new assignee is `assigner` on an
+ * issue (measured 2026-08-02) and `assignee` on a pull request (measured
+ * 2026-09-06); both carry the new assignee's **display name**, not an id.
+ * Neither name is used for anything else, so both are read for every activity
+ * type rather than branching on which one is being mapped.
+ */
+const ASSIGNMENT_CHANGE_FIELDS: readonly string[] = ['assigner', 'assignee'];
+
+/** What §5.4 decides `isMention` from. */
+interface MentionEvidence {
+  botUserName: string;
+  botUserId: number;
+  text: string;
+  assigneeId: number | undefined;
+  changes: BacklogChange[];
+  /**
+   * Whether `text` was assembled from a field Backlog stores **without**
+   * rewriting `<@U<id>>` into `@<display name>` — a pull request's summary,
+   * and nothing else measured so far (§5.4 rule 5, measured 2026-09-06).
+   */
+  rawMentionNotationSurvives: boolean;
+}
+
+/**
  * Textual plus assignment mention detection (docs/specs/adapter.md §5.4).
  * `mentionPattern` alone only proves a hand-typed `@name` is present in
  * `text`; the assignment checks below catch the case Backlog signals
- * structurally instead of textually — assigning the bot to an issue, or
- * changing its assignee, mentions nobody in `text` at all.
+ * structurally instead of textually — assigning the bot to an issue or a
+ * pull request, or changing its assignee, mentions nobody in `text` at all.
  */
-function detectMention(
-  botUserName: string,
-  botUserId: number,
-  text: string,
-  assigneeId: number | undefined,
-  changes: BacklogChange[]
-): boolean {
+function detectMention(evidence: MentionEvidence): boolean {
+  const { botUserName, botUserId, text, assigneeId, changes } = evidence;
+
   if (mentionPattern(botUserName).test(text)) {
+    return true;
+  }
+  // Not applied to every text: everywhere but a pull request's summary the
+  // server has already rewritten the notation, so a literal `<@U999>` there is
+  // an unresolvable mention that notified nobody (§5.4 rule 1's negative case)
+  // rather than a mention of the bot.
+  if (
+    evidence.rawMentionNotationSurvives &&
+    text.includes(mentionUser(botUserId))
+  ) {
     return true;
   }
   if (assigneeId === botUserId) {
     return true;
   }
+  // A pull-request `PATCH` touching several fields at once was measured once
+  // to omit the `assignee` entry while still notifying the new assignee, so
+  // this rule under-reports; the payload carries nothing else to read an
+  // assignment from.
   return changes.some(
-    (change) => change.field === 'assigner' && change.newValue === botUserName
+    (change) =>
+      ASSIGNMENT_CHANGE_FIELDS.includes(change.field) &&
+      change.newValue === botUserName
   );
 }
 
@@ -87,16 +200,20 @@ export interface BuildInboundMessageInput {
 }
 
 /**
- * Type 1 — Issue Created (docs/specs/adapter.md §5.3 row 1). The message id
- * is the subject's root (`<host>:issue:<issueId>:r`); mention text is
- * `summary + description`, so a mention placed in the summary counts.
+ * Types 1 and 18 — Issue Created and Pull Request Added (docs/specs/adapter.md
+ * §5.3 rows 1 and 18). The message id is the subject's root
+ * (`<host>:issue:<issueId>:r`, `<host>:pr:<repositoryId>:<number>:r`); mention
+ * text is `summary + description`, so a mention placed in the summary counts.
  */
-function buildIssueCreatedFields(
-  activity: IssueCreatedActivity,
+function buildRootFields(
+  activity: RootActivity,
   input: BuildInboundMessageInput
 ): InboundMessageFields {
   const { host, botUserId, botUserName, subject } = input;
-  const text = [activity.content.summary, activity.content.description ?? '']
+  const text = [
+    activity.content.summary ?? '',
+    activity.content.description ?? '',
+  ]
     .filter((part) => part.length > 0)
     .join('\n\n')
     .trim();
@@ -108,30 +225,33 @@ function buildIssueCreatedFields(
       part: 'root',
     }),
     text,
-    attachments: toAttachments(subject, activity.content.attachments),
-    isMention: detectMention(
+    attachments: toAttachments(subject, activity.content),
+    isMention: detectMention({
       botUserName,
       botUserId,
       text,
-      activity.content.assignee?.id,
-      changes
-    ),
+      assigneeId: assigneeIdOf(activity.content),
+      changes,
+      rawMentionNotationSurvives: activity.type === 18,
+    }),
     changes,
     dateSent: new Date(activity.created),
   };
 }
 
 /**
- * Types 2 and 3 (docs/specs/adapter.md §5.3 rows 2–4). A **changelog**
- * comment (a status-only change, an assignee change, a description edit, an
- * attachment add) arrives as type 2 with `content.comment.id` set and
- * `comment.content` `null` or `""`; handlers must key on `raw.changes`
- * having entries, never on "a comment is present", because a comment posted
- * together with a field change is one type-2 event with both
- * (`.claude/rules/backlog-webhook-facts.md` "Changelog comments").
+ * Types 2, 3, 19 and 20 (docs/specs/adapter.md §5.3). A **changelog** comment
+ * (a status-only change, an assignee change, a description edit, an
+ * attachment add, a merge, a close) arrives with `content.comment.id` set and
+ * `comment.content` `null` or `""`; handlers must key on `raw.changes` having
+ * entries, never on "a comment is present", because a comment posted together
+ * with a field change is one event with both
+ * (`.claude/rules/backlog-webhook-facts.md` "Changelog comments",
+ * `.claude/rules/backlog-pull-request-facts.md` "What each pull-request
+ * operation emits").
  */
-function buildIssueUpdatedOrCommentedFields(
-  activity: IssueUpdatedOrCommentedActivity,
+function buildCommentOrUpdateFields(
+  activity: CommentOrUpdateActivity,
   input: BuildInboundMessageInput
 ): InboundMessageFields {
   const { host, botUserId, botUserName, subject } = input;
@@ -158,21 +278,31 @@ function buildIssueUpdatedOrCommentedFields(
   return {
     messageId,
     text,
-    attachments: toAttachments(subject, activity.content.attachments),
-    isMention: detectMention(botUserName, botUserId, text, undefined, changes),
+    attachments: [
+      ...toAttachments(subject, activity.content),
+      ...changeAttachments(subject, changes),
+    ],
+    isMention: detectMention({
+      botUserName,
+      botUserId,
+      text,
+      assigneeId: undefined,
+      changes,
+      rawMentionNotationSurvives: false,
+    }),
     changes,
     dateSent: new Date(activity.created),
   };
 }
 
 export function buildInboundMessageFields(
-  activity: IssueCreatedActivity | IssueUpdatedOrCommentedActivity,
+  activity: InboundActivity,
   input: BuildInboundMessageInput
 ): InboundMessageFields {
-  if (activity.type === 1) {
-    return buildIssueCreatedFields(activity, input);
+  if (activity.type === 1 || activity.type === 18) {
+    return buildRootFields(activity, input);
   }
-  return buildIssueUpdatedOrCommentedFields(activity, input);
+  return buildCommentOrUpdateFields(activity, input);
 }
 
 /**
@@ -214,15 +344,16 @@ export function plainTextAst(text: string): MessageData['formatted'] {
 }
 
 /**
- * Assembles the `Message` instance for types 1–3. `raw.payload` carries the
- * envelope exactly as parsed (docs/specs/adapter.md §5.2 "not a stripped
- * copy") so a handler can read a key the schema does not name.
+ * Assembles the `Message` instance for every type §5.3 maps to a message
+ * (1, 2, 3, 18, 19, 20). `raw.payload` carries the envelope exactly as
+ * parsed (docs/specs/adapter.md §5.2 "not a stripped copy") so a handler can
+ * read a key the schema does not name.
  * `edited: false` and `dateSent: new Date(created)` are constant for every
  * webhook message because comment edits fire no webhook at all (measured
  * 2026-09-03, `.claude/rules/backlog-webhook-facts.md`).
  */
 export function buildInboundMessage(
-  activity: IssueCreatedActivity | IssueUpdatedOrCommentedActivity,
+  activity: InboundActivity,
   input: BuildMessageInput,
   MessageCtor: new (
     data: MessageData<BacklogRawMessage>
