@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import type { BacklogSubjectRef } from '../types';
+
 /**
  * Zod schemas for the Backlog webhook body (docs/specs/adapter.md §5.2).
  * Backlog publishes no dedicated webhook-payload page; the body is one
@@ -125,6 +127,25 @@ export type RecognisedActivity =
   | IssueCreatedActivity
   | IssueUpdatedOrCommentedActivity
   | IssueDeletedActivity;
+
+/**
+ * Which issue or pull request an activity is about. This is the single place
+ * that knows which `content` fields identify a subject: for types 1-4 that is
+ * `content.id`, the issue's space-wide numeric id
+ * (`.claude/rules/backlog-webhook-facts.md`). Types 18-20 join it in P3, where
+ * `content.repository.id` and `content.number` identify the pull request while
+ * `content.id` — its space-wide id — addresses no endpoint at all
+ * (`.claude/rules/backlog-pull-request-facts.md`, docs/specs/adapter.md §5.3).
+ *
+ * This maps an activity type to a ref, which is the opposite direction from
+ * `subjectClientFor`'s dispatch on a ref's kind, so it does not belong on
+ * `SubjectClient`.
+ */
+export function subjectOfActivity(
+  payload: RecognisedActivity
+): BacklogSubjectRef {
+  return { kind: 'issue', issueId: payload.content.id };
+}
 
 /**
  * The four activity types the adapter dispatches (docs/specs/adapter.md

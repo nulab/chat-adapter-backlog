@@ -426,10 +426,10 @@ pull-request URL needs and the REST object lacks).
 
 | `type` | Backlog meaning | Message id | `text` | Attachments | Mention (§5.4) |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Issue Created | `<host>:<issueId>:i` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` | `content.assignee?.id === botUserId` **or** text |
-| 2 | Issue Updated, with `content.comment.id` | `<host>:<issueId>:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` | `changes[field="assigner"].new_value === botUserName` **or** text |
-| 2 | Issue Updated, no comment id | `<host>:<issueId>:u:<created>` | `""` | none | as above |
-| 3 | Issue Commented | `<host>:<issueId>:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` | text |
+| 1 | Issue Created | `<host>:issue:<issueId>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` | `content.assignee?.id === botUserId` **or** text |
+| 2 | Issue Updated, with `content.comment.id` | `<host>:issue:<issueId>:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` | `changes[field="assigner"].new_value === botUserName` **or** text |
+| 2 | Issue Updated, no comment id | `<host>:issue:<issueId>:u:<created>` | `""` | none | as above |
+| 3 | Issue Commented | `<host>:issue:<issueId>:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` | text |
 | 4 | Issue Deleted (D10, optional phase) | root `<host>:issue:<issueId>:r` | — | — | — → `chat.processMessageDeleted({ adapter, channelId, threadId, messageId, raw, deletedAt: new Date(created) })` |
 | 14 | Issue Multi Updated (bulk) | — | — | — | 200 Ignored: no per-issue comment; measured to carry bulk status changes (2026-08-28) |
 | 17 | Comment Notification Added | — | — | — | 200 Ignored: repeats an existing comment; produced when notifications are added after the fact (measured 2026-09-03) |
@@ -634,10 +634,20 @@ Outbound is §6.1 step 1. Inbound attachments are `Attachment` objects:
 | --- | --- |
 | Webhook types 1–3 `content.attachments[]` | `type: "file"`, `name`, `size`, `url` (API URL, see §5.3), `fetchData` |
 | REST issue comment `changeLog[]` entries with `field === "attachment"` and `newValue` set (an add; `originalValue` set means a removal and is skipped) | same, `name = newValue`, id from `attachmentInfo.id`; `size` unknown |
-| REST issue `attachments[]` | same |
 | Webhook types 18–20 `content.attachments[]`, when present | same, with the pull-request URL below |
 | Webhook type 20 `changes[field="attachment"]` and REST pull-request comment `changeLog[field="attachment"]` | `type: "file"`, `name = new_value / newValue`; **no id is carried** (the pull-request `changeLog` has no `attachmentInfo`, measured 2026-09-06), so `url` and `fetchData` resolve the id lazily through `GET …/pullRequests/:number/attachments` by name — the newest match when names collide ⚑ D-PR10 |
-| REST pull request `attachments[]` | `type: "file"`, `name`, `size`, `url`, `fetchData` |
+
+A **root** message carries no attachments at all, of either kind. The port
+returns neither object's `attachments[]`: `getIssue` does not surface one, and
+`BacklogPullRequest` drops the `attachments[]` a real pull request carries
+(measured 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`
+"Addressing"), so §7.1 builds a root message with `attachments: []`. Listing
+them is one extra read on **every** root message — `GET /issues/:issueIdOrKey/attachments`
+and `GET /projects/:projectId/git/repositories/:repositoryId/pullRequests/:number/attachments`
+— for a source that matters only when a body has files, so the adapter does
+not spend it and a consumer that wants them asks through `api(host)` (§3.3):
+`listPullRequestAttachments(ref)` is already on the port (§8.1), the issue
+list is not and adding it is a port change.
 
 `fetchData()` calls `GET /issues/:issueId/attachments/:attachmentId`
 ([Get Issue Attachment](https://developer.nulab.com/docs/backlog/api/2/get-issue-attachment/))
@@ -673,7 +683,7 @@ Backlog requires `projectId`, `summary`, `issueTypeId`, `priorityId`
   never retry for other errors or when the caller supplied the ids. Empty
   issue-type or priority lists → `ValidationError`.
 - Files uploaded as in §6.1; `assigneeId`, `notifiedUserId` passed through.
-- Returns `{ id: <host>:<issueId>:i, threadId: backlog:<host>:<projectId>:<issueId>, raw: { kind: "issue", … } }`.
+- Returns `{ id: <host>:issue:<issueId>:r, threadId: backlog:<host>:<projectId>:issue:<issueId>, raw: { kind: "issue", … } }`.
 
 ### 6.8 Unsupported egress
 
@@ -1181,7 +1191,7 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   warn when uncached.
 - **egress**: `postMessage` markdown/raw/card/files/`notifiedUserId`;
   mistyped extra → `ValidationError`; `editMessage` with files → error;
-  `:i`/`:u:` rejected for edit/delete/star; `stream` buffers into one comment
+  `:r`/`:u:` rejected for edit/delete/star; `stream` buffers into one comment
   and never calls `editMessage`; reactions add (idempotent), remove own only,
   no-op without a star; `postChannelMessage` summary/description split,
   plain-text summary, defaults, explicit ids, single retry on code 7 with
@@ -1193,7 +1203,7 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   cross-thread/`:u:`/404 → `null`; `fetchThread`, `fetchSubject`,
   `fetchChannelInfo`, `listThreads` (offset, trailing empty page, clamp),
   `getUser` (round trip, bot, bare number rejected, null on 404),
-  `markAsRead` (first page, third page, cap reached, already read, `:i`).
+  `markAsRead` (first page, third page, cap reached, already read, `:r`).
 - **client**: §8.6 conformance over both implementations; bucket classifier
   for every port method; header capture on success and on error; retry timing
   with fake timers; every row of §8.5; `cause` shape; no `ZodError`; resolver
@@ -1298,7 +1308,7 @@ adds stay on the pull request, so the variable must name a scratch one.
 | D9 | Mention = display name in text (left-bounded, case-sensitive) or assignment to the bot | Payloads carry only resolved names and an empty `notifications`; assignee changes arrive by display name. | `notifications`-based detection (never fires in production); case-insensitive match (Japanese names have no case, ASCII names would over-match). |
 | D10 | Types 1, 2, 3 processed, 4 optional deletion, rest ignored; register `activityTypeIds`, never `allEvent` | Only issue activity maps to threads; 14 has no per-issue comment; 17 repeats content. | `allEvent` (wiki/git/document noise). |
 | D11 | Two-step uploads; inbound `fetchData` through the port; `rehydrateAttachment` via API URL | Backlog attachments require auth to download; a URL is the only serialisable handle that survives queue round trips. | Public URLs (do not exist); `fetchMetadata` blobs. |
-| D12 | `:i`/`:u:` cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Backlog can edit an issue body, but `editMessage` semantics ("edit what I posted") do not fit rewriting a human's issue; `:u:` has no fetchable resource. | Mapping `editMessage(:i)` to Update Issue. |
+| D12 | `:r`/`:u:` cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Backlog can edit an issue body, but `editMessage` semantics ("edit what I posted") do not fit rewriting a human's issue; `:u:` has no fetchable resource. | Mapping `editMessage(:r)` to Update Issue. |
 | D13 | Optional set as in §4.2; `listThreads` uses Backlog's default order | Each implemented member has a one-to-one endpoint; each unsupported one has no counterpart. Sorting or filtering in the adapter would hide the search-bucket cost. | "Open issues first" (an extra filter, surprising to callers). |
 | D14 ⚑ | Per-project rule, cached forever, refreshed by `fetchChannelInfo`; plain-text fallback; sync members use the cache | Correctness on notation projects is not optional (a third of projects on a measured space); a TTL adds a read per project per interval for a setting that rarely changes. | TTL cache; Markdown-only converter. |
 | D15 | `chat` peer `^4.39.0`; `@chat-adapter/shared` dep `^4.39.0`; `backlog-js` `^0.20.1`; `zod` `^4`; `engines.node >=20`. The **published version** tracks `chat` (`4.39.x`), while the **ranges** stay as above. | The docs prescribe the peer range for external packages; the exact pin only works inside Vercel's fixed-version monorepo. `4.39.0` is the version whose contract was verified. Matching the first-party packages' *number* costs nothing and tells a reader which core the release was built against; matching their *pin* would make a consumer on `chat@4.40` install a second copy of the core. The two are separable, so only the number is copied. | Exact pins (breaks consumers on 4.40); a `0.x` line of our own (hides which core the release targets). |

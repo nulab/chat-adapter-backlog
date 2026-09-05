@@ -252,7 +252,7 @@ the CLAUDE.md table already lists egress, reads and the thread-ID codec under
 
 | File | Owns |
 | --- | --- |
-| `src/subject/client.ts` | `SubjectClient`, `SubjectRoot`, `StarTarget`; `subjectClientFor(api, ref, context)` — the **only** `switch (ref.kind)` in the adapter. |
+| `src/subject/client.ts` | `SubjectClient`, `SubjectRoot`, `StarTarget`; `subjectClientFor(api, ref, context)` — the only place in the adapter where the kind selects *behaviour*. |
 | `src/subject/issue.ts` | `IssueSubjectClient`: today's behaviour, moved. `getComment` is the single-fetch endpoint; `deleteComment` works; `starTarget` → `{ commentId }`. |
 | `src/subject/pull-request.ts` | `PullRequestSubjectClient`: `getComment` lists with `minId: commentId - 1, maxId: commentId + 1, count: 1` and returns `ResourceNotFoundError` on an empty page (exclusive bounds measured on pull-request comments, M4 — the only way to fetch one PR comment; a returned element whose `id` differs is treated as not found); `deleteComment` throws the §3.6 error before any call; `addComment` passes `attachmentId[]`; `starTarget` → `{ pullRequestCommentId }`; `attachmentUrl` → `https://<host>/api/v2/projects/<projectId>/git/repositories/<repositoryId>/pullRequests/<number>/attachments/<id>`; comment attachments named by `changeLog` resolve their id lazily through `listPullRequestAttachments` (D-PR10). |
 | `src/subject/url.ts` | `subjectWebUrl(host, root, names)`: `/view/<issueKey>` or `/git/<projectKey>/<repositoryName>/pullRequests/<number>`; the pull-request form needs two names the PR object does not carry (§3.8). |
@@ -519,9 +519,9 @@ written on purpose, stack declared in the first line of the body (CLAUDE.md
     `null` on 404; `fetchThread` and `fetchSubject` carry `kind`/`type`
     for both; `rehydrateAttachment` accepts both URL shapes and refuses a
     foreign host for both.
-  - `subjectClientFor` is the only `switch` on `ref.kind` outside tests
-    (grep-asserted in a test, so the containment is executable, not a
-    comment).
+  - `subjectClientFor` is the only place a kind selects behaviour, and the
+    only `switch` on `ref.kind` outside tests and the id codec (grep-asserted
+    in a test, so the containment is executable, not a comment).
 - **Tests to add**: "a pull request thread id carries the repository id and number, never the repository name", "the channel of a pull request thread is its project", "a reply on a pull request thread is posted as a pull request comment", "deleting a pull request comment fails before any request because Backlog has no endpoint", "a single pull request comment is fetched through a one-element window", "reacting to a pull request comment stars it as a pull request comment", "backward paging of a pull request ends with a page holding its body", "thread info names its kind for both issues and pull requests", "the subject of a pull request comment is the pull request", "a serialised pull request attachment regains fetchData for a configured host", "kind dispatch happens in exactly one module".
 - **Size**: ~700 lines moved/rewritten + ~250 new; tests ~900 (mostly the
   existing suite reshaped plus the PR mirror rows).
@@ -634,7 +634,12 @@ The CLAUDE.md checklist, plus for this stack:
 - [ ] No `issueId` parameter survives in `src/egress.ts` or `src/reads.ts`
       after P2; a `SubjectClient` is passed instead.
 - [ ] `switch (ref.kind)` / `ref.kind === 'pullRequest'` appears only in
-      `src/subject/client.ts` (and tests); the containment test enforces it.
+      `src/subject/client.ts` and in the id codec `src/ids.ts` (and tests); the
+      containment test enforces it. The codec is allowlisted because writing
+      `issue:<id>` versus `pr:<repo>:<n>` *is* its job and it has no port to
+      route through — the alternative, sniffing which field is present, is the
+      thing D-PR2 rejects. Behaviour never branches there; only the grammar
+      does.
 - [ ] A Backlog pull-request claim is cited to a page in §2's table or to a
       dated `backlog-pull-request-facts.md` entry; `backlog-js` typings are
       never the citation for a wire fact.

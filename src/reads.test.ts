@@ -3,23 +3,68 @@ import { Message as MessageCtor } from 'chat';
 import { describe, expect, it } from 'vitest';
 
 import { createInMemoryBacklogApi } from './client/in-memory';
-import { fetchMessage, fetchMessages, fetchThread } from './reads';
 import { encodeMessageId } from './ids';
+import {
+  fetchMessage,
+  fetchMessages,
+  fetchSubject,
+  fetchThread,
+  markAsRead,
+  rehydrateAttachment,
+} from './reads';
+import { subjectClientFor } from './subject/client';
 
 import type {
   BacklogApi,
+  BacklogComment,
   BacklogIssue,
   BacklogIssueComment,
+  BacklogProject,
+  BacklogPullRequest,
+  ListCommentsOptions,
 } from './client/port';
 import type { MessageBuilders } from './reads';
-import type { FetchDirection, FetchOptions } from 'chat';
+import type { SubjectClient } from './subject/client';
+import type { BacklogRawMessage, BacklogSubjectRef } from './types';
+import type { Attachment, FetchDirection, FetchOptions } from 'chat';
 
 const HOST = 'example.backlog.com';
+const OTHER_HOST = 'other.backlog.jp';
 const PROJECT_ID = 500;
 const ISSUE_ID = 8001;
-const THREAD_ID = `backlog:${HOST}:${PROJECT_ID}:${ISSUE_ID}`;
+const REPOSITORY_ID = 700;
+const REPOSITORY_NAME = 'example-repo';
+const PULL_REQUEST_NUMBER = 12;
+const PULL_REQUEST_ID = 90001;
+
+const ISSUE_REF: BacklogSubjectRef = { kind: 'issue', issueId: ISSUE_ID };
+const PULL_REQUEST_REF: BacklogSubjectRef = {
+  kind: 'pullRequest',
+  repositoryId: REPOSITORY_ID,
+  number: PULL_REQUEST_NUMBER,
+};
+
+const THREAD_ID = `backlog:${HOST}:${PROJECT_ID}:issue:${ISSUE_ID}`;
+const PULL_REQUEST_THREAD_ID = `backlog:${HOST}:${PROJECT_ID}:pr:${REPOSITORY_ID}:${PULL_REQUEST_NUMBER}`;
 const CHANNEL_ID = `backlog:${HOST}:${PROJECT_ID}`;
 const ALICE = { id: 100, userId: 'alice', name: 'Alice', mailAddress: null };
+
+const ROOT_CREATED = new Date('2026-01-01T00:00:00Z');
+
+/**
+ * Pull-request comment ids are 7-digit where issue comment ids are small: the
+ * two sequences are separate on a real space and may overlap (measured
+ * 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`), which is why
+ * every message id carries its subject's kind.
+ */
+const PULL_REQUEST_COMMENT_ID_BASE = 7_000_000;
+
+const PROJECT: BacklogProject = {
+  id: PROJECT_ID,
+  projectKey: 'PROJECT',
+  name: 'Project',
+  textFormattingRule: 'markdown',
+};
 
 function baseIssue(overrides: Partial<BacklogIssue> = {}): BacklogIssue {
   return {
@@ -33,13 +78,49 @@ function baseIssue(overrides: Partial<BacklogIssue> = {}): BacklogIssue {
     status: { id: 1, name: 'Open' },
     assignee: null,
     createdUser: ALICE,
-    created: new Date('2026-01-01T00:00:00Z'),
-    updated: new Date('2026-01-01T00:00:00Z'),
+    created: ROOT_CREATED,
+    updated: ROOT_CREATED,
     ...overrides,
   };
 }
 
-const ISSUE_CREATED = new Date('2026-01-01T00:00:00Z');
+function basePullRequest(
+  overrides: Partial<BacklogPullRequest> = {}
+): BacklogPullRequest {
+  return {
+    id: PULL_REQUEST_ID,
+    projectId: PROJECT_ID,
+    repositoryId: REPOSITORY_ID,
+    number: PULL_REQUEST_NUMBER,
+    summary: 'Retry a 429 with the reset header',
+    description: 'Backs off until X-RateLimit-Reset.',
+    base: 'main',
+    branch: 'retry-429',
+    status: { id: 1, name: 'Open' },
+    assignee: null,
+    issue: null,
+    baseCommit: null,
+    branchCommit: null,
+    mergeCommit: null,
+    closeAt: null,
+    mergeAt: null,
+    createdUser: ALICE,
+    created: ROOT_CREATED,
+    updated: ROOT_CREATED,
+    stars: [],
+    ...overrides,
+  };
+}
+
+/**
+ * Strictly after the root's `created` (`ROOT_CREATED`) so a chronological sort
+ * never ties the root against the first comment. Built from `.getTime() + ms`,
+ * not `new Date(y, m, d, h, m, s)`, which constructs in the runner's local
+ * timezone rather than UTC.
+ */
+function commentTimestamp(index: number): Date {
+  return new Date(ROOT_CREATED.getTime() + (index + 1) * 60_000);
+}
 
 function makeComments(count: number): BacklogIssueComment[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -48,12 +129,20 @@ function makeComments(count: number): BacklogIssueComment[] {
     content: `Comment ${index + 1}`,
     changeLog: [],
     createdUser: ALICE,
-    // Strictly after the issue's `created` (`ISSUE_CREATED`) so a
-    // chronological sort never ties the root against the first comment.
-    // Built from `.getTime() + ms`, not `new Date(y, m, d, h, m, s)`, which
-    // constructs in the runner's local timezone rather than UTC.
-    created: new Date(ISSUE_CREATED.getTime() + (index + 1) * 60_000),
-    updated: new Date(ISSUE_CREATED.getTime() + (index + 1) * 60_000),
+    created: commentTimestamp(index),
+    updated: commentTimestamp(index),
+    stars: [],
+  }));
+}
+
+function makePullRequestComments(count: number): BacklogComment[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: PULL_REQUEST_COMMENT_ID_BASE + index + 1,
+    content: `Comment ${index + 1}`,
+    changeLog: [],
+    createdUser: ALICE,
+    created: commentTimestamp(index),
+    updated: commentTimestamp(index),
     stars: [],
   }));
 }
@@ -63,16 +152,31 @@ function apiWith(
   issue: BacklogIssue = baseIssue()
 ): BacklogApi {
   return createInMemoryBacklogApi({
-    projects: [
-      {
-        id: PROJECT_ID,
-        projectKey: 'PROJECT',
-        name: 'Project',
-        textFormattingRule: 'markdown',
-      },
-    ],
+    projects: [PROJECT],
     issues: [issue],
     comments: makeComments(commentCount),
+  });
+}
+
+function pullRequestApiWith(
+  commentCount: number,
+  pullRequest: BacklogPullRequest = basePullRequest()
+): BacklogApi {
+  return createInMemoryBacklogApi({
+    projects: [PROJECT],
+    repositories: [
+      {
+        id: REPOSITORY_ID,
+        projectId: PROJECT_ID,
+        name: REPOSITORY_NAME,
+        description: '',
+      },
+    ],
+    pullRequests: [pullRequest],
+    pullRequestComments: {
+      [`${REPOSITORY_ID}:${PULL_REQUEST_NUMBER}`]:
+        makePullRequestComments(commentCount),
+    },
   });
 }
 
@@ -87,14 +191,74 @@ function fetchOptions(
     : { limit, cursor, direction };
 }
 
-function builders(): Omit<MessageBuilders, 'projectId' | 'issueId'> {
+function builders(): Omit<MessageBuilders, 'projectId' | 'subject'> {
   return {
     host: HOST,
     botUserId: 999,
-    fetchAttachment: () => Promise.reject(new Error('no attachments expected')),
     MessageCtor,
   };
 }
+
+function subjectOf(api: BacklogApi, ref: BacklogSubjectRef): SubjectClient {
+  return subjectClientFor(api, ref, { host: HOST, projectId: PROJECT_ID });
+}
+
+/**
+ * One thread of each kind, described by everything the §7.1 guarantees are
+ * stated in terms of, so the same assertions run twice against the two
+ * endpoint families Backlog serves comments from.
+ */
+interface SubjectFixture {
+  kind: string;
+  threadId: string;
+  rootMessageId: string;
+  commentId: (index: number) => number;
+  commentMessageId: (commentId: number) => string;
+  api: (commentCount: number) => BacklogApi;
+  subject: (api: BacklogApi) => SubjectClient;
+}
+
+const ISSUE_FIXTURE: SubjectFixture = {
+  kind: 'issue',
+  threadId: THREAD_ID,
+  rootMessageId: encodeMessageId({
+    host: HOST,
+    subject: ISSUE_REF,
+    part: 'root',
+  }),
+  commentId: (index) => index + 1,
+  commentMessageId: (commentId) =>
+    encodeMessageId({
+      host: HOST,
+      subject: ISSUE_REF,
+      part: 'comment',
+      commentId,
+    }),
+  api: (commentCount) => apiWith(commentCount),
+  subject: (api) => subjectOf(api, ISSUE_REF),
+};
+
+const PULL_REQUEST_FIXTURE: SubjectFixture = {
+  kind: 'pull request',
+  threadId: PULL_REQUEST_THREAD_ID,
+  rootMessageId: encodeMessageId({
+    host: HOST,
+    subject: PULL_REQUEST_REF,
+    part: 'root',
+  }),
+  commentId: (index) => PULL_REQUEST_COMMENT_ID_BASE + index + 1,
+  commentMessageId: (commentId) =>
+    encodeMessageId({
+      host: HOST,
+      subject: PULL_REQUEST_REF,
+      part: 'comment',
+      commentId,
+    }),
+  api: (commentCount) => pullRequestApiWith(commentCount),
+  subject: (api) => subjectOf(api, PULL_REQUEST_REF),
+};
+
+const SUBJECT_FIXTURES = [ISSUE_FIXTURE, PULL_REQUEST_FIXTURE];
 
 describe('fetchMessages cursor and threadId validation', () => {
   it('a malformed cursor is a validation error', async () => {
@@ -103,7 +267,7 @@ describe('fetchMessages cursor and threadId validation', () => {
       fetchMessages({
         threadId: THREAD_ID,
         options: { cursor: 'not-a-number' },
-        api,
+        subject: subjectOf(api, ISSUE_REF),
         builders: builders(),
       })
     ).rejects.toThrow(ValidationError);
@@ -115,85 +279,83 @@ describe('fetchMessages cursor and threadId validation', () => {
       fetchMessages({
         threadId: CHANNEL_ID,
         options: undefined,
-        api,
+        subject: subjectOf(api, ISSUE_REF),
         builders: builders(),
       })
     ).rejects.toThrow(ValidationError);
   });
 });
 
-describe('fetchMessages (§7.1 property sweep)', () => {
+describe('fetchMessages (§7.1 property sweep, one specification over both kinds)', () => {
   const limits = [1, 2, 3, 5, 50, 100];
   const commentCounts = [0, 1, 4, 7, 150];
   const directions = ['backward', 'forward'] as const;
 
-  for (const limit of limits) {
-    for (const commentCount of commentCounts) {
-      for (const direction of directions) {
-        it(`limit=${limit} comments=${commentCount} direction=${direction}: pages are chronological, bounded and cover every message exactly once`, async () => {
-          const api = apiWith(commentCount);
-          const seenIds = new Set<string>();
-          let cursor: string | undefined;
-          let pageCount = 0;
-          const maxPages = commentCount + 5;
+  for (const fixture of SUBJECT_FIXTURES) {
+    describe(`a ${fixture.kind} thread`, () => {
+      for (const limit of limits) {
+        for (const commentCount of commentCounts) {
+          for (const direction of directions) {
+            it(`limit=${limit} comments=${commentCount} direction=${direction}: pages are chronological, bounded and cover every message exactly once`, async () => {
+              const api = fixture.api(commentCount);
+              const subject = fixture.subject(api);
+              const seenIds = new Set<string>();
+              let cursor: string | undefined;
+              let pageCount = 0;
+              const maxPages = commentCount + 5;
 
-          for (;;) {
-            pageCount += 1;
-            if (pageCount > maxPages) {
-              throw new Error('paging did not terminate');
-            }
-            const result = await fetchMessages({
-              threadId: THREAD_ID,
-              options: fetchOptions(limit, cursor, direction),
-              api,
-              builders: builders(),
+              for (;;) {
+                pageCount += 1;
+                if (pageCount > maxPages) {
+                  throw new Error('paging did not terminate');
+                }
+                const result = await fetchMessages({
+                  threadId: fixture.threadId,
+                  options: fetchOptions(limit, cursor, direction),
+                  subject,
+                  builders: builders(),
+                });
+
+                expect(result.messages.length).toBeLessThanOrEqual(limit);
+
+                const ids = result.messages.map((message) => message.id);
+                const sortedByDate = [...result.messages].sort(
+                  (a, b) =>
+                    a.metadata.dateSent.getTime() -
+                    b.metadata.dateSent.getTime()
+                );
+                expect(ids).toEqual(sortedByDate.map((message) => message.id));
+
+                for (const id of ids) {
+                  seenIds.add(id);
+                }
+
+                if (result.nextCursor === undefined) {
+                  break;
+                }
+                cursor = result.nextCursor;
+              }
+
+              // root + every comment, exactly once.
+              expect(seenIds.size).toBe(commentCount + 1);
+              expect(seenIds.has(fixture.rootMessageId)).toBe(true);
+              for (let index = 0; index < commentCount; index += 1) {
+                expect(
+                  seenIds.has(
+                    fixture.commentMessageId(fixture.commentId(index))
+                  )
+                ).toBe(true);
+              }
             });
-
-            expect(result.messages.length).toBeLessThanOrEqual(limit);
-
-            const ids = result.messages.map((message) => message.id);
-            const sortedByDate = [...result.messages].sort(
-              (a, b) =>
-                a.metadata.dateSent.getTime() - b.metadata.dateSent.getTime()
-            );
-            expect(ids).toEqual(sortedByDate.map((message) => message.id));
-
-            for (const id of ids) {
-              seenIds.add(id);
-            }
-
-            if (result.nextCursor === undefined) {
-              break;
-            }
-            cursor = result.nextCursor;
           }
-
-          // root + every comment, exactly once.
-          expect(seenIds.size).toBe(commentCount + 1);
-          expect(
-            seenIds.has(
-              encodeMessageId({ kind: 'issue', host: HOST, issueId: ISSUE_ID })
-            )
-          ).toBe(true);
-          for (let commentId = 1; commentId <= commentCount; commentId += 1) {
-            expect(
-              seenIds.has(
-                encodeMessageId({
-                  kind: 'comment',
-                  host: HOST,
-                  issueId: ISSUE_ID,
-                  commentId,
-                })
-              )
-            ).toBe(true);
-          }
-        });
+        }
       }
-    }
+    });
   }
 
   it('backward paging ends with a page holding the issue body', async () => {
     const api = apiWith(4);
+    const subject = subjectOf(api, ISSUE_REF);
     let cursor: string | undefined;
     let lastPageMessages: Awaited<
       ReturnType<typeof fetchMessages>
@@ -202,7 +364,7 @@ describe('fetchMessages (§7.1 property sweep)', () => {
       const result = await fetchMessages({
         threadId: THREAD_ID,
         options: fetchOptions(2, cursor, 'backward'),
-        api,
+        subject,
         builders: builders(),
       });
       lastPageMessages = result.messages;
@@ -212,8 +374,33 @@ describe('fetchMessages (§7.1 property sweep)', () => {
       cursor = result.nextCursor;
     }
     expect(lastPageMessages).toHaveLength(1);
-    expect(lastPageMessages[0]?.id).toBe(
-      encodeMessageId({ kind: 'issue', host: HOST, issueId: ISSUE_ID })
+    expect(lastPageMessages[0]?.id).toBe(ISSUE_FIXTURE.rootMessageId);
+  });
+
+  it('backward paging of a pull request ends with a page holding its body', async () => {
+    const api = pullRequestApiWith(4);
+    const subject = subjectOf(api, PULL_REQUEST_REF);
+    let cursor: string | undefined;
+    let lastPageMessages: Awaited<
+      ReturnType<typeof fetchMessages>
+    >['messages'] = [];
+    for (;;) {
+      const result = await fetchMessages({
+        threadId: PULL_REQUEST_THREAD_ID,
+        options: fetchOptions(2, cursor, 'backward'),
+        subject,
+        builders: builders(),
+      });
+      lastPageMessages = result.messages;
+      if (result.nextCursor === undefined) {
+        break;
+      }
+      cursor = result.nextCursor;
+    }
+    expect(lastPageMessages).toHaveLength(1);
+    expect(lastPageMessages[0]?.id).toBe(PULL_REQUEST_FIXTURE.rootMessageId);
+    expect(lastPageMessages[0]?.text).toContain(
+      'Retry a 429 with the reset header'
     );
   });
 
@@ -222,25 +409,24 @@ describe('fetchMessages (§7.1 property sweep)', () => {
     const result = await fetchMessages({
       threadId: THREAD_ID,
       options: { limit: 3, direction: 'forward' },
-      api,
+      subject: subjectOf(api, ISSUE_REF),
       builders: builders(),
     });
-    expect(result.messages[0]?.id).toBe(
-      encodeMessageId({ kind: 'issue', host: HOST, issueId: ISSUE_ID })
-    );
+    expect(result.messages[0]?.id).toBe(ISSUE_FIXTURE.rootMessageId);
     // limit 3, one slot for the root, so at most 2 comments follow.
     expect(result.messages.length).toBeLessThanOrEqual(3);
   });
 
   it('every comment appears exactly once across all pages', async () => {
     const api = apiWith(7);
+    const subject = subjectOf(api, ISSUE_REF);
     const seen = new Set<string>();
     let cursor: string | undefined;
     for (;;) {
       const result = await fetchMessages({
         threadId: THREAD_ID,
         options: fetchOptions(3, cursor, 'backward'),
-        api,
+        subject,
         builders: builders(),
       });
       for (const message of result.messages) {
@@ -260,14 +446,7 @@ describe('fetchMessages REST comment mapping', () => {
   it('a comment edited on Backlog reports edited and editedAt', async () => {
     const editedAt = new Date('2026-01-02T00:00:00Z');
     const api = createInMemoryBacklogApi({
-      projects: [
-        {
-          id: PROJECT_ID,
-          projectKey: 'PROJECT',
-          name: 'Project',
-          textFormattingRule: 'markdown',
-        },
-      ],
+      projects: [PROJECT],
       issues: [baseIssue()],
       comments: [
         {
@@ -276,7 +455,7 @@ describe('fetchMessages REST comment mapping', () => {
           content: 'Edited content',
           changeLog: [],
           createdUser: ALICE,
-          created: new Date('2026-01-01T00:00:00Z'),
+          created: ROOT_CREATED,
           updated: editedAt,
           stars: [],
         },
@@ -286,7 +465,7 @@ describe('fetchMessages REST comment mapping', () => {
     const result = await fetchMessages({
       threadId: THREAD_ID,
       options: { limit: 2, direction: 'backward' },
-      api,
+      subject: subjectOf(api, ISSUE_REF),
       builders: builders(),
     });
 
@@ -302,29 +481,23 @@ describe('fetchMessages REST comment mapping', () => {
     const result = await fetchMessages({
       threadId: THREAD_ID,
       options: { limit: 1, direction: 'backward' },
-      api,
+      subject: subjectOf(api, ISSUE_REF),
       builders: builders(),
     });
     const root = result.messages.find(
-      (message) =>
-        message.id ===
-        encodeMessageId({ kind: 'issue', host: HOST, issueId: ISSUE_ID })
+      (message) => message.id === ISSUE_FIXTURE.rootMessageId
     );
     expect(root?.metadata.edited).toBe(false);
   });
 });
 
 describe('fetchMessage', () => {
-  it('returns the issue root for an :i id', async () => {
+  it('returns the issue root for an :r id', async () => {
     const api = apiWith(2);
     const message = await fetchMessage({
       threadId: THREAD_ID,
-      messageId: encodeMessageId({
-        kind: 'issue',
-        host: HOST,
-        issueId: ISSUE_ID,
-      }),
-      api,
+      messageId: ISSUE_FIXTURE.rootMessageId,
+      subject: subjectOf(api, ISSUE_REF),
       builders: builders(),
     });
     expect(message?.text).toContain('Deploy fails on the staging space');
@@ -334,13 +507,8 @@ describe('fetchMessage', () => {
     const api = apiWith(2);
     const message = await fetchMessage({
       threadId: THREAD_ID,
-      messageId: encodeMessageId({
-        kind: 'comment',
-        host: HOST,
-        issueId: ISSUE_ID,
-        commentId: 1,
-      }),
-      api,
+      messageId: ISSUE_FIXTURE.commentMessageId(1),
+      subject: subjectOf(api, ISSUE_REF),
       builders: builders(),
     });
     expect(message?.text).toBe('Comment 1');
@@ -351,12 +519,12 @@ describe('fetchMessage', () => {
     const message = await fetchMessage({
       threadId: THREAD_ID,
       messageId: encodeMessageId({
-        kind: 'comment',
         host: HOST,
-        issueId: 9999,
+        subject: { kind: 'issue', issueId: 9999 },
+        part: 'comment',
         commentId: 1,
       }),
-      api,
+      subject: subjectOf(api, ISSUE_REF),
       builders: builders(),
     });
     expect(message).toBeNull();
@@ -367,12 +535,12 @@ describe('fetchMessage', () => {
     const message = await fetchMessage({
       threadId: THREAD_ID,
       messageId: encodeMessageId({
-        kind: 'update',
         host: HOST,
-        issueId: ISSUE_ID,
+        subject: ISSUE_REF,
+        part: 'update',
         created: '2026-09-03T04:05:06Z',
       }),
-      api,
+      subject: subjectOf(api, ISSUE_REF),
       builders: builders(),
     });
     expect(message).toBeNull();
@@ -382,23 +550,47 @@ describe('fetchMessage', () => {
     const api = apiWith(2);
     const message = await fetchMessage({
       threadId: THREAD_ID,
-      messageId: encodeMessageId({
-        kind: 'comment',
-        host: HOST,
-        issueId: ISSUE_ID,
-        commentId: 999,
-      }),
-      api,
+      messageId: ISSUE_FIXTURE.commentMessageId(999),
+      subject: subjectOf(api, ISSUE_REF),
       builders: builders(),
     });
     expect(message).toBeNull();
+  });
+
+  it('a single pull request comment is fetched through a one-element window', async () => {
+    const api = pullRequestApiWith(4);
+    const windows: ListCommentsOptions[] = [];
+    const recording: BacklogApi = {
+      ...api,
+      listPullRequestComments(ref, options) {
+        windows.push(options);
+        return api.listPullRequestComments(ref, options);
+      },
+    };
+    const commentId = PULL_REQUEST_FIXTURE.commentId(1);
+
+    const message = await fetchMessage({
+      threadId: PULL_REQUEST_THREAD_ID,
+      messageId: PULL_REQUEST_FIXTURE.commentMessageId(commentId),
+      subject: subjectOf(recording, PULL_REQUEST_REF),
+      builders: builders(),
+    });
+
+    expect(message?.text).toBe('Comment 2');
+    expect(windows).toEqual([
+      { minId: commentId - 1, maxId: commentId + 1, count: 1, order: 'desc' },
+    ]);
   });
 });
 
 describe('fetchThread', () => {
   it('resolves the issue as a ThreadInfo', async () => {
     const api = apiWith(0);
-    const thread = await fetchThread({ threadId: THREAD_ID, api });
+    const thread = await fetchThread({
+      threadId: THREAD_ID,
+      subject: subjectOf(api, ISSUE_REF),
+      names: {},
+    });
     expect(thread).toMatchObject({
       id: THREAD_ID,
       channelId: CHANNEL_ID,
@@ -410,5 +602,135 @@ describe('fetchThread', () => {
       summary: 'Deploy fails on the staging space',
       url: `https://${HOST}/view/PROJECT-1`,
     });
+  });
+});
+
+describe('fetchSubject', () => {
+  it('the subject of a pull request comment is the pull request', async () => {
+    const api = pullRequestApiWith(1);
+    const subject = subjectOf(api, PULL_REQUEST_REF);
+    const commentId = PULL_REQUEST_FIXTURE.commentId(0);
+    const message = await fetchMessage({
+      threadId: PULL_REQUEST_THREAD_ID,
+      messageId: PULL_REQUEST_FIXTURE.commentMessageId(commentId),
+      subject,
+      builders: builders(),
+    });
+    if (message === null) {
+      throw new Error('the pull request comment was not returned');
+    }
+
+    const resolved = await fetchSubject({
+      raw: message.raw,
+      subject,
+      names: { projectKey: 'PROJECT', repositoryName: REPOSITORY_NAME },
+      threadId: PULL_REQUEST_THREAD_ID,
+    });
+
+    expect(resolved).toMatchObject({
+      id: PULL_REQUEST_THREAD_ID,
+      type: 'pull_request',
+      title: 'Retry a 429 with the reset header',
+      status: 'Open',
+      url: `https://${HOST}/git/PROJECT/${REPOSITORY_NAME}/pullRequests/${PULL_REQUEST_NUMBER}`,
+    });
+    expect(resolved.labels).toEqual(['Open', 'main ← retry-429']);
+  });
+});
+
+describe('markAsRead', () => {
+  const silentLogger = { debug: () => undefined, info: () => undefined };
+
+  it('a message whose raw names another subject is rejected', async () => {
+    const api = apiWith(1);
+    const commentId = 1;
+
+    // The two ids agree on the comment **number** and disagree on the
+    // subject: pull-request and issue comment ids are separate sequences and
+    // may collide (measured 2026-09-06).
+    const raw: BacklogRawMessage = {
+      kind: 'comment',
+      host: HOST,
+      projectId: PROJECT_ID,
+      subject: PULL_REQUEST_REF,
+      comment: {
+        id: commentId,
+        content: 'Any progress?',
+        createdUser: { id: ALICE.id, name: ALICE.name, userId: ALICE.userId },
+        created: ROOT_CREATED.toISOString(),
+        updated: ROOT_CREATED.toISOString(),
+        changeLog: [],
+        stars: [],
+      },
+      changes: [],
+    };
+
+    await expect(
+      markAsRead({
+        threadId: THREAD_ID,
+        messageId: ISSUE_FIXTURE.commentMessageId(commentId),
+        message: new MessageCtor({
+          id: ISSUE_FIXTURE.commentMessageId(commentId),
+          threadId: THREAD_ID,
+          text: 'Any progress?',
+          raw,
+          formatted: { type: 'root', children: [] },
+          author: {
+            userId: `${HOST}:${ALICE.id}`,
+            userName: 'alice',
+            fullName: ALICE.name,
+            isMe: false,
+            isBot: false,
+          },
+          metadata: { dateSent: ROOT_CREATED, edited: false },
+          attachments: [],
+          isMention: false,
+        }),
+        api,
+        subject: subjectOf(api, ISSUE_REF),
+        logger: silentLogger,
+      })
+    ).rejects.toThrow(ValidationError);
+  });
+});
+
+describe('rehydrateAttachment', () => {
+  const configuredHosts = new Set([HOST]);
+  const pullRequestAttachmentUrl = (host: string) =>
+    `https://${host}/api/v2/projects/${PROJECT_ID}/git/repositories/${REPOSITORY_ID}/pullRequests/${PULL_REQUEST_NUMBER}/attachments/4242`;
+
+  it('a serialised pull request attachment regains fetchData for a configured host', async () => {
+    const downloaded: { host: string; attachmentId: number }[] = [];
+    const rehydrated = rehydrateAttachment({
+      attachment: {
+        type: 'file',
+        name: 'trace.log',
+        url: pullRequestAttachmentUrl(HOST),
+      },
+      configuredHosts,
+      download: (host, location) => {
+        downloaded.push({ host, attachmentId: location.attachmentId });
+        return Promise.resolve(Buffer.from('trace'));
+      },
+    });
+
+    const data = await rehydrated.fetchData?.();
+    expect(data?.toString()).toBe('trace');
+    expect(downloaded).toEqual([{ host: HOST, attachmentId: 4242 }]);
+  });
+
+  it('a pull request attachment url on a foreign host is returned unchanged', () => {
+    const attachment: Attachment = {
+      type: 'file',
+      name: 'trace.log',
+      url: pullRequestAttachmentUrl(OTHER_HOST),
+    };
+    expect(
+      rehydrateAttachment({
+        attachment,
+        configuredHosts,
+        download: () => Promise.reject(new Error('no download expected')),
+      })
+    ).toEqual(attachment);
   });
 });

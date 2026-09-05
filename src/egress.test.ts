@@ -9,18 +9,27 @@ import {
   extractNotifiedUserId,
   postComment,
   removeReaction,
-  requireCommentId,
+  requireCommentInThread,
   uploadFiles,
 } from './egress';
 import { createInMemoryBacklogApi } from './client/in-memory';
 import { converterFor } from './format/fallback';
 import { encodeMessageId } from './ids';
-import type { BacklogPostableExtras } from './types';
+import { subjectClientFor } from './subject/client';
+import type { InMemoryBacklogApi } from './client/in-memory';
+import type { BacklogComment } from './client/port';
+import type { SubjectClient } from './subject/client';
+import type { BacklogPostableExtras, BacklogSubjectRef } from './types';
 import type { PostableMarkdown } from 'chat';
 
 const HOST = 'example.backlog.com';
 const PROJECT_ID = 500;
 const ISSUE_ID = 8001;
+const REPOSITORY_ID = 700;
+const PULL_REQUEST_NUMBER = 12;
+const PULL_REQUEST_ID = 90001;
+const PULL_REQUEST_KEY = `${REPOSITORY_ID}:${PULL_REQUEST_NUMBER}`;
+const PULL_REQUEST_COMMENT_ID = 7000001;
 const BOT_USER_ID = 999;
 const ALICE = { id: 100, userId: 'alice', name: 'Alice', mailAddress: null };
 const BOB = { id: 101, userId: 'bob', name: 'Bob', mailAddress: null };
@@ -30,6 +39,16 @@ const CHATBOT = {
   name: 'Chatbot',
   mailAddress: null,
 };
+
+const ISSUE: BacklogSubjectRef = { kind: 'issue', issueId: ISSUE_ID };
+const PULL_REQUEST: BacklogSubjectRef = {
+  kind: 'pullRequest',
+  repositoryId: REPOSITORY_ID,
+  number: PULL_REQUEST_NUMBER,
+};
+
+const THREAD_ID = `backlog:${HOST}:${PROJECT_ID}:issue:${ISSUE_ID}`;
+const PULL_REQUEST_THREAD_ID = `backlog:${HOST}:${PROJECT_ID}:pr:${REPOSITORY_ID}:${PULL_REQUEST_NUMBER}`;
 
 function api(overrides: Parameters<typeof createInMemoryBacklogApi>[0] = {}) {
   return createInMemoryBacklogApi({
@@ -57,7 +76,49 @@ function api(overrides: Parameters<typeof createInMemoryBacklogApi>[0] = {}) {
         updated: new Date('2026-01-01T00:00:00Z'),
       },
     ],
+    repositories: [
+      {
+        id: REPOSITORY_ID,
+        projectId: PROJECT_ID,
+        name: 'example-repo',
+        description: '',
+      },
+    ],
+    pullRequests: [
+      {
+        id: PULL_REQUEST_ID,
+        projectId: PROJECT_ID,
+        repositoryId: REPOSITORY_ID,
+        number: PULL_REQUEST_NUMBER,
+        summary: 'Fix the deploy',
+        description: '',
+        base: 'main',
+        branch: 'fix-deploy',
+        status: { id: 1, name: 'Open' },
+        assignee: null,
+        issue: null,
+        baseCommit: null,
+        branchCommit: null,
+        mergeCommit: null,
+        closeAt: null,
+        mergeAt: null,
+        createdUser: ALICE,
+        created: new Date('2026-01-01T00:00:00Z'),
+        updated: new Date('2026-01-01T00:00:00Z'),
+        stars: [],
+      },
+    ],
     ...overrides,
+  });
+}
+
+function subjectOf(
+  backlogApi: InMemoryBacklogApi,
+  ref: BacklogSubjectRef
+): SubjectClient {
+  return subjectClientFor(backlogApi, ref, {
+    host: HOST,
+    projectId: PROJECT_ID,
   });
 }
 
@@ -68,43 +129,103 @@ function markdownConverter() {
   });
 }
 
-describe('requireCommentId', () => {
+function pullRequestComment(
+  overrides: Partial<BacklogComment> = {}
+): BacklogComment {
+  return {
+    id: PULL_REQUEST_COMMENT_ID,
+    content: 'Any progress?',
+    changeLog: [],
+    createdUser: ALICE,
+    created: new Date('2026-01-01T00:00:00Z'),
+    updated: new Date('2026-01-01T00:00:00Z'),
+    stars: [],
+    ...overrides,
+  };
+}
+
+describe('requireCommentInThread', () => {
   it('the issue body cannot be edited', () => {
-    const issueId = encodeMessageId({
-      kind: 'issue',
+    const rootId = encodeMessageId({
       host: HOST,
-      issueId: ISSUE_ID,
+      subject: ISSUE,
+      part: 'root',
     });
-    expect(() => requireCommentId(issueId, 'edited')).toThrow(ValidationError);
-    expect(() => requireCommentId(issueId, 'edited')).toThrow(
+    expect(() => requireCommentInThread(THREAD_ID, rootId, 'edited')).toThrow(
+      ValidationError
+    );
+    expect(() => requireCommentInThread(THREAD_ID, rootId, 'edited')).toThrow(
       /is not a comment and cannot be edited/
     );
   });
 
   it('a fieldchange update with no comment cannot be deleted', () => {
     const updateId = encodeMessageId({
-      kind: 'update',
       host: HOST,
-      issueId: ISSUE_ID,
+      subject: ISSUE,
+      part: 'update',
       created: '2026-09-03T04:05:06Z',
     });
-    expect(() => requireCommentId(updateId, 'deleted')).toThrow(
-      ValidationError
-    );
+    expect(() =>
+      requireCommentInThread(THREAD_ID, updateId, 'deleted')
+    ).toThrow(ValidationError);
   });
 
-  it('a comment id resolves its host, issue and comment', () => {
-    const commentId = encodeMessageId({
-      kind: 'comment',
+  it.each([
+    {
+      label: 'issue',
+      threadId: THREAD_ID,
+      subject: ISSUE,
+      commentId: 42,
+      projectId: PROJECT_ID,
+    },
+    {
+      label: 'pull request',
+      threadId: PULL_REQUEST_THREAD_ID,
+      subject: PULL_REQUEST,
+      commentId: PULL_REQUEST_COMMENT_ID,
+      projectId: PROJECT_ID,
+    },
+  ])(
+    'a comment id resolves its host, project, subject and comment on a $label thread',
+    ({ threadId, subject, commentId, projectId }) => {
+      const messageId = encodeMessageId({
+        host: HOST,
+        subject,
+        part: 'comment',
+        commentId,
+      });
+      expect(requireCommentInThread(threadId, messageId, 'starred')).toEqual({
+        host: HOST,
+        projectId,
+        subject,
+        commentId,
+      });
+    }
+  );
+
+  it('a message id naming another subject is rejected', () => {
+    const messageId = encodeMessageId({
       host: HOST,
-      issueId: ISSUE_ID,
+      subject: PULL_REQUEST,
+      part: 'comment',
+      commentId: PULL_REQUEST_COMMENT_ID,
+    });
+    expect(() =>
+      requireCommentInThread(THREAD_ID, messageId, 'deleted')
+    ).toThrow(/does not name a message in thread/);
+  });
+
+  it('a message id naming another space is rejected', () => {
+    const messageId = encodeMessageId({
+      host: 'other.backlog.jp',
+      subject: ISSUE,
+      part: 'comment',
       commentId: 42,
     });
-    expect(requireCommentId(commentId, 'starred')).toEqual({
-      host: HOST,
-      issueId: ISSUE_ID,
-      commentId: 42,
-    });
+    expect(() =>
+      requireCommentInThread(THREAD_ID, messageId, 'edited')
+    ).toThrow(/does not name a message in thread/);
   });
 });
 
@@ -148,14 +269,16 @@ describe('postComment', () => {
     const result = await postComment({
       host: HOST,
       projectId: PROJECT_ID,
-      issueId: ISSUE_ID,
+      subject: subjectOf(backlogApi, ISSUE),
       api: backlogApi,
       converter: markdownConverter(),
       message: { markdown: 'Any progress?' },
       toBuffer: () => Promise.reject(new Error('no files expected')),
     });
 
-    expect(result.threadId).toBe(`backlog:${HOST}:${PROJECT_ID}:${ISSUE_ID}`);
+    expect(result.threadId).toBe(
+      `backlog:${HOST}:${PROJECT_ID}:issue:${ISSUE_ID}`
+    );
     expect(backlogApi.state.recordedInputs).toContainEqual({
       method: 'addComment',
       issueId: ISSUE_ID,
@@ -163,12 +286,40 @@ describe('postComment', () => {
     });
   });
 
+  it('a reply on a pull request thread is posted as a pull request comment', async () => {
+    const backlogApi = api();
+    const result = await postComment({
+      host: HOST,
+      projectId: PROJECT_ID,
+      subject: subjectOf(backlogApi, PULL_REQUEST),
+      api: backlogApi,
+      converter: markdownConverter(),
+      message: { markdown: 'Any progress?' },
+      toBuffer: () => Promise.reject(new Error('no files expected')),
+    });
+
+    expect(result.threadId).toBe(
+      `backlog:${HOST}:${PROJECT_ID}:pr:${REPOSITORY_ID}:${PULL_REQUEST_NUMBER}`
+    );
+    expect(backlogApi.state.recordedInputs).toEqual([
+      {
+        method: 'addPullRequestComment',
+        ref: {
+          projectId: PROJECT_ID,
+          repositoryId: REPOSITORY_ID,
+          number: PULL_REQUEST_NUMBER,
+        },
+        input: { content: 'Any progress?' },
+      },
+    ]);
+  });
+
   it('files are uploaded and attached to the comment', async () => {
     const backlogApi = api();
     await postComment({
       host: HOST,
       projectId: PROJECT_ID,
-      issueId: ISSUE_ID,
+      subject: subjectOf(backlogApi, ISSUE),
       api: backlogApi,
       converter: markdownConverter(),
       message: {
@@ -195,7 +346,7 @@ describe('postComment', () => {
       postComment({
         host: HOST,
         projectId: PROJECT_ID,
-        issueId: ISSUE_ID,
+        subject: subjectOf(backlogApi, ISSUE),
         api: backlogApi,
         converter: markdownConverter(),
         message: 'hi',
@@ -211,7 +362,7 @@ describe('postComment', () => {
     await postComment({
       host: HOST,
       projectId: PROJECT_ID,
-      issueId: ISSUE_ID,
+      subject: subjectOf(backlogApi, ISSUE),
       api: backlogApi,
       converter: markdownConverter(),
       message,
@@ -240,17 +391,16 @@ describe('editComment', () => {
     const result = await editComment({
       host: HOST,
       projectId: PROJECT_ID,
-      issueId: ISSUE_ID,
+      subject: subjectOf(backlogApi, ISSUE),
       commentId: 1,
-      api: backlogApi,
       converter: markdownConverter(),
       message: { markdown: 'Edited' },
     });
     expect(result.id).toBe(
       encodeMessageId({
-        kind: 'comment',
         host: HOST,
-        issueId: ISSUE_ID,
+        subject: ISSUE,
+        part: 'comment',
         commentId: 1,
       })
     );
@@ -259,15 +409,53 @@ describe('editComment', () => {
     );
   });
 
+  it('editing a pull request comment updates it through the pull request endpoint', async () => {
+    const backlogApi = api({
+      pullRequestComments: {
+        [PULL_REQUEST_KEY]: [
+          pullRequestComment({ content: 'Original', createdUser: CHATBOT }),
+        ],
+      },
+    });
+    const result = await editComment({
+      host: HOST,
+      projectId: PROJECT_ID,
+      subject: subjectOf(backlogApi, PULL_REQUEST),
+      commentId: PULL_REQUEST_COMMENT_ID,
+      converter: markdownConverter(),
+      message: { markdown: 'Edited' },
+    });
+    expect(result.id).toBe(
+      encodeMessageId({
+        host: HOST,
+        subject: PULL_REQUEST,
+        part: 'comment',
+        commentId: PULL_REQUEST_COMMENT_ID,
+      })
+    );
+    expect(backlogApi.state.recordedInputs).toContainEqual({
+      method: 'updatePullRequestComment',
+      ref: {
+        projectId: PROJECT_ID,
+        repositoryId: REPOSITORY_ID,
+        number: PULL_REQUEST_NUMBER,
+      },
+      commentId: PULL_REQUEST_COMMENT_ID,
+      content: 'Edited',
+    });
+    expect(
+      backlogApi.state.pullRequestComments[PULL_REQUEST_KEY]?.[0]?.content
+    ).toBe('Edited');
+  });
+
   it('rejects files on an edit', async () => {
     const backlogApi = api();
     await expect(
       editComment({
         host: HOST,
         projectId: PROJECT_ID,
-        issueId: ISSUE_ID,
+        subject: subjectOf(backlogApi, ISSUE),
         commentId: 1,
-        api: backlogApi,
         converter: markdownConverter(),
         message: {
           markdown: 'x',
@@ -287,9 +475,8 @@ describe('editComment', () => {
       editComment({
         host: HOST,
         projectId: PROJECT_ID,
-        issueId: ISSUE_ID,
+        subject: subjectOf(backlogApi, ISSUE),
         commentId: 1,
-        api: backlogApi,
         converter: markdownConverter(),
         message,
       })
@@ -326,15 +513,15 @@ describe('addReaction', () => {
   it('adding a reaction twice stars the comment once', async () => {
     const backlogApi = api({ comments: [seededComment()] });
     await addReaction({
-      issueId: ISSUE_ID,
-      commentId: 1,
       api: backlogApi,
+      subject: subjectOf(backlogApi, ISSUE),
+      commentId: 1,
       botUserId: BOT_USER_ID,
     });
     await addReaction({
-      issueId: ISSUE_ID,
-      commentId: 1,
       api: backlogApi,
+      subject: subjectOf(backlogApi, ISSUE),
+      commentId: 1,
       botUserId: BOT_USER_ID,
     });
 
@@ -343,6 +530,29 @@ describe('addReaction', () => {
         (input) => input.method === 'addStar'
       )
     ).toEqual([{ method: 'addStar', target: { commentId: 1 } }]);
+  });
+
+  it('reacting to a pull request comment stars it as a pull request comment', async () => {
+    const backlogApi = api({
+      pullRequestComments: { [PULL_REQUEST_KEY]: [pullRequestComment()] },
+    });
+    await addReaction({
+      api: backlogApi,
+      subject: subjectOf(backlogApi, PULL_REQUEST),
+      commentId: PULL_REQUEST_COMMENT_ID,
+      botUserId: BOT_USER_ID,
+    });
+
+    expect(
+      backlogApi.state.recordedInputs.filter(
+        (input) => input.method === 'addStar'
+      )
+    ).toEqual([
+      {
+        method: 'addStar',
+        target: { pullRequestCommentId: PULL_REQUEST_COMMENT_ID },
+      },
+    ]);
   });
 });
 
@@ -381,9 +591,9 @@ describe('removeReaction', () => {
     });
 
     await removeReaction({
-      issueId: ISSUE_ID,
-      commentId: 1,
       api: backlogApi,
+      subject: subjectOf(backlogApi, ISSUE),
+      commentId: 1,
       botUserId: BOT_USER_ID,
     });
 
@@ -417,9 +627,9 @@ describe('removeReaction', () => {
     });
 
     await removeReaction({
-      issueId: ISSUE_ID,
-      commentId: 1,
       api: backlogApi,
+      subject: subjectOf(backlogApi, ISSUE),
+      commentId: 1,
       botUserId: BOT_USER_ID,
     });
 
@@ -464,9 +674,9 @@ describe('removeReaction', () => {
     });
 
     await removeReaction({
-      issueId: ISSUE_ID,
-      commentId: 1,
       api: backlogApi,
+      subject: subjectOf(backlogApi, ISSUE),
+      commentId: 1,
       botUserId: BOT_USER_ID,
     });
 

@@ -18,7 +18,18 @@ import {
   DISPATCHED_ACTIVITY_TYPES,
   parseActivity,
   parseEnvelope,
+  subjectOfActivity,
 } from './payload';
+
+import type { RecognisedActivity } from './payload';
+
+function activity(type: number, payload: object): RecognisedActivity {
+  const result = parseActivity(type, payload);
+  if (!('activity' in result)) {
+    throw new Error(`fixture failed to validate as type ${type}`);
+  }
+  return result.activity;
+}
 
 describe('parseEnvelope', () => {
   it('extracts the type discriminator from every recognised activity', () => {
@@ -114,5 +125,27 @@ describe('parseActivity', () => {
     delete content['key_id'];
 
     expect('activity' in parseActivity(3, payload)).toBe(true);
+  });
+});
+
+describe('subjectOfActivity', () => {
+  it('reports every issue activity as being about the issue in content.id', () => {
+    for (const [type, payload] of [
+      [1, issueCreated()],
+      [2, statusChanged()],
+      [3, issueCommented()],
+      [4, issueDeleted()],
+    ] as const) {
+      expect(subjectOfActivity(activity(type, payload))).toEqual({
+        kind: 'issue',
+        issueId: 8001,
+      });
+    }
+  });
+
+  it('reads the id from the activity, not from a fixture default', () => {
+    expect(
+      subjectOfActivity(activity(3, issueCommented({ issueId: 8002 })))
+    ).toEqual({ kind: 'issue', issueId: 8002 });
   });
 });

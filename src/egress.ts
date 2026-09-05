@@ -5,24 +5,30 @@ import {
 } from '@chat-adapter/shared';
 import { parseMarkdown, root, toPlainText } from 'chat';
 
-import { decodeMessageId, encodeMessageId } from './ids';
-import { toRawIssue } from './reads';
+import {
+  decodeMessageId,
+  decodeThreadId,
+  encodeMessageId,
+  encodeThreadId,
+} from './ids';
+import { addressesSameSubject } from './reads';
+import { toRawComment, toRawIssue } from './subject/raw';
 import {
   backlogChannelPostableExtrasSchema,
   backlogPostableExtrasSchema,
 } from './types';
 
 import type { FallbackFormatConverter } from './format/fallback';
+import type { SubjectClient } from './subject/client';
 import type {
   AddCommentInput,
   BacklogApi,
   BacklogIssue,
-  BacklogIssueComment,
   BacklogIssueType,
   BacklogPriority,
   CreateIssueInput,
 } from './client/port';
-import type { BacklogRawMessage } from './types';
+import type { BacklogRawMessage, BacklogSubjectRef } from './types';
 import type {
   AdapterPostableMessage,
   Content,
@@ -33,26 +39,60 @@ import type {
 } from 'chat';
 
 /**
- * Rejects `:i` (the issue body) and `:u:` (a fieldchange update with no
- * comment) for any operation that maps to a Backlog comment endpoint
- * (docs/specs/adapter.md §6 "Non-comment message ids", D12). Backlog *can*
- * edit an issue body through a different endpoint, but "edit what the bot
- * posted" must never silently rewrite a human's issue.
+ * The comment `messageId` names inside `threadId`, for any operation that maps
+ * to a Backlog comment endpoint (docs/specs/adapter.md §6). Two ids in, one
+ * set of coordinates out:
+ *
+ * - A message id naming another host or another subject is a
+ *   `ValidationError`. The two ids are independent inputs from the caller and
+ *   nothing outside the caller guarantees they agree, so the disagreement is
+ *   reported rather than resolved — `fetchMessage` answers the same question
+ *   with `null` (§7.2) through the same predicate.
+ * - `:r` (the issue or pull-request body) and `:u:` (a fieldchange update with
+ *   no comment) are rejected (§6 "Non-comment message ids", D12). Backlog
+ *   *can* edit an issue body through a different endpoint, but "edit what the
+ *   bot posted" must never silently rewrite a human's issue.
+ *
+ * The subject travels out from the **thread**, never from the message id, even
+ * though the two are now known to agree: §6's preamble picks the subject
+ * client the thread id's `subject` selects, and taking it from the message id
+ * is what let `deleteMessage` on a pull-request thread reach the issue
+ * endpoints and slip past the D-PR3 guard that lives inside the pull-request
+ * subject client. It travels whole rather than as the coordinates of one kind,
+ * so the caller reaches its `SubjectClient` without re-deriving what it is
+ * holding (D-PR2).
  */
-export function requireCommentId(
+export function requireCommentInThread(
+  threadId: string,
   messageId: string,
   action: 'edited' | 'deleted' | 'starred'
-): { host: string; issueId: number; commentId: number } {
+): {
+  host: string;
+  projectId: number;
+  subject: BacklogSubjectRef;
+  commentId: number;
+} {
+  const thread = decodeThreadId(threadId);
   const decoded = decodeMessageId(messageId);
-  if (decoded.kind !== 'comment') {
+  if (
+    decoded.host !== thread.host ||
+    !addressesSameSubject(thread, decoded.subject)
+  ) {
+    throw new ValidationError(
+      'backlog',
+      `${messageId} does not name a message in thread ${threadId} and cannot be ${action}`
+    );
+  }
+  if (decoded.part !== 'comment') {
     throw new ValidationError(
       'backlog',
       `${messageId} is not a comment and cannot be ${action}`
     );
   }
   return {
-    host: decoded.host,
-    issueId: decoded.issueId,
+    host: thread.host,
+    projectId: thread.projectId,
+    subject: thread.subject,
     commentId: decoded.commentId,
   };
 }
@@ -382,9 +422,10 @@ export async function createChannelIssue(
     issue = await api.createIssue(buildInput(refreshed));
   }
 
+  const subject: BacklogSubjectRef = { kind: 'issue', issueId: issue.id };
   return {
-    id: encodeMessageId({ kind: 'issue', host, issueId: issue.id }),
-    threadId: `backlog:${host}:${projectId}:${issue.id}`,
+    id: encodeMessageId({ host, subject, part: 'root' }),
+    threadId: encodeThreadId({ host, projectId, subject }),
     raw: { kind: 'issue', host, issue: toRawIssue(issue), changes: [] },
   };
 }
@@ -414,44 +455,15 @@ export async function uploadFiles(
   return attachmentIds;
 }
 
-function toRawComment(
-  projectId: number,
-  host: string,
-  comment: BacklogIssueComment
-): BacklogRawMessage {
-  return {
-    kind: 'comment',
-    host,
-    projectId,
-    comment: {
-      id: comment.id,
-      issueId: comment.issueId,
-      content: comment.content,
-      createdUser: {
-        id: comment.createdUser.id,
-        name: comment.createdUser.name,
-        userId: comment.createdUser.userId,
-      },
-      created: comment.created.toISOString(),
-      updated: comment.updated.toISOString(),
-      changeLog: comment.changeLog.map((change) => ({
-        field: change.field,
-        newValue: change.newValue,
-        oldValue: change.oldValue,
-      })),
-      stars: comment.stars.map((star) => ({
-        id: star.id,
-        presenter: { id: star.presenter.id },
-      })),
-    },
-    changes: [],
-  };
-}
-
 export interface PostCommentInput {
   host: string;
   projectId: number;
-  issueId: number;
+  subject: SubjectClient;
+  /**
+   * Only `POST /space/attachment` is reached through the port here: uploading
+   * is space-level and has no per-subject endpoint, while the comment itself
+   * goes through `subject` so this function has one code path for both kinds.
+   */
   api: BacklogApi;
   converter: FallbackFormatConverter;
   message: AdapterPostableMessage;
@@ -469,7 +481,7 @@ export interface PostCommentInput {
 export async function postComment(
   input: PostCommentInput
 ): Promise<RawMessage<BacklogRawMessage>> {
-  const { host, projectId, issueId, api, converter, message, toBuffer } = input;
+  const { host, projectId, subject, api, converter, message, toBuffer } = input;
 
   const notifiedUserId = extractNotifiedUserId(message);
   const files = extractFiles(message);
@@ -486,26 +498,32 @@ export async function postComment(
     commentInput.attachmentId = attachmentId;
   }
 
-  const comment = await api.addComment(issueId, commentInput);
+  const comment = await subject.addComment(commentInput);
 
   return {
     id: encodeMessageId({
-      kind: 'comment',
       host,
-      issueId,
+      subject: subject.ref,
+      part: 'comment',
       commentId: comment.id,
     }),
-    threadId: `backlog:${host}:${projectId}:${issueId}`,
-    raw: toRawComment(projectId, host, comment),
+    threadId: encodeThreadId({ host, projectId, subject: subject.ref }),
+    raw: {
+      kind: 'comment',
+      host,
+      projectId,
+      subject: subject.ref,
+      comment: toRawComment(comment),
+      changes: [],
+    },
   };
 }
 
 export interface EditCommentInput {
   host: string;
   projectId: number;
-  issueId: number;
+  subject: SubjectClient;
   commentId: number;
-  api: BacklogApi;
   converter: FallbackFormatConverter;
   message: AdapterPostableMessage;
 }
@@ -519,8 +537,7 @@ export interface EditCommentInput {
 export async function editComment(
   input: EditCommentInput
 ): Promise<RawMessage<BacklogRawMessage>> {
-  const { host, projectId, issueId, commentId, api, converter, message } =
-    input;
+  const { host, projectId, subject, commentId, converter, message } = input;
 
   if (extractFiles(message).length > 0) {
     throw new ValidationError(
@@ -536,24 +553,31 @@ export async function editComment(
   }
 
   const content = converter.renderPostable(message);
-  const comment = await api.updateComment(issueId, commentId, content);
+  const comment = await subject.updateComment(commentId, content);
 
   return {
     id: encodeMessageId({
-      kind: 'comment',
       host,
-      issueId,
+      subject: subject.ref,
+      part: 'comment',
       commentId: comment.id,
     }),
-    threadId: `backlog:${host}:${projectId}:${issueId}`,
-    raw: toRawComment(projectId, host, comment),
+    threadId: encodeThreadId({ host, projectId, subject: subject.ref }),
+    raw: {
+      kind: 'comment',
+      host,
+      projectId,
+      subject: subject.ref,
+      comment: toRawComment(comment),
+      changes: [],
+    },
   };
 }
 
 export interface AddReactionInput {
-  issueId: number;
-  commentId: number;
   api: BacklogApi;
+  subject: SubjectClient;
+  commentId: number;
   botUserId: number;
 }
 
@@ -564,21 +588,21 @@ export interface AddReactionInput {
  * every retry or duplicate reaction would add another star.
  */
 export async function addReaction(input: AddReactionInput): Promise<void> {
-  const { issueId, commentId, api, botUserId } = input;
-  const comment = await api.getComment(issueId, commentId);
+  const { api, subject, commentId, botUserId } = input;
+  const comment = await subject.getComment(commentId);
   const alreadyStarred = comment.stars.some(
     (star) => star.presenter.id === botUserId
   );
   if (alreadyStarred) {
     return;
   }
-  await api.addStar({ commentId });
+  await api.addStar(subject.starTarget(commentId));
 }
 
 export interface RemoveReactionInput {
-  issueId: number;
-  commentId: number;
   api: BacklogApi;
+  subject: SubjectClient;
+  commentId: number;
   botUserId: number;
 }
 
@@ -591,8 +615,8 @@ export interface RemoveReactionInput {
 export async function removeReaction(
   input: RemoveReactionInput
 ): Promise<void> {
-  const { issueId, commentId, api, botUserId } = input;
-  const comment = await api.getComment(issueId, commentId);
+  const { api, subject, commentId, botUserId } = input;
+  const comment = await subject.getComment(commentId);
   const ownStars = comment.stars.filter(
     (star) => star.presenter.id === botUserId
   );

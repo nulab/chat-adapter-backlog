@@ -19,8 +19,37 @@ import type {
   IssueCreatedActivity,
   IssueUpdatedOrCommentedActivity,
 } from './payload';
+import type { SubjectClient } from '../subject/client';
+import type { Attachment } from 'chat';
 
-const fetchAttachment = vi.fn(async () => Buffer.alloc(0));
+/**
+ * Only `ref` and `webhookAttachment` are reachable from the webhook path, so
+ * the stub implements those two and leaves the rest of `SubjectClient` to
+ * `src/subject/*.test.ts`. `webhookAttachment` mirrors the issue client's
+ * mapping so the assertions below stay about what the webhook path produces.
+ */
+function issueSubject(
+  fetchAttachment: (
+    issueId: number,
+    attachmentId: number
+  ) => Promise<Buffer> = async () => Buffer.alloc(0)
+): SubjectClient {
+  const ref = { kind: 'issue', issueId: FIXTURE.issueId } as const;
+  return {
+    ref,
+    webhookAttachment: (attachment: {
+      id: number;
+      name: string;
+      size: number;
+    }): Attachment => ({
+      type: 'file',
+      name: attachment.name,
+      size: attachment.size,
+      url: `https://${FIXTURE.host}/api/v2/issues/${ref.issueId}/attachments/${attachment.id}`,
+      fetchData: () => fetchAttachment(ref.issueId, attachment.id),
+    }),
+  } as unknown as SubjectClient;
+}
 
 function input(
   overrides: Partial<BuildInboundMessageInput> = {}
@@ -29,7 +58,7 @@ function input(
     host: FIXTURE.host,
     botUserId: FIXTURE.bot.id,
     botUserName: FIXTURE.bot.name,
-    fetchAttachment,
+    subject: issueSubject(),
     ...overrides,
   };
 }
@@ -66,7 +95,7 @@ describe('buildInboundMessageFields — type 1 Issue Created', () => {
 
     const fields = buildInboundMessageFields(activity, input());
 
-    expect(fields.messageId).toBe(`${FIXTURE.host}:${FIXTURE.issueId}:i`);
+    expect(fields.messageId).toBe(`${FIXTURE.host}:issue:${FIXTURE.issueId}:r`);
     expect(fields.text).toBe('Deploy fails\n\nRepro steps');
     expect(fields.changes).toEqual([]);
   });
@@ -144,7 +173,7 @@ describe('buildInboundMessageFields — type 1 Issue Created', () => {
 
     const fields = buildInboundMessageFields(
       activity,
-      input({ fetchAttachment: fetchAttachmentSpy })
+      input({ subject: issueSubject(fetchAttachmentSpy) })
     );
     const attachment = fields.attachments[0];
     expect(attachment?.fetchData).toBeDefined();
@@ -163,7 +192,9 @@ describe('buildInboundMessageFields — types 2 and 3, comment id present', () =
 
     const fields = buildInboundMessageFields(activity, input());
 
-    expect(fields.messageId).toBe(`${FIXTURE.host}:${FIXTURE.issueId}:c3001`);
+    expect(fields.messageId).toBe(
+      `${FIXTURE.host}:issue:${FIXTURE.issueId}:c3001`
+    );
     expect(fields.text).toBe('Any progress on this?');
     expect(fields.changes).toEqual([]);
   });
@@ -259,9 +290,68 @@ describe('buildInboundMessageFields — type 2 without a comment id', () => {
     const fields = buildInboundMessageFields(activity, input());
 
     expect(fields.messageId).toBe(
-      `${FIXTURE.host}:${FIXTURE.issueId}:u:2026-09-03T04:05:06Z`
+      `${FIXTURE.host}:issue:${FIXTURE.issueId}:u:2026-09-03T04:05:06Z`
     );
     expect(fields.text).toBe('');
+  });
+});
+
+describe('buildInboundMessageFields — the subject the caller resolved', () => {
+  it('builds every id from that subject, whatever kind it is', () => {
+    const pullRequestSubject = {
+      ref: {
+        kind: 'pullRequest',
+        repositoryId: FIXTURE.repositoryId,
+        number: FIXTURE.pullRequestNumber,
+      },
+      webhookAttachment: () => {
+        throw new Error('no attachments in this fixture');
+      },
+    } as unknown as SubjectClient;
+
+    const fields = buildInboundMessageFields(
+      commented(issueCommented({ commentId: 7000001 })),
+      input({ subject: pullRequestSubject })
+    );
+
+    expect(fields.messageId).toBe(
+      `${FIXTURE.host}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}:c7000001`
+    );
+  });
+
+  it('maps attachments through the subject rather than assembling a URL itself', () => {
+    const webhookAttachment = vi.fn(
+      (attachment: { id: number; name: string; size: number }): Attachment => ({
+        type: 'file',
+        name: attachment.name,
+        size: attachment.size,
+        url: 'https://example.invalid/mapped-by-the-subject',
+      })
+    );
+    const activity = created(
+      issueCreated({
+        attachments: [{ id: 9001, name: 'trace.log', size: 2048 }],
+      })
+    );
+
+    const fields = buildInboundMessageFields(
+      activity,
+      input({
+        subject: {
+          ref: { kind: 'issue', issueId: FIXTURE.issueId },
+          webhookAttachment,
+        } as unknown as SubjectClient,
+      })
+    );
+
+    expect(webhookAttachment).toHaveBeenCalledWith({
+      id: 9001,
+      name: 'trace.log',
+      size: 2048,
+    });
+    expect(fields.attachments[0]?.url).toBe(
+      'https://example.invalid/mapped-by-the-subject'
+    );
   });
 });
 

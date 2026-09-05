@@ -1,8 +1,8 @@
 /**
  * Public surface of `@nulab/chat-adapter-backlog` (docs/specs/adapter.md §3.1).
  *
- * Four names exist twice in the codebase, and the split is deliberate rather
- * than an oversight, so the barrel has to choose:
+ * Two modules describe the same Backlog objects, and the split is deliberate
+ * rather than an oversight, so the barrel has to choose between them:
  *
  * - `src/client/port.ts` owns the **API domain** types. They carry `Date`
  *   objects and the full `BacklogUserRef`, because that is what the port
@@ -13,21 +13,25 @@
  *   survive the round trip — a `Date` would come back as a string and a
  *   consumer reading `raw` would get a type that lies.
  *
- * `BacklogIssue`, `BacklogComment` and `BacklogChange` are exported as the
- * port's domain types, which is what spec §3.1 lists and what a caller
- * reaching for `adapter.api(host)` needs. The raw-message shapes stay
+ * The root and comment shapes say which side they are on in their own names —
+ * `BacklogRawIssue`, `BacklogRawComment`, `BacklogRawPullRequest` — so two
+ * names are declared in both modules: `BacklogChange` and
+ * `TextFormattingRule`. The port's `BacklogChange` additionally carries the
+ * `attachmentInfo` a REST changelog has; `TextFormattingRule` is the same
+ * union written twice. Both are exported from the port, which is the pair a
+ * caller reaching for `adapter.api(host)` needs; the raw shapes stay
  * reachable through `BacklogRawMessage` itself, where they are structurally
- * inlined, so nothing is hidden — but they are not exported under names that
- * would shadow the domain types.
+ * inlined.
  *
- * The two `BacklogComment`s now differ by more than `Date` versus ISO string:
- * the port's is the shape the issue *and* the pull-request endpoints share, so
- * it names no parent, and the issue side's `issueId` lives on the exported
- * `BacklogIssueComment`. The raw-message `BacklogComment` still carries
- * `issueId` because every raw message a webhook produces today is issue-side.
+ * Not exported: the internal subject layer (`SubjectClient`,
+ * `subjectClientFor`), which selects the issue or pull-request endpoint
+ * family for a thread. It is a seam egress, reads and the webhook path are
+ * written against — an internal one like the zod schemas, not a consumer
+ * surface; a consumer addresses a subject through `BacklogSubjectRef` and the
+ * id codec instead.
  *
- * Not exported, per §3.1: the `backlog-js` client wrapper, the zod schemas,
- * the plain-text fallback converter and the fixtures. Nothing from
+ * Also not exported, per §3.1: the `backlog-js` client wrapper, the zod
+ * schemas, the plain-text fallback converter and the fixtures. Nothing from
  * `backlog-js` or `zod` appears in an exported type.
  */
 
@@ -57,8 +61,10 @@ export type {
   BacklogChannelPostableExtras,
   BacklogInstallation,
   BacklogMessageId,
+  BacklogMessagePart,
   BacklogPostableExtras,
   BacklogRawMessage,
+  BacklogSubjectRef,
   BacklogThreadId,
   BacklogUserId,
   BacklogWebhookPayload,

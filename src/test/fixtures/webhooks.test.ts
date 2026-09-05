@@ -43,6 +43,16 @@ describe('webhook fixtures', () => {
     });
   });
 
+  it('addresses a pull request by repository id and number, never by its global id', () => {
+    expect(FIXTURE.repositoryId).toBe(700);
+    expect(FIXTURE.pullRequestNumber).toBe(12);
+    // The global id is vocabulary for stars and metadata only: no
+    // pull-request endpoint accepts it
+    // (`.claude/rules/backlog-pull-request-facts.md`).
+    expect(FIXTURE.pullRequestId).toBe(90001);
+    expect(FIXTURE.repositoryName).toBe('example-repo');
+  });
+
   it('carries an empty notifications array on every activity type', () => {
     for (const payload of [
       issueCreated(),
