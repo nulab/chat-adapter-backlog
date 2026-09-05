@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { ResourceNotFoundError } from '@chat-adapter/shared';
+
 import {
   conformanceFixture,
   describeBacklogApiConformance,
@@ -12,6 +14,12 @@ const {
   projectId,
   issueId,
   otherIssueId,
+  repositoryId,
+  otherRepositoryId,
+  pullRequestNumber,
+  otherPullRequestId,
+  otherPullRequestNumber,
+  pullRequestCommentIds,
   bot,
   alice,
   bob,
@@ -19,7 +27,15 @@ const {
   baseIssue,
   baseComment,
   statusChangeLog,
+  baseGitRepository,
+  basePullRequest,
+  basePullRequestComment,
+  basePullRequestAttachment,
+  pullRequestRef,
+  baseNotifications,
 } = conformanceFixture;
+
+const pullRequestCommentsKey = `${repositoryId}:${pullRequestNumber}`;
 
 function seed(): InMemoryBacklogSeed {
   return {
@@ -42,26 +58,26 @@ function seed(): InMemoryBacklogSeed {
       baseComment({ id: 4, issueId: otherIssueId }),
     ],
     issueTypes: { [projectId]: [{ id: 1, name: 'Task' }] },
-    notifications: [
-      {
-        id: 1,
-        alreadyRead: false,
-        project: { id: projectId, projectKey: 'PROJECT', name: 'Project' },
-        issue: null,
-        comment: { id: 1 },
-        sender: alice,
-        created: new Date('2026-01-01T00:00:00Z'),
-      },
-      {
-        id: 2,
-        alreadyRead: false,
-        project: { id: projectId, projectKey: 'PROJECT', name: 'Project' },
-        issue: null,
-        comment: { id: 2 },
-        sender: bob,
-        created: new Date('2026-01-01T00:01:00Z'),
-      },
+    notifications: baseNotifications(),
+    repositories: [
+      baseGitRepository(),
+      baseGitRepository({ id: otherRepositoryId, name: 'other-repo' }),
     ],
+    pullRequests: [
+      basePullRequest(),
+      basePullRequest({
+        id: otherPullRequestId,
+        number: otherPullRequestNumber,
+      }),
+    ],
+    pullRequestComments: {
+      [pullRequestCommentsKey]: pullRequestCommentIds.map((id) =>
+        basePullRequestComment({ id })
+      ),
+    },
+    pullRequestAttachments: {
+      [pullRequestCommentsKey]: [basePullRequestAttachment()],
+    },
     now: () => new Date('2026-01-02T00:00:00Z'),
   };
 }
@@ -81,6 +97,33 @@ describe('createInMemoryBacklogApi', () => {
     });
   });
 
+  it('records a pull-request comment against the three coordinates it was addressed with', async () => {
+    const api = createInMemoryBacklogApi(seed());
+    const ref = pullRequestRef();
+    await api.addPullRequestComment(ref, { content: 'Recorded' });
+    await api.updatePullRequestComment(ref, pullRequestCommentIds[0], 'Edited');
+    expect(api.state.recordedInputs).toContainEqual({
+      method: 'addPullRequestComment',
+      ref,
+      input: { content: 'Recorded' },
+    });
+    expect(api.state.recordedInputs).toContainEqual({
+      method: 'updatePullRequestComment',
+      ref,
+      commentId: pullRequestCommentIds[0],
+      content: 'Edited',
+    });
+  });
+
+  it('records a star target whole, so which kind of comment was starred stays readable', async () => {
+    const api = createInMemoryBacklogApi(seed());
+    await api.addStar({ pullRequestCommentId: pullRequestCommentIds[0] });
+    expect(api.state.recordedInputs).toContainEqual({
+      method: 'addStar',
+      target: { pullRequestCommentId: pullRequestCommentIds[0] },
+    });
+  });
+
   it('allocates new ids starting above every seeded id, issues included', async () => {
     const api = createInMemoryBacklogApi(seed());
     const created = await api.createIssue({
@@ -92,6 +135,14 @@ describe('createInMemoryBacklogApi', () => {
     expect(created.id).toBeGreaterThan(otherIssueId);
   });
 
+  it('allocates new ids starting above every seeded id, pull-request comments included', async () => {
+    const api = createInMemoryBacklogApi(seed());
+    const added = await api.addPullRequestComment(pullRequestRef(), {
+      content: 'New',
+    });
+    expect(added.id).toBeGreaterThan(Math.max(...pullRequestCommentIds));
+  });
+
   it('seeding does not alias the caller-supplied seed objects', async () => {
     const mySeed = seed();
     const api = createInMemoryBacklogApi(mySeed);
@@ -101,6 +152,55 @@ describe('createInMemoryBacklogApi', () => {
       issueTypeId: 1,
       priorityId: 3,
     });
+    await api.addPullRequestComment(pullRequestRef(), { content: 'New' });
     expect(mySeed.issues).toHaveLength(2);
+    expect(mySeed.pullRequestComments?.[pullRequestCommentsKey]).toHaveLength(
+      pullRequestCommentIds.length
+    );
+  });
+
+  it('holds the comments of a pull request in state under its repository and number', async () => {
+    const api = createInMemoryBacklogApi(seed());
+    const added = await api.addPullRequestComment(pullRequestRef(), {
+      content: 'New',
+    });
+    expect(
+      api.state.pullRequestComments[pullRequestCommentsKey]?.map((c) => c.id)
+    ).toEqual([...pullRequestCommentIds, added.id]);
+  });
+
+  it('resolves a star target within its own kind, so an id from the other sequence is not found', async () => {
+    const api = createInMemoryBacklogApi(seed());
+    await expect(
+      api.addStar({ pullRequestCommentId: 1 })
+    ).rejects.toBeInstanceOf(ResourceNotFoundError);
+    await expect(
+      api.addStar({ commentId: pullRequestCommentIds[0] })
+    ).rejects.toBeInstanceOf(ResourceNotFoundError);
+  });
+
+  it('removes a star from the pull-request comment carrying it', async () => {
+    const api = createInMemoryBacklogApi(seed());
+    const ref = pullRequestRef();
+    await api.addStar({ pullRequestCommentId: pullRequestCommentIds[0] });
+    const starred = api.state.stars[api.state.stars.length - 1];
+    if (starred === undefined) throw new Error('addStar recorded no star');
+    await api.deleteStar(starred.id);
+    const comments = await api.listPullRequestComments(ref, {
+      count: 100,
+      order: 'asc',
+    });
+    expect(comments[0]?.stars).toEqual([]);
+  });
+
+  it('downloads a file the test uploaded from any pull request, so an egress round trip needs no seeded attachment', async () => {
+    const api = createInMemoryBacklogApi(seed());
+    const uploaded = await api.uploadAttachment(
+      'notes.txt',
+      Buffer.from('hello')
+    );
+    await expect(
+      api.downloadPullRequestAttachment(pullRequestRef(), uploaded.id)
+    ).resolves.toMatchObject({ filename: 'notes.txt' });
   });
 });

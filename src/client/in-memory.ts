@@ -2,14 +2,19 @@ import { ResourceNotFoundError } from '@chat-adapter/shared';
 
 import type {
   AddCommentInput,
+  AddPullRequestCommentInput,
   BacklogApi,
   BacklogComment,
   BacklogDownloadedFile,
+  BacklogGitRepository,
   BacklogIssue,
+  BacklogIssueComment,
   BacklogIssueType,
   BacklogNotification,
   BacklogPriority,
   BacklogProject,
+  BacklogPullRequest,
+  BacklogPullRequestAttachment,
   BacklogStar,
   BacklogUploadedFile,
   BacklogUserRef,
@@ -17,7 +22,10 @@ import type {
   ListCommentsOptions,
   ListIssuesOptions,
   ListNotificationsOptions,
+  ListPullRequestsOptions,
+  PullRequestRef,
   RateLimitSnapshots,
+  StarTarget,
 } from './port.js';
 
 /**
@@ -28,13 +36,23 @@ import type {
 export interface InMemoryBacklogSeed {
   projects?: BacklogProject[];
   issues?: BacklogIssue[];
-  comments?: BacklogComment[];
+  comments?: BacklogIssueComment[];
   users?: BacklogUserRef[];
   /** Issue types available per project, keyed by `projectId`. */
   issueTypes?: Record<number, BacklogIssueType[]>;
   /** Defaults to High(2)/Normal(3)/Low(4), the documented example. */
   priorities?: BacklogPriority[];
   notifications?: BacklogNotification[];
+  repositories?: BacklogGitRepository[];
+  pullRequests?: BacklogPullRequest[];
+  /**
+   * Keyed `` `${repositoryId}:${number}` `` — a pull-request comment carries no
+   * parent reference of its own, so the parent has to be the key rather than a
+   * field.
+   */
+  pullRequestComments?: Record<string, BacklogComment[]>;
+  /** Keyed as `pullRequestComments` is. */
+  pullRequestAttachments?: Record<string, BacklogPullRequestAttachment[]>;
   /** The credential-holding user; used as `createdUser` for anything the API creates. */
   me?: BacklogUserRef;
   /** Clock used for `created`/`updated` timestamps on records the API creates. Defaults to `() => new Date()`. */
@@ -45,8 +63,12 @@ export interface InMemoryBacklogSeed {
 export interface InMemoryBacklogState {
   projects: BacklogProject[];
   issues: BacklogIssue[];
-  comments: BacklogComment[];
+  comments: BacklogIssueComment[];
   users: BacklogUserRef[];
+  repositories: BacklogGitRepository[];
+  pullRequests: BacklogPullRequest[];
+  /** Keyed as the seed is, and holding added comments alongside the seeded ones. */
+  pullRequestComments: Record<string, BacklogComment[]>;
   stars: BacklogStar[];
   uploads: BacklogUploadedFile[];
   notifications: BacklogNotification[];
@@ -64,7 +86,18 @@ export type RecordedInput =
       content: string;
     }
   | { method: 'deleteComment'; issueId: number; commentId: number }
-  | { method: 'addStar'; commentId: number }
+  | {
+      method: 'addPullRequestComment';
+      ref: PullRequestRef;
+      input: AddPullRequestCommentInput;
+    }
+  | {
+      method: 'updatePullRequestComment';
+      ref: PullRequestRef;
+      commentId: number;
+      content: string;
+    }
+  | { method: 'addStar'; target: StarTarget }
   | { method: 'deleteStar'; starId: number }
   | { method: 'markNotificationAsRead'; id: number }
   | {
@@ -90,6 +123,18 @@ const DEFAULT_ME: BacklogUserRef = {
   mailAddress: null,
 };
 
+function pullRequestKey(repositoryId: number, number: number): string {
+  return `${repositoryId}:${number}`;
+}
+
+function copyKeyedLists<T>(
+  source: Record<string, T[]> | undefined
+): Record<string, T[]> {
+  return Object.fromEntries(
+    Object.entries(source ?? {}).map(([key, list]) => [key, [...list]])
+  );
+}
+
 /**
  * An in-memory `BacklogApi` for consumers' own tests
  * (docs/specs/adapter.md §8.3). It mirrors the `backlog-js` implementation's
@@ -113,16 +158,30 @@ export function createInMemoryBacklogApi(
   );
   const priorities = [...(seed.priorities ?? DEFAULT_PRIORITIES)];
   const notifications = [...(seed.notifications ?? [])];
-  const stars: BacklogStar[] = comments.flatMap((c) => c.stars);
+  const repositories = [...(seed.repositories ?? [])];
+  const pullRequests = [...(seed.pullRequests ?? [])];
+  const pullRequestComments = copyKeyedLists(seed.pullRequestComments);
+  const pullRequestAttachments = copyKeyedLists(seed.pullRequestAttachments);
+  const seededPullRequestComments = Object.values(pullRequestComments).flat();
+  const stars: BacklogStar[] = [
+    ...comments.flatMap((c) => c.stars),
+    ...seededPullRequestComments.flatMap((c) => c.stars),
+  ];
   const uploads: BacklogUploadedFile[] = [];
   const recordedInputs: RecordedInput[] = [];
 
   const seededIds = [
     ...issues.map((i) => i.id),
     ...comments.map((c) => c.id),
-    ...comments.flatMap((c) => c.stars.map((s) => s.id)),
     ...notifications.map((n) => n.id),
     ...uploads.map((u) => u.id),
+    ...repositories.map((r) => r.id),
+    ...pullRequests.map((p) => p.id),
+    ...seededPullRequestComments.map((c) => c.id),
+    ...Object.values(pullRequestAttachments)
+      .flat()
+      .map((a) => a.id),
+    ...stars.map((s) => s.id),
   ];
   let nextId = Math.max(0, ...seededIds) + 1;
   const allocateId = (): number => nextId++;
@@ -143,7 +202,10 @@ export function createInMemoryBacklogApi(
     return issue;
   }
 
-  function findComment(issueId: number, commentId: number): BacklogComment {
+  function findComment(
+    issueId: number,
+    commentId: number
+  ): BacklogIssueComment {
     const comment = comments.find(
       (c) => c.id === commentId && c.issueId === issueId
     );
@@ -159,6 +221,90 @@ export function createInMemoryBacklogApi(
       throw new ResourceNotFoundError('backlog', 'user', String(userId));
     }
     return user;
+  }
+
+  function findGitRepository(
+    projectId: number,
+    repositoryId: number
+  ): BacklogGitRepository {
+    const repository = repositories.find(
+      (r) => r.id === repositoryId && r.projectId === projectId
+    );
+    if (repository === undefined) {
+      throw new ResourceNotFoundError(
+        'backlog',
+        'gitRepository',
+        String(repositoryId)
+      );
+    }
+    return repository;
+  }
+
+  function findPullRequest(ref: PullRequestRef): BacklogPullRequest {
+    const pullRequest = pullRequests.find(
+      (p) =>
+        p.projectId === ref.projectId &&
+        p.repositoryId === ref.repositoryId &&
+        p.number === ref.number
+    );
+    if (pullRequest === undefined) {
+      throw new ResourceNotFoundError(
+        'backlog',
+        'pullRequest',
+        pullRequestKey(ref.repositoryId, ref.number)
+      );
+    }
+    return pullRequest;
+  }
+
+  function commentsOfPullRequest(ref: PullRequestRef): BacklogComment[] {
+    return (
+      pullRequestComments[pullRequestKey(ref.repositoryId, ref.number)] ?? []
+    );
+  }
+
+  function findPullRequestComment(commentId: number): BacklogComment {
+    const comment = Object.values(pullRequestComments)
+      .flat()
+      .find((c) => c.id === commentId);
+    if (comment === undefined) {
+      throw new ResourceNotFoundError(
+        'backlog',
+        'pullRequestComment',
+        String(commentId)
+      );
+    }
+    return comment;
+  }
+
+  function findStarTarget(target: StarTarget): BacklogComment {
+    if ('commentId' in target) {
+      const comment = comments.find((c) => c.id === target.commentId);
+      if (comment === undefined) {
+        throw new ResourceNotFoundError(
+          'backlog',
+          'comment',
+          String(target.commentId)
+        );
+      }
+      return comment;
+    }
+    return findPullRequestComment(target.pullRequestCommentId);
+  }
+
+  function page<T extends BacklogComment>(
+    from: T[],
+    options: ListCommentsOptions
+  ): T[] {
+    const withinBounds = from.filter((c) => {
+      if (options.minId !== undefined && c.id <= options.minId) return false;
+      if (options.maxId !== undefined && c.id >= options.maxId) return false;
+      return true;
+    });
+    const sorted = [...withinBounds].sort((a, b) =>
+      options.order === 'asc' ? a.id - b.id : b.id - a.id
+    );
+    return sorted.slice(0, options.count);
   }
 
   const api: InMemoryBacklogApi = {
@@ -227,16 +373,10 @@ export function createInMemoryBacklogApi(
 
     async listComments(issueId, options: ListCommentsOptions) {
       findIssue(issueId);
-      const forIssue = comments.filter((c) => c.issueId === issueId);
-      const withinBounds = forIssue.filter((c) => {
-        if (options.minId !== undefined && c.id <= options.minId) return false;
-        if (options.maxId !== undefined && c.id >= options.maxId) return false;
-        return true;
-      });
-      const sorted = [...withinBounds].sort((a, b) =>
-        options.order === 'asc' ? a.id - b.id : b.id - a.id
+      return page(
+        comments.filter((c) => c.issueId === issueId),
+        options
       );
-      return sorted.slice(0, options.count);
     },
 
     async getComment(issueId, commentId) {
@@ -247,7 +387,7 @@ export function createInMemoryBacklogApi(
       recordedInputs.push({ method: 'addComment', issueId, input });
       findIssue(issueId);
       const createdAt = now();
-      const comment: BacklogComment = {
+      const comment: BacklogIssueComment = {
         id: allocateId(),
         issueId,
         content: input.content,
@@ -281,16 +421,119 @@ export function createInMemoryBacklogApi(
       return comment;
     },
 
-    async addStar(commentId) {
-      recordedInputs.push({ method: 'addStar', commentId });
-      const comment = comments.find((c) => c.id === commentId);
+    async listGitRepositories(projectId) {
+      findProject(projectId);
+      return repositories.filter((r) => r.projectId === projectId);
+    },
+
+    async getGitRepository(projectId, repositoryId) {
+      return findGitRepository(projectId, repositoryId);
+    },
+
+    async listPullRequests(
+      projectId,
+      repositoryId,
+      options: ListPullRequestsOptions
+    ) {
+      findGitRepository(projectId, repositoryId);
+      const offset = options.offset ?? 0;
+      return pullRequests
+        .filter(
+          (p) =>
+            p.projectId === projectId &&
+            p.repositoryId === repositoryId &&
+            (options.statusId === undefined ||
+              options.statusId.includes(p.status.id))
+        )
+        .slice(offset, offset + options.count);
+    },
+
+    async getPullRequest(ref) {
+      return findPullRequest(ref);
+    },
+
+    async listPullRequestComments(ref, options: ListCommentsOptions) {
+      findPullRequest(ref);
+      return page(commentsOfPullRequest(ref), options);
+    },
+
+    async addPullRequestComment(ref, input: AddPullRequestCommentInput) {
+      recordedInputs.push({ method: 'addPullRequestComment', ref, input });
+      findPullRequest(ref);
+      const createdAt = now();
+      const comment: BacklogComment = {
+        id: allocateId(),
+        content: input.content,
+        changeLog: [],
+        createdUser: me,
+        created: createdAt,
+        updated: createdAt,
+        stars: [],
+      };
+      const key = pullRequestKey(ref.repositoryId, ref.number);
+      (pullRequestComments[key] ??= []).push(comment);
+      return comment;
+    },
+
+    async updatePullRequestComment(ref, commentId, content) {
+      recordedInputs.push({
+        method: 'updatePullRequestComment',
+        ref,
+        commentId,
+        content,
+      });
+      findPullRequest(ref);
+      const comment = commentsOfPullRequest(ref).find(
+        (c) => c.id === commentId
+      );
       if (comment === undefined) {
         throw new ResourceNotFoundError(
           'backlog',
-          'comment',
+          'pullRequestComment',
           String(commentId)
         );
       }
+      comment.content = content;
+      comment.updated = now();
+      return comment;
+    },
+
+    async listPullRequestAttachments(ref) {
+      findPullRequest(ref);
+      return [
+        ...(pullRequestAttachments[
+          pullRequestKey(ref.repositoryId, ref.number)
+        ] ?? []),
+      ];
+    },
+
+    async downloadPullRequestAttachment(
+      ref,
+      attachmentId
+    ): Promise<BacklogDownloadedFile> {
+      findPullRequest(ref);
+      const attachment =
+        pullRequestAttachments[
+          pullRequestKey(ref.repositoryId, ref.number)
+        ]?.find((a) => a.id === attachmentId) ??
+        uploads.find((u) => u.id === attachmentId);
+      if (attachment === undefined) {
+        throw new ResourceNotFoundError(
+          'backlog',
+          'attachment',
+          String(attachmentId)
+        );
+      }
+      return {
+        filename: attachment.name,
+        contentType: 'application/octet-stream',
+        data: Buffer.alloc(0),
+      };
+    },
+
+    async addStar(target: StarTarget) {
+      recordedInputs.push({ method: 'addStar', target });
+      const comment = findStarTarget(target);
       const star: BacklogStar = {
         id: allocateId(),
         comment: null,
@@ -310,7 +553,11 @@ export function createInMemoryBacklogApi(
         throw new ResourceNotFoundError('backlog', 'star', String(starId));
       }
       stars.splice(stars.indexOf(star), 1);
-      for (const comment of comments) {
+      const starred: BacklogComment[] = [
+        ...comments,
+        ...Object.values(pullRequestComments).flat(),
+      ];
+      for (const comment of starred) {
         const index = comment.stars.findIndex((s) => s.id === starId);
         if (index !== -1) {
           comment.stars.splice(index, 1);
@@ -382,6 +629,9 @@ export function createInMemoryBacklogApi(
       issues,
       comments,
       users,
+      repositories,
+      pullRequests,
+      pullRequestComments,
       stars,
       uploads,
       notifications,

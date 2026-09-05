@@ -338,10 +338,11 @@ describe('addReaction', () => {
       botUserId: BOT_USER_ID,
     });
 
-    const addStarCalls = backlogApi.state.recordedInputs.filter(
-      (input) => input.method === 'addStar'
-    );
-    expect(addStarCalls).toHaveLength(1);
+    expect(
+      backlogApi.state.recordedInputs.filter(
+        (input) => input.method === 'addStar'
+      )
+    ).toEqual([{ method: 'addStar', target: { commentId: 1 } }]);
   });
 });
 

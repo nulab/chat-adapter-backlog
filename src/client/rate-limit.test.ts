@@ -11,6 +11,30 @@ describe('classifyBucket', () => {
     expect(classifyBucket('GET', '/issues/count')).toBe('search');
   });
 
+  it('a pull request list call spends read, not search', () => {
+    // Measured: `GET …/pullRequests` and `…/pullRequests/count` decrement
+    // `read` while `search` stays put, unlike `GET /issues`
+    // (`.claude/rules/backlog-pull-request-facts.md` "Rate limit").
+    expect(
+      classifyBucket('GET', '/projects/500/git/repositories/700/pullRequests')
+    ).toBe('read');
+    expect(
+      classifyBucket(
+        'GET',
+        '/projects/500/git/repositories/700/pullRequests/count'
+      )
+    ).toBe('read');
+  });
+
+  it('a pull request comment post spends update', () => {
+    expect(
+      classifyBucket(
+        'POST',
+        '/projects/500/git/repositories/700/pullRequests/12/comments'
+      )
+    ).toBe('update');
+  });
+
   it('classifies any other GET as read', () => {
     expect(classifyBucket('GET', '/issues/8001')).toBe('read');
     expect(classifyBucket('GET', '/projects/500')).toBe('read');

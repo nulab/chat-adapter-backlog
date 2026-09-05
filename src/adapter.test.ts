@@ -1342,7 +1342,7 @@ describe('BacklogAdapter reactions (§6.5)', () => {
     await adapter.addReaction(EGRESS_THREAD_ID, commentMessageId, 'star');
     expect(
       api.state.recordedInputs.filter((input) => input.method === 'addStar')
-    ).toHaveLength(1);
+    ).toEqual([{ method: 'addStar', target: { commentId: 1 } }]);
   });
 
   it("removing a reaction leaves other users' stars", async () => {
@@ -1695,6 +1695,8 @@ describe('BacklogAdapter.markAsRead (§7.8)', () => {
         comment: {
           id: isOldestNotification ? targetCommentId : 1000 + notificationId,
         },
+        pullRequest: null,
+        pullRequestComment: null,
         sender: ALICE_USER_REF,
         created: new Date('2026-01-01T00:00:00Z'),
       };
@@ -1731,6 +1733,8 @@ describe('BacklogAdapter.markAsRead (§7.8)', () => {
             },
             issue: null,
             comment: { id: 7 },
+            pullRequest: null,
+            pullRequestComment: null,
             sender: ALICE_USER_REF,
             created: new Date('2026-01-01T00:00:00Z'),
           },

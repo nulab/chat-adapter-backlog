@@ -12,12 +12,19 @@ import { classifyBucket, decideRetry, RateLimitTracker } from './rate-limit.js';
 import {
   commentListSchema,
   commentSchema,
+  gitRepositoryListSchema,
+  gitRepositorySchema,
+  issueCommentListSchema,
+  issueCommentSchema,
   issueListSchema,
   issueSchema,
   issueTypeListSchema,
   notificationListSchema,
   priorityListSchema,
   projectSchema,
+  pullRequestAttachmentListSchema,
+  pullRequestListSchema,
+  pullRequestSchema,
   uploadedFileSchema,
   userResponseSchema,
 } from './schemas.js';
@@ -25,22 +32,30 @@ import {
 import type { BacklogErrorBodyEntry } from './errors.js';
 import type {
   AddCommentInput,
+  AddPullRequestCommentInput,
   BacklogApi,
   BacklogComment,
   BacklogDownloadedFile,
+  BacklogGitRepository,
   BacklogIssue,
+  BacklogIssueComment,
   BacklogIssueType,
   BacklogNotification,
   BacklogPriority,
   BacklogProject,
+  BacklogPullRequest,
+  BacklogPullRequestAttachment,
   BacklogUploadedFile,
   BacklogUserRef,
   CreateIssueInput,
   ListCommentsOptions,
   ListIssuesOptions,
   ListNotificationsOptions,
+  ListPullRequestsOptions,
+  PullRequestRef,
   RateLimitSnapshots,
   RetryOptions,
+  StarTarget,
 } from './port.js';
 import type { ZodType } from 'zod';
 
@@ -300,23 +315,21 @@ export function createBacklogJsApi(
     },
 
     async listComments(issueId, options: ListCommentsOptions) {
-      const params: Record<string, unknown> = {
-        count: options.count,
-        order: options.order,
-      };
-      if (options.minId !== undefined) params['minId'] = options.minId;
-      if (options.maxId !== undefined) params['maxId'] = options.maxId;
-      return requestJson<BacklogComment[]>('listComments', commentListSchema, {
-        method: 'GET',
-        path: `issues/${issueId}/comments`,
-        params,
-      });
+      return requestJson<BacklogIssueComment[]>(
+        'listComments',
+        issueCommentListSchema,
+        {
+          method: 'GET',
+          path: `issues/${issueId}/comments`,
+          params: commentPagingParams(options),
+        }
+      );
     },
 
     async getComment(issueId, commentId) {
-      const comment = await requestJson<BacklogComment>(
+      const comment = await requestJson<BacklogIssueComment>(
         'getComment',
-        commentSchema,
+        issueCommentSchema,
         {
           method: 'GET',
           path: `issues/${issueId}/comments/${commentId}`,
@@ -338,30 +351,167 @@ export function createBacklogJsApi(
         params['notifiedUserId'] = input.notifiedUserId;
       if (input.attachmentId !== undefined)
         params['attachmentId'] = input.attachmentId;
-      return requestJson<BacklogComment>('addComment', commentSchema, {
-        method: 'POST',
-        path: `issues/${issueId}/comments`,
-        params,
-      });
+      return requestJson<BacklogIssueComment>(
+        'addComment',
+        issueCommentSchema,
+        {
+          method: 'POST',
+          path: `issues/${issueId}/comments`,
+          params,
+        }
+      );
     },
 
     async updateComment(issueId, commentId, content) {
-      return requestJson<BacklogComment>('updateComment', commentSchema, {
-        method: 'PATCH',
-        path: `issues/${issueId}/comments/${commentId}`,
-        params: { content },
-      });
+      return requestJson<BacklogIssueComment>(
+        'updateComment',
+        issueCommentSchema,
+        {
+          method: 'PATCH',
+          path: `issues/${issueId}/comments/${commentId}`,
+          params: { content },
+        }
+      );
     },
 
     async deleteComment(issueId, commentId) {
-      return requestJson<BacklogComment>('deleteComment', commentSchema, {
-        method: 'DELETE',
-        path: `issues/${issueId}/comments/${commentId}`,
-      });
+      return requestJson<BacklogIssueComment>(
+        'deleteComment',
+        issueCommentSchema,
+        {
+          method: 'DELETE',
+          path: `issues/${issueId}/comments/${commentId}`,
+        }
+      );
     },
 
-    async addStar(commentId) {
-      await call({ method: 'POST', path: 'stars', params: { commentId } });
+    async listGitRepositories(projectId) {
+      return requestJson<BacklogGitRepository[]>(
+        'listGitRepositories',
+        gitRepositoryListSchema,
+        {
+          method: 'GET',
+          path: `projects/${projectId}/git/repositories`,
+        }
+      );
+    },
+
+    async getGitRepository(projectId, repositoryId) {
+      return requestJson<BacklogGitRepository>(
+        'getGitRepository',
+        gitRepositorySchema,
+        {
+          method: 'GET',
+          path: gitRepositoryPath(projectId, repositoryId),
+        }
+      );
+    },
+
+    async listPullRequests(
+      projectId,
+      repositoryId,
+      options: ListPullRequestsOptions
+    ) {
+      const params: Record<string, unknown> = { count: options.count };
+      if (options.offset !== undefined) params['offset'] = options.offset;
+      if (options.statusId !== undefined) params['statusId'] = options.statusId;
+      return requestJson<BacklogPullRequest[]>(
+        'listPullRequests',
+        pullRequestListSchema,
+        {
+          method: 'GET',
+          path: `${gitRepositoryPath(projectId, repositoryId)}/pullRequests`,
+          params,
+        }
+      );
+    },
+
+    async getPullRequest(ref: PullRequestRef) {
+      return requestJson<BacklogPullRequest>(
+        'getPullRequest',
+        pullRequestSchema,
+        {
+          method: 'GET',
+          path: pullRequestPath(ref),
+        }
+      );
+    },
+
+    async listPullRequestComments(
+      ref: PullRequestRef,
+      options: ListCommentsOptions
+    ) {
+      return requestJson<BacklogComment[]>(
+        'listPullRequestComments',
+        commentListSchema,
+        {
+          method: 'GET',
+          path: `${pullRequestPath(ref)}/comments`,
+          params: commentPagingParams(options),
+        }
+      );
+    },
+
+    async addPullRequestComment(
+      ref: PullRequestRef,
+      input: AddPullRequestCommentInput
+    ) {
+      const params: Record<string, unknown> = { content: input.content };
+      if (input.notifiedUserId !== undefined)
+        params['notifiedUserId'] = input.notifiedUserId;
+      if (input.attachmentId !== undefined)
+        params['attachmentId'] = input.attachmentId;
+      return requestJson<BacklogComment>(
+        'addPullRequestComment',
+        commentSchema,
+        {
+          method: 'POST',
+          path: `${pullRequestPath(ref)}/comments`,
+          params,
+        }
+      );
+    },
+
+    async updatePullRequestComment(ref: PullRequestRef, commentId, content) {
+      return requestJson<BacklogComment>(
+        'updatePullRequestComment',
+        commentSchema,
+        {
+          method: 'PATCH',
+          path: `${pullRequestPath(ref)}/comments/${commentId}`,
+          params: { content },
+        }
+      );
+    },
+
+    async listPullRequestAttachments(ref: PullRequestRef) {
+      return requestJson<BacklogPullRequestAttachment[]>(
+        'listPullRequestAttachments',
+        pullRequestAttachmentListSchema,
+        {
+          method: 'GET',
+          path: `${pullRequestPath(ref)}/attachments`,
+        }
+      );
+    },
+
+    async downloadPullRequestAttachment(
+      ref: PullRequestRef,
+      attachmentId
+    ): Promise<BacklogDownloadedFile> {
+      const response = await call({
+        method: 'GET',
+        path: `${pullRequestPath(ref)}/attachments/${attachmentId}`,
+      });
+      return toDownloadedFile(response, attachmentId);
+    },
+
+    async addStar(target: StarTarget) {
+      const params: Record<string, unknown> =
+        'commentId' in target
+          ? { commentId: target.commentId }
+          : { pullRequestCommentId: target.pullRequestCommentId };
+      await call({ method: 'POST', path: 'stars', params });
     },
 
     async deleteStar(starId) {
@@ -415,19 +565,54 @@ export function createBacklogJsApi(
         method: 'GET',
         path: `issues/${issueId}/attachments/${attachmentId}`,
       });
-      const arrayBuffer = await response.arrayBuffer();
-      const disposition = response.headers.get('Content-Disposition');
-      return {
-        filename: parseFilename(disposition) ?? String(attachmentId),
-        contentType:
-          response.headers.get('Content-Type') ?? 'application/octet-stream',
-        data: Buffer.from(arrayBuffer),
-      };
+      return toDownloadedFile(response, attachmentId);
     },
 
     rateLimit(): RateLimitSnapshots {
       return tracker.snapshot(host);
     },
+  };
+}
+
+/**
+ * The three coordinates every pull-request endpoint is keyed by. The
+ * pull request's space-wide `id` is deliberately not one of them:
+ * `GET …/pullRequests/<global id>` answers 404 `No such PullRequest`
+ * (measured 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`), and
+ * an `id` that happens to match some other repository's `number` would
+ * silently address the wrong pull request.
+ */
+function pullRequestPath(ref: PullRequestRef): string {
+  return `${gitRepositoryPath(ref.projectId, ref.repositoryId)}/pullRequests/${ref.number}`;
+}
+
+function gitRepositoryPath(projectId: number, repositoryId: number): string {
+  return `projects/${projectId}/git/repositories/${repositoryId}`;
+}
+
+function commentPagingParams(
+  options: ListCommentsOptions
+): Record<string, unknown> {
+  const params: Record<string, unknown> = {
+    count: options.count,
+    order: options.order,
+  };
+  if (options.minId !== undefined) params['minId'] = options.minId;
+  if (options.maxId !== undefined) params['maxId'] = options.maxId;
+  return params;
+}
+
+async function toDownloadedFile(
+  response: Response,
+  attachmentId: number
+): Promise<BacklogDownloadedFile> {
+  const arrayBuffer = await response.arrayBuffer();
+  const disposition = response.headers.get('Content-Disposition');
+  return {
+    filename: parseFilename(disposition) ?? String(attachmentId),
+    contentType:
+      response.headers.get('Content-Type') ?? 'application/octet-stream',
+    data: Buffer.from(arrayBuffer),
   };
 }
 
