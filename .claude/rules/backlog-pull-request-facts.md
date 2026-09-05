@@ -58,7 +58,7 @@ so the webhook is the free source of the name the REST object lacks.
 | Close (from history, UI) | 19 | `{ id, content: "" }` | `[{ field: "status", new_value: "2", old_value: "1" }]` |
 | Comment edit (`PATCH …/comments/:id`) | **none** — no new activity (measured; same as issue comments) | | |
 | `git push` of a branch | 12 Git Pushed, `content: { repository, change_type, revision_type, ref, revision_count, revisions[] }` — no pull-request reference | | |
-| Delete / type 21 | **never observed**: no delete endpoint exists, the UI offers none, and merge and close both arrive as 19. The docs' "21 Pull Request Deleted" and `backlog-js`'s `PullRequestMerged` are both names for an activity no operation was found to emit. Treat 21 as ignorable until a payload is seen. | | |
+| Type 21 | **Not observed.** The Get Activity page names it "Pull Request Deleted"; `backlog-js` 0.20.1 names it `PullRequestMerged`. Neither the UI nor the API offers a way to delete a pull request, merge and close both arrived as 19 (above), and `GET /projects/:id/activities?activityTypeId[]=21` over this project's whole history returned nothing. What, if anything, emits it is unknown from the outside; capture a payload before dispatching it. | | |
 
 - **Mentions.** `<@U…>` and `<@project>` in a `description` or comment
   `content` are rewritten to `@<display name>` / `@<project-members label>`
@@ -156,8 +156,10 @@ Measured on six comments with consecutive ids `n…n+5`:
 - **Webhook body vs activity body for types 18–20.** Only the activity API
   form above was captured; whether the webhook adds fields (as it adds
   `assignee` to type 1) is UNMEASURED. Method: register a project webhook
-  with `activityTypeIds[]=18,19,20,21,12` at a receiver that stores raw
-  bodies, repeat the operations in the table, diff each body against
+  with `activityTypeIds[]=18,19,20,21` at a receiver that stores raw bodies
+  (21 included **for the measurement only**, so a delivery would be caught if
+  one exists — the adapter's registration guidance omits it), repeat the
+  operations in the table, diff each body against
   `GET /projects/:id/activities`.
 - **Notifications in the bot's own feed** (`GET /notifications` items with
   `pullRequest` / `pullRequestComment` / `repository` set; reasons 10–13):

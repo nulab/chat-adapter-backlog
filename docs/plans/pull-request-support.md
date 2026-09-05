@@ -174,7 +174,7 @@ type BacklogRawMessage =
   pull-request activities (§3.5); `raw.payload.type` tells them apart, and a
   helper `subjectOfActivity(payload): BacklogSubjectRef` is the single place
   that knows `content.id` means an issue for types 1–4 and
-  `content.repository.id` + `content.number` mean a pull request for 18–21.
+  `content.repository.id` + `content.number` mean a pull request for 18–20.
 - The `comment` variant carries `subject` explicitly instead of relying on
   `comment.issueId`, because a pull-request comment has no parent reference
   of its own (§2). `BacklogRawComment` drops `issueId` accordingly; the
@@ -282,7 +282,7 @@ schemas are written from the measurements, not from the typings.
 | 19 | Pull Request Updated, with `comment.id` | same | `…:c<commentId>` | `comment.content ?? ""` | text, or `changes[field="assignee"]` by display name (M3, measured — the field is `assignee`, not the issue side's `assigner`) | `processMessage` |
 | 19 | Pull Request Updated, no comment id | same | `…:u:<created>` | `""` | as above | `processMessage` |
 | 20 | Comment Added on Pull Request | same | `…:c<commentId>` | `comment.content ?? ""` | text | `processMessage` |
-| 21 | Pull Request Deleted (docs) / Merged (`backlog-js`) | — | — | — | — | 200 Ignored (D-PR5): never observed; merge and close arrive as 19 with a `status` change (M5, measured) |
+| 21 | Pull Request Deleted (docs) / Merged (`backlog-js`) | — | — | — | — | 200 Ignored (D-PR5): not observed; merge and close arrive as 19 with a `status` change, and no delete operation exists (M5, measured) |
 | 12, 13 | Git Pushed, Repository Created | — | — | — | — | 200 Ignored (no thread meaning) |
 
 Required fields for 18–20 (400 when missing): `content.id`, `content.number`,
@@ -294,7 +294,7 @@ is exposed on `raw.payload` only; a pull request linked to an issue is still
 its own thread (D-PR6).
 
 Registration guidance changes from `[1, 2, 3]` (+4) to `[1, 2, 3, 18, 19,
-20]` (+4; 21 is omitted because nothing emits it, D-PR5). No adapter option selects kinds (D-PR4): the webhook
+20]` (+4; 21 is omitted because it was not observed, D-PR5). No adapter option selects kinds (D-PR4): the webhook
 subscription already is that switch, and a deployment that wants issues only
 subscribes to issue types only.
 
@@ -437,7 +437,7 @@ written on purpose, stack declared in the first line of the body (CLAUDE.md
 - **Scope**: amend `docs/specs/adapter.md` — §1 goal state (issues *and*
   pull requests), §2 table and grammar (§3.1–§3.2 here), §2.2 rejections,
   §3.1 exports, §3.5 raw union, §4.1/§4.2 statuses per kind, §5.1 step 8
-  gate set, §5.2 required fields for 18–21, §5.3 rows for 18–21 and 12/13,
+  gate set, §5.2 required fields for 18–20, §5.3 rows for 18–21 and 12/13,
   §5.4 mention rules for pull requests, §6 opening paragraph (subject
   clients), §6.3 delete failure, §6.5 star targets, §6.6 attachment URLs,
   §7.2–§7.4 pull-request forms, §7.6 `listThreads` scope note, §7.8
@@ -447,7 +447,7 @@ written on purpose, stack declared in the first line of the body (CLAUDE.md
   This plan. `.claude/rules/backlog-pull-request-facts.md` created with the
   §5 measurement list, each item either filled with a dated measurement or
   marked `UNMEASURED`. CLAUDE.md: link this plan under "Design documents",
-  amend "Activity types" (18–21 now matter) and "Webhook URL hygiene".
+  amend "Activity types" (18–20 now matter) and "Webhook URL hygiene".
   `docs/plans/adapter-implementation.md` §8 gains a pointer here.
 - **Acceptance**: no identifier from `src/` that does not exist yet is
   presented as existing; every claim about Backlog cites a page or a dated
@@ -534,16 +534,16 @@ written on purpose, stack declared in the first line of the body (CLAUDE.md
 
 ### P3 — pull-request webhook ingress (`webhook`)
 
-- **Title**: `feat(webhook): dispatch pull request activities 18–21`. Label `enhancement`.
+- **Title**: `feat(webhook): dispatch pull request activities 18–20`. Label `enhancement`.
 - **Branch**: off P2. Body: `Stacked on #<P2> — merge that first.` **Gated on
   the webhook half of M1** being recorded in
   `.claude/rules/backlog-pull-request-facts.md` (M2–M5 are recorded).
-- **Scope**: `src/webhook/payload.ts` (schemas for 18–21 from the measured
+- **Scope**: `src/webhook/payload.ts` (schemas for 18–20 from the measured
   shapes; `DISPATCHED_ACTIVITY_TYPES` widened; `subjectOfActivity`),
   `src/webhook/inbound.ts` (root and comment builders shared with types 1–3
   via the subject ref — the issue builders are generalised, not duplicated;
   mention detection for PR assignment per M2/M3), `adapter.ts`
-  `handleWebhook` (thread id by kind, type-21 branch per D-PR5, repository
+  `handleWebhook` (thread id by kind, 21 ignored per D-PR5, repository
   name capture), `src/test/fixtures/webhooks.ts` builders
   `pullRequestAdded`, `pullRequestUpdated`, `pullRequestCommented`,
   `pullRequestStatusChanged`, `pullRequestAssigneeChanged`,
@@ -561,9 +561,8 @@ written on purpose, stack declared in the first line of the body (CLAUDE.md
     `fetchThread` spends no `getGitRepository`.
   - `selfMessageContract` re-run with a type-20 fixture in addition to the
     type-3 one.
-  - Type 21 per D-PR5: either `processMessageDeleted` with the root id, or a
-    documented 200 Ignored — whichever M5 established, with the measurement
-    cited in the test name's describe block.
+  - Type 21 is 200 Ignored (D-PR5), with the measurement cited in the test's
+    describe block.
 - **Tests to add**: "a new pull request is a root message on a pull request thread", "a comment on a pull request is dispatched to the pull request's thread", "a pull request linked to an issue does not route to the issue's thread", "assigning the bot to a pull request is a mention", "a git push is acknowledged and ignored", "a pull request payload missing its repository is rejected with 400", "the repository name from a webhook spares the next thread read a lookup".
 - **Size**: ~350 lines + ~600 test + ~200 fixtures.
 - **Risks**: measured `content` may differ from `backlog-js` (e.g. an
@@ -615,7 +614,7 @@ vocabulary `example.backlog.com`, project 500, repository 700, pull request
 | M2 | Does 18 carry `content.assignee`? | Activity form: **no** (measured with an assignee set). Webhook form: part of M1. |
 | M3 | 19 change fields and value systems | **Measured**: `assignee` (display name; absent from a multi-field update once), `status` (id strings `1`/`2`/`3`), `summary`, `description` (full bodies), `issue` (issue keys). Every change carried a changelog `comment.id`. |
 | M4 | PR comment paging semantics | **Measured**: exclusive `minId`/`maxId`, `count` cut from the head of `order`, one-element window works. |
-| M5 | What fires 21 | **Measured**: nothing observed. Merge (UI and git push) and close are 19 status changes. D-PR5 resolved: 21 is ignored and not registered. |
+| M5 | What fires 21 | **Measured**: not observed — merge (UI and git push) and close are 19 status changes, no delete operation exists in the UI or the API, and the project's activity history holds no type 21. D-PR5 resolved: 21 is ignored and not registered until a payload is seen. |
 | M6 | Comment id sequences | **Measured**: separate sequences (7-digit vs 9-digit); overlap possible. |
 | M7 | `pullRequest.issue` shape | **Measured**: a full Issue on list and get alike; the list page's stub example is wrong. |
 | M8 | `attachmentId[]` on a PR comment | **Measured**: accepted; appears in `changeLog[field="attachment"]` by name only and in `GET …/attachments` with an id. |
@@ -668,7 +667,7 @@ The CLAUDE.md checklist, plus for this stack:
 | D-PR2 | Thread-id shape | Nested `subject: BacklogSubjectRef` shared with message ids and raws; kind keyword explicit for **both** kinds (`issue:`, `pr:`). | Flat `{ kind, issueId?, repositoryId?, number? }`; keeping issues unmarked (`4 segments = issue`) for brevity — the GitHub debt, chosen deliberately not to inherit. | P2 |
 | D-PR3 | `deleteMessage` on a PR thread | `AdapterError(…, "backlog", "UNSUPPORTED_OPERATION")` before any call. | `ValidationError` (mislabels a correct call); silent success (forbidden: fabricated success); omitting `deleteMessage` (it is a required member). | P2 |
 | D-PR4 | Adapter option to enable/disable pull requests | None; the webhook subscription is the switch. | `subjects: ('issue' \| 'pullRequest')[]` config (duplicates what registration already decides; a mismatch would silently drop delivered events). | P0 |
-| D-PR5 | Type 21 handling | 200 Ignored, not in the registration guidance: nothing was found to emit it (merge and close are 19 status changes, measured). | `processMessageDeleted` on 21 (nothing to test it against); guessing from `backlog-js`'s enum name. | P3 |
+| D-PR5 | Type 21 handling | 200 Ignored, not in the registration guidance: it was not observed (merge and close are 19 status changes, no delete operation exists, measured). | `processMessageDeleted` on 21 (nothing to test it against); guessing from `backlog-js`'s enum name. | P3 |
 | D-PR6 | A PR linked to an issue | Its own thread; the link is metadata (`fetchThread.metadata.issue`, `raw.payload.content.issue`). | Routing PR activity into the linked issue's thread (a PR can be re-linked; the thread would move). | P3 |
 | D-PR7 | `listThreads` population | Issues only, documented; `api(host).listPullRequests` for PRs. | Interleaving issues and every repository's PRs (N+1 reads, two cursor shapes in one string); listing PRs only (breaks the current behaviour with nothing gained). | P4, P5 |
 | D-PR8 | `fetchSubject().type` for a pull request | `'pull_request'` (GitHub's convention; the core leaves `type` free). | `'pullRequest'` (matches our `kind` but not the ecosystem a bot author already handles). | P2 |

@@ -437,7 +437,7 @@ pull-request URL needs and the REST object lacks).
 | 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present | `changes[field="assignee"].new_value === botUserName` **or** text |
 | 19 | Pull Request Updated, no comment id | `…:u:<created>` | `""` | none | as above |
 | 20 | Comment Added on Pull Request | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present; a `changes[field="attachment"]` entry names the file but carries no id (§6.6) | text |
-| 21 | Pull Request Deleted (docs) / Merged (`backlog-js`) | — | — | — | 200 Ignored (D-PR5): no operation was found to emit it — merge and close arrive as 19 status changes (measured 2026-09-06) |
+| 21 | Pull Request Deleted (docs) / Merged (`backlog-js`) | — | — | — | 200 Ignored (D-PR5): not observed — merge and close arrive as 19 status changes and no delete operation exists in the UI or the API (measured 2026-09-06) |
 | 12, 13 | Git Pushed, Git Repository Created | — | — | — | 200 Ignored: no thread meaning |
 | other | wiki, document, … | — | — | — | 200 Ignored |
 
@@ -1128,7 +1128,7 @@ plain text. Documented in README under "Limitations".
   two full bodies).
 - **Webhook URL hygiene**: README instructs registering
   `activityTypeIds: [1, 2, 3, 18, 19, 20]` (plus 4 if deletion events are
-  wanted; 21 is never emitted as far as measured, D-PR5), never `allEvent`
+  wanted; 21 was not observed and is not registered, D-PR5), never `allEvent`
   (D10), so unrelated project activity never reaches the endpoint. A
   deployment that wants issues only registers issue types only — that
   subscription is the switch, and the adapter has no option duplicating it
@@ -1309,7 +1309,7 @@ adds stay on the pull request, so the variable must name a scratch one.
 | D-PR2 | Kind-explicit ids for **both** kinds; one nested `subject: BacklogSubjectRef` shared by thread ids, message ids, raws and the subject layer | Backlog addresses issues and pull requests through different endpoint families with different coordinates and separate comment id sequences; the GitHub adapter's "PR is the unmarked default" is back-compat debt its maintainers annotate as such. | Flat `{ kind, issueId?, repositoryId?, number? }`; keeping issues unmarked. |
 | D-PR3 | `deleteMessage` on a pull-request thread throws `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call | The endpoint does not exist (400/6 `Undefined resource`, measured); `ValidationError` would blame a correct call; silent success is a fabricated result; the member is required. | `ValidationError`; no-op; omitting `deleteMessage`. |
 | D-PR4 | No adapter option selecting kinds | The webhook subscription already is that switch; a mismatch between an option and the subscription would silently drop delivered events. | `subjects: ('issue' \| 'pullRequest')[]` config. |
-| D-PR5 | Type 21 is 200 Ignored and not in the registration guidance | No operation was found to emit it: merge (UI or git push) and close both arrive as type 19 status changes; the docs and `backlog-js` disagree on its very name (measured 2026-09-06). | `processMessageDeleted` on 21 (nothing to test it against). |
+| D-PR5 | Type 21 is 200 Ignored and not in the registration guidance | It was not observed: merge (UI or git push) and close both arrive as type 19 status changes, no delete operation exists in the UI or the API, and the project's activity history holds none (measured 2026-09-06); the docs and `backlog-js` disagree on its very name. | `processMessageDeleted` on 21 (nothing to test it against). |
 | D-PR6 | A pull request linked to an issue is its own thread; the link is metadata | The link can be changed (`changes[field="issue"]`, measured); routing by it would move a thread. | Routing pull-request activity into the linked issue's thread. |
 | D-PR7 | `listThreads` lists issues only | A pull-request list is per repository, a coordinate the channel id lacks; `api(host).listPullRequests` covers it. | Interleaving every repository's pull requests (N+1 reads, two cursor grammars); listing pull requests only. |
 | D-PR8 | `fetchSubject().type` is `"pull_request"` | The `@chat-adapter/github` convention; the core types it as a free string, so bot authors already branch on that literal. | `"pullRequest"` (matches our `kind`, not the ecosystem). |

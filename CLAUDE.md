@@ -45,7 +45,7 @@ file. Read them before touching `src/`:
 - [docs/plans/pull-request-support.md](./docs/plans/pull-request-support.md)
   — the follow-on stack that makes a pull request a thread alongside an
   issue: the kind-explicit id grammar, the subject layer, activity types
-  18–21, and the measurements that gate the webhook work. Until its P0 amends
+  18–20, and the measurements that gate the webhook work. Until its P0 amends
   the spec, it is the specification of record for pull-request behaviour.
 - `.claude/rules/*.md` — measured Backlog behaviour and verified Chat SDK core
   behaviour, loaded automatically when a `src/**/*.ts` file is read. When the
@@ -440,9 +440,9 @@ matter here: **1** Issue Created, **2** Issue Updated, **3** Issue Commented,
 **20** Comment Added on Pull Request. **17** Comment Notification Added is the
 "project notifications" in the package description and is acknowledged, not
 dispatched. **21** is documented as "Pull Request Deleted" and typed by
-`backlog-js` as `PullRequestMerged`; nothing was found to emit it — merge and
-close both arrive as type 19 status changes
-(`.claude/rules/backlog-pull-request-facts.md`). Subscribe explicitly via
+`backlog-js` as `PullRequestMerged`; it was not observed — merge and close
+both arrive as type 19 status changes, and no delete operation exists in the
+UI or the API (`.claude/rules/backlog-pull-request-facts.md`). Subscribe explicitly via
 `activityTypeIds[]` rather than setting `allEvent` — the full range runs to 49
 and includes git push, wiki and document events this adapter has no meaning
 for. Pull-request facts (three-coordinate addressing, no comment delete,
