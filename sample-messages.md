@@ -12,7 +12,8 @@ match the activity shape in the envelope but **not** field for field: a webhook
 body additionally carries the issue snapshot (`assignee`, `status`, `priority`,
 …), spells one key `externalFileLinks` where the activity form says
 `external_file_links`, and omits the activity form’s `field_text` inside
-`changes[]` (measured on a development space, 2026-09-06).
+`changes[]`. A pull-request body adds four keys of its own — `assignee`,
+`base`, `branch` and `diff` (measured on a development space, 2026-09-06).
 
 Vocabulary throughout: host `example.backlog.com`, bot `Chatbot` (id 999),
 users `Alice` (100) and `Bob` (101), project 500, issue 8001, repository 700
@@ -654,7 +655,7 @@ a bulk update of a **single** issue is a type 14 too, with a one-entry `link[]`.
 
 ## Type 18 — Pull Request Added
 
-`<host>:pr:<repositoryId>:<number>:r` — the thread id comes from `content.repository.id` and `content.number`, never from `content.id`, which addresses no endpoint. The `summary` keeps mention notation raw while a description or comment carries it rewritten.
+`<host>:pr:<repositoryId>:<number>:r` — the thread id comes from `content.repository.id` and `content.number`, never from `content.id`, which addresses no endpoint. The `summary` keeps mention notation raw while a description or comment carries it rewritten. `content.assignee` is the account the pull request was opened for, and opening one for the bot is a mention; on a 19 or a 20 the same key is the standing assignee and means nothing.
 
 ```json
 {
@@ -672,6 +673,16 @@ a bulk update of a **single** issue is a type 14 too, with a one-entry `link[]`.
     "number": 12,
     "summary": "Retry the deploy step <@U999>",
     "description": "Fixes the flaky staging deploy.",
+    "base": "main",
+    "branch": "fix/deploy-retry",
+    "diff": null,
+    "assignee": {
+      "id": 999,
+      "userId": "chatbot",
+      "name": "Chatbot",
+      "roleType": 94,
+      "lang": "ja"
+    },
     "comment": null,
     "changes": [],
     "issue": null,
@@ -715,6 +726,10 @@ a bulk update of a **single** issue is a type 14 too, with a one-entry `link[]`.
     "number": 12,
     "summary": "Retry the deploy step on a 5xx",
     "description": "Fixes the flaky staging deploy.",
+    "base": "main",
+    "branch": "fix/deploy-retry",
+    "diff": null,
+    "assignee": null,
     "comment": {
       "id": 7000001,
       "content": "Looks good, one question about the timeout."
@@ -761,6 +776,10 @@ a bulk update of a **single** issue is a type 14 too, with a one-entry `link[]`.
     "number": 12,
     "summary": "Retry the deploy step on a 5xx",
     "description": "Fixes the flaky staging deploy.",
+    "base": "main",
+    "branch": "fix/deploy-retry",
+    "diff": null,
+    "assignee": null,
     "comment": {
       "id": 7000001,
       "content": "Trace attached."
@@ -815,6 +834,10 @@ merge (from the UI or by pushing the merge to the base branch) and close both ar
     "number": 12,
     "summary": "Retry the deploy step on a 5xx",
     "description": "Fixes the flaky staging deploy.",
+    "base": "main",
+    "branch": "fix/deploy-retry",
+    "diff": null,
+    "assignee": null,
     "comment": {
       "id": 7000002,
       "content": ""
@@ -869,6 +892,10 @@ merge (from the UI or by pushing the merge to the base branch) and close both ar
     "number": 12,
     "summary": "Retry the deploy step on a 5xx",
     "description": "Fixes the flaky staging deploy.",
+    "base": "main",
+    "branch": "fix/deploy-retry",
+    "diff": null,
+    "assignee": null,
     "comment": {
       "id": 7000002,
       "content": ""
@@ -923,6 +950,10 @@ the `PATCH`’s own `comment` text arrives as `content.comment.content`
     "number": 12,
     "summary": "Retry the deploy step on a 5xx",
     "description": "Fixes the flaky staging deploy.",
+    "base": "main",
+    "branch": "fix/deploy-retry",
+    "diff": null,
+    "assignee": null,
     "comment": {
       "id": 7000002,
       "content": "Rewording the summary."
@@ -977,6 +1008,10 @@ the `PATCH`’s own `comment` text arrives as `content.comment.content`
     "number": 12,
     "summary": "Retry the deploy step on a 5xx",
     "description": "Fixes the flaky staging deploy.",
+    "base": "main",
+    "branch": "fix/deploy-retry",
+    "diff": null,
+    "assignee": null,
     "comment": null,
     "changes": [],
     "issue": null,
