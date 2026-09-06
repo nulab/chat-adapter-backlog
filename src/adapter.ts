@@ -64,6 +64,7 @@ import {
   DISPATCHED_ACTIVITY_TYPES,
   parseActivity,
   parseEnvelope,
+  repositoryNameOf,
   subjectOfActivity,
 } from './webhook/payload';
 import { verifyWebhookRequest } from './webhook/verify';
@@ -454,6 +455,16 @@ function subjectOfRaw(raw: BacklogRawMessage): {
         },
       };
   }
+}
+
+/**
+ * Key of the repository-name cache (docs/specs/adapter.md §7.3). The host
+ * comes first so `fetchChannelInfo` can drop a host's names by prefix, and a
+ * repository id is all a pull request carries — one function so the three
+ * places that build or scan the key cannot drift apart.
+ */
+function repositoryNameKey(host: string, repositoryId: number): string {
+  return `${host}:${repositoryId}`;
 }
 
 /**
@@ -900,7 +911,7 @@ export class BacklogAdapter implements Adapter<
     projectId: number,
     repositoryId: number
   ): Promise<string | undefined> {
-    const key = `${host}:${repositoryId}`;
+    const key = repositoryNameKey(host, repositoryId);
     const cached = this.repositoryNameCache.get(key);
     if (cached !== undefined) {
       return cached;
@@ -998,20 +1009,31 @@ export class BacklogAdapter implements Adapter<
     }
     const chat = this.chat;
 
-    if (activity.createdUser.id === installation.botUserId) {
-      this.logger.debug('self message skipped', {
-        host,
-        issueId: activity.content.id,
-      });
-      return new Response('OK', { status: 200 });
-    }
-
     const subject = subjectOfActivity(activity);
     const threadId = encodeThreadIdStruct({
       host,
       projectId: activity.project.id,
       subject,
     });
+
+    if (activity.createdUser.id === installation.botUserId) {
+      this.logger.debug('self message skipped', { host, threadId });
+      return new Response('OK', { status: 200 });
+    }
+
+    // Every pull-request delivery carries `content.repository.name`, which the
+    // REST pull-request object carries nowhere and the §7.3 web URL needs
+    // (measured 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`
+    // "Addressing"). Caching it here rather than on the read side is what
+    // spares the next `fetchThread` a Get Git Repository, so it happens before
+    // the response returns, not inside the dispatched factory.
+    const repository = repositoryNameOf(activity);
+    if (repository !== undefined) {
+      this.repositoryNameCache.set(
+        repositoryNameKey(host, repository.repositoryId),
+        repository.name
+      );
+    }
 
     if (activity.type === 4) {
       const channelId = decodeChannelIdFromThreadId(threadId);
@@ -1039,7 +1061,7 @@ export class BacklogAdapter implements Adapter<
       ).catch((cause: unknown) => {
         this.logger.error('inbound processing failed', {
           host,
-          issueId: activity.content.id,
+          threadId,
           messageId,
           error: cause instanceof Error ? cause.message : String(cause),
         });
@@ -1058,7 +1080,7 @@ export class BacklogAdapter implements Adapter<
     };
 
     const messageIdForLog =
-      activity.type === 1
+      activity.type === 1 || activity.type === 18
         ? encodeMessageId({ host, subject, part: 'root' })
         : activity.content.comment !== null &&
             activity.content.comment !== undefined
@@ -1087,7 +1109,7 @@ export class BacklogAdapter implements Adapter<
     ).catch((cause: unknown) => {
       this.logger.error('inbound processing failed', {
         host,
-        issueId: activity.content.id,
+        threadId,
         messageId: messageIdForLog,
         error: cause instanceof Error ? cause.message : String(cause),
       });
@@ -1118,7 +1140,18 @@ export class BacklogAdapter implements Adapter<
       });
     }
 
-    if (payload.type !== 1 && payload.type !== 2 && payload.type !== 3) {
+    // Listed positively rather than as "not a deletion" so a type that is
+    // added to `RecognisedActivity` without a §5.3 mapping row fails here
+    // instead of reaching a builder that has no shape for it. The chain also
+    // narrows `payload` to `InboundActivity` without naming the type.
+    if (
+      payload.type !== 1 &&
+      payload.type !== 2 &&
+      payload.type !== 3 &&
+      payload.type !== 18 &&
+      payload.type !== 19 &&
+      payload.type !== 20
+    ) {
       throw new ValidationError(
         'backlog',
         `parseMessage: activity type ${payload.type} produces no message`

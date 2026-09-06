@@ -32,7 +32,11 @@ import type {
   ListCommentsOptions,
   StarTarget,
 } from '../client/port';
-import type { BacklogRawMessage, BacklogSubjectRef } from '../types';
+import type {
+  BacklogChange,
+  BacklogRawMessage,
+  BacklogSubjectRef,
+} from '../types';
 import type { Attachment } from 'chat';
 
 /**
@@ -118,6 +122,15 @@ export interface SubjectClient {
     name: string;
     size: number;
   }): Attachment;
+  /**
+   * The file a webhook `changes[]` entry names, for a kind whose payload
+   * names one there at all, or `undefined` for a kind whose payload never
+   * does (§6.6). The caller has already established that the entry is an
+   * attachment being added; what is left is per kind, because the two
+   * payloads carry different evidence — a pull request's names the file and
+   * nothing else, an issue's carries no such entry.
+   */
+  webhookChangeAttachment(change: BacklogChange): Attachment | undefined;
 
   /** `ThreadInfo.channelName` (§7.3). */
   channelName(root: SubjectRoot, names: SubjectNames): string | undefined;

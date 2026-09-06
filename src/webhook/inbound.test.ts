@@ -9,24 +9,31 @@ import {
   issueCommented,
   issueCreated,
   issueUpdatedWithoutComment,
+  pullRequestAdded,
+  pullRequestAssigneeChanged,
+  pullRequestCommented,
+  pullRequestCommentWithAttachment,
+  pullRequestStatusChanged,
+  pullRequestUpdated,
   statusChanged,
 } from '../test/fixtures/webhooks';
+import { createPullRequestSubjectClient } from '../subject/pull-request';
 import { buildAuthor, buildInboundMessageFields } from './inbound';
 import { parseActivity } from './payload';
 
-import type { BuildInboundMessageInput } from './inbound';
-import type {
-  IssueCreatedActivity,
-  IssueUpdatedOrCommentedActivity,
-} from './payload';
+import type { BuildInboundMessageInput, InboundActivity } from './inbound';
+import type { BacklogApi, BacklogComment } from '../client/port';
 import type { SubjectClient } from '../subject/client';
+import type { BacklogChange } from '../types';
 import type { Attachment } from 'chat';
 
 /**
- * Only `ref` and `webhookAttachment` are reachable from the webhook path, so
- * the stub implements those two and leaves the rest of `SubjectClient` to
- * `src/subject/*.test.ts`. `webhookAttachment` mirrors the issue client's
- * mapping so the assertions below stay about what the webhook path produces.
+ * Only `ref`, `webhookAttachment` and `webhookChangeAttachment` are reachable
+ * from the webhook path, so the stub implements those three and leaves the
+ * rest of `SubjectClient` to `src/subject/*.test.ts`. Both attachment members
+ * mirror the issue client's mapping — including its empty answer for a
+ * `changes[]` entry, which an issue webhook never carries — so the assertions
+ * below stay about what the webhook path produces.
  */
 function issueSubject(
   fetchAttachment: (
@@ -48,6 +55,44 @@ function issueSubject(
       url: `https://${FIXTURE.host}/api/v2/issues/${ref.issueId}/attachments/${attachment.id}`,
       fetchData: () => fetchAttachment(ref.issueId, attachment.id),
     }),
+    webhookChangeAttachment: (): Attachment | undefined => undefined,
+  } as unknown as SubjectClient;
+}
+
+/**
+ * The same three members for a pull-request thread. `webhookAttachment`
+ * mirrors the pull-request client's URL, which is keyed by project,
+ * repository and number rather than by an issue id, and
+ * `webhookChangeAttachment` mirrors its name-only file, which carries no URL
+ * at all.
+ */
+function pullRequestSubject(): SubjectClient {
+  const ref = {
+    kind: 'pullRequest',
+    repositoryId: FIXTURE.repositoryId,
+    number: FIXTURE.pullRequestNumber,
+  } as const;
+  return {
+    ref,
+    webhookAttachment: (attachment: {
+      id: number;
+      name: string;
+      size: number;
+    }): Attachment => ({
+      type: 'file',
+      name: attachment.name,
+      size: attachment.size,
+      url:
+        `https://${FIXTURE.host}/api/v2/projects/${FIXTURE.projectId}` +
+        `/git/repositories/${ref.repositoryId}/pullRequests/${ref.number}` +
+        `/attachments/${attachment.id}`,
+    }),
+    webhookChangeAttachment: (
+      change: BacklogChange
+    ): Attachment | undefined => {
+      const name = change.newValue;
+      return name === null ? undefined : { type: 'file', name };
+    },
   } as unknown as SubjectClient;
 }
 
@@ -63,29 +108,37 @@ function input(
   };
 }
 
-function created(payload: object): IssueCreatedActivity {
-  const result = parseActivity(1, payload);
-  if (!('activity' in result)) {
-    throw new Error('fixture failed to validate as type 1');
-  }
-  return result.activity as IssueCreatedActivity;
+function pullRequestInput(
+  overrides: Partial<BuildInboundMessageInput> = {}
+): BuildInboundMessageInput {
+  return input({ subject: pullRequestSubject(), ...overrides });
 }
 
-function updated(payload: object): IssueUpdatedOrCommentedActivity {
-  const result = parseActivity(2, payload);
+/**
+ * A fixture body as the response ladder hands it on: validated by the schema
+ * for its type, so a test can never assert on a field the schema would have
+ * stripped before the mapping saw it.
+ */
+function activityOfType(type: number, payload: object): InboundActivity {
+  const result = parseActivity(type, payload);
   if (!('activity' in result)) {
-    throw new Error('fixture failed to validate as type 2');
+    throw new Error(
+      `fixture failed to validate as type ${type}: ${result.issuePaths.join(', ')}`
+    );
   }
-  return result.activity as IssueUpdatedOrCommentedActivity;
+  const activity = result.activity;
+  if (activity.type === 4) {
+    throw new Error('type 4 is a deletion, not a message');
+  }
+  return activity;
 }
 
-function commented(payload: object): IssueUpdatedOrCommentedActivity {
-  const result = parseActivity(3, payload);
-  if (!('activity' in result)) {
-    throw new Error('fixture failed to validate as type 3');
-  }
-  return result.activity as IssueUpdatedOrCommentedActivity;
-}
+const created = (payload: object): InboundActivity =>
+  activityOfType(1, payload);
+const updated = (payload: object): InboundActivity =>
+  activityOfType(2, payload);
+const commented = (payload: object): InboundActivity =>
+  activityOfType(3, payload);
 
 describe('buildInboundMessageFields — type 1 Issue Created', () => {
   it('the message id is the issue root and text is summary + description', () => {
@@ -296,22 +349,273 @@ describe('buildInboundMessageFields — type 2 without a comment id', () => {
   });
 });
 
-describe('buildInboundMessageFields — the subject the caller resolved', () => {
-  it('builds every id from that subject, whatever kind it is', () => {
-    const pullRequestSubject = {
-      ref: {
-        kind: 'pullRequest',
-        repositoryId: FIXTURE.repositoryId,
-        number: FIXTURE.pullRequestNumber,
-      },
-      webhookAttachment: () => {
-        throw new Error('no attachments in this fixture');
-      },
-    } as unknown as SubjectClient;
+describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
+  it('the message id is the pull request root and text is summary + description', () => {
+    const activity = activityOfType(
+      18,
+      pullRequestAdded({
+        summary: 'Retry the deploy step on a 5xx',
+        description: 'Fixes the flaky staging deploy.',
+      })
+    );
+
+    const fields = buildInboundMessageFields(activity, pullRequestInput());
+
+    expect(fields.messageId).toBe(
+      `${FIXTURE.host}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}:r`
+    );
+    expect(fields.text).toBe(
+      'Retry the deploy step on a 5xx\n\nFixes the flaky staging deploy.'
+    );
+    expect(fields.changes).toEqual([]);
+  });
+
+  it('a linked issue is display data: it changes neither the ids nor the text', () => {
+    const withLink = buildInboundMessageFields(
+      activityOfType(18, pullRequestAdded({ linkedIssue: true })),
+      pullRequestInput()
+    );
+    const withoutLink = buildInboundMessageFields(
+      activityOfType(18, pullRequestAdded()),
+      pullRequestInput()
+    );
+
+    expect(withLink.messageId).toBe(withoutLink.messageId);
+    expect(withLink.text).toBe(withoutLink.text);
+  });
+
+  it('a mention typed into the description counts', () => {
+    const activity = activityOfType(
+      18,
+      pullRequestAdded({ description: 'cc @Chatbot please review' })
+    );
+
+    const fields = buildInboundMessageFields(activity, pullRequestInput());
+
+    expect(fields.isMention).toBe(true);
+  });
+
+  it('a summary mentioning the bot in raw notation is a mention', () => {
+    const activity = activityOfType(
+      18,
+      pullRequestAdded({ summary: `cc <@U${FIXTURE.bot.id}> please review` })
+    );
+
+    const fields = buildInboundMessageFields(activity, pullRequestInput());
+
+    expect(fields.isMention).toBe(true);
+  });
+
+  it('an issue summary carrying the same raw notation is not a mention', () => {
+    const activity = created(
+      issueCreated({ summary: `cc <@U${FIXTURE.bot.id}> please review` })
+    );
+
+    const fields = buildInboundMessageFields(activity, input());
+
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('a summary mentioning another user in raw notation is not a mention', () => {
+    const activity = activityOfType(
+      18,
+      pullRequestAdded({ summary: `cc <@U${FIXTURE.alice.id}> please review` })
+    );
+
+    const fields = buildInboundMessageFields(activity, pullRequestInput());
+
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('an assignee a webhook body turns out to carry is read', () => {
+    // The activity form of type 18 carries no `assignee` at all (measured
+    // 2026-09-06) and the webhook form is unmeasured, so the field is added
+    // by hand here rather than through the fixture builder.
+    const payload = pullRequestAdded();
+    (payload['content'] as Record<string, unknown>)['assignee'] = {
+      id: FIXTURE.bot.id,
+      name: FIXTURE.bot.name,
+    };
 
     const fields = buildInboundMessageFields(
+      activityOfType(18, payload),
+      pullRequestInput()
+    );
+
+    expect(fields.isMention).toBe(true);
+  });
+
+  it('attachments a webhook body turns out to carry map through the subject', () => {
+    const payload = pullRequestAdded();
+    (payload['content'] as Record<string, unknown>)['attachments'] = [
+      { id: 9002, name: 'trace.log', size: 2048 },
+    ];
+
+    const fields = buildInboundMessageFields(
+      activityOfType(18, payload),
+      pullRequestInput()
+    );
+
+    expect(fields.attachments).toHaveLength(1);
+    expect(fields.attachments[0]).toMatchObject({
+      type: 'file',
+      name: 'trace.log',
+      size: 2048,
+      url:
+        `https://${FIXTURE.host}/api/v2/projects/${FIXTURE.projectId}` +
+        `/git/repositories/${FIXTURE.repositoryId}` +
+        `/pullRequests/${FIXTURE.pullRequestNumber}/attachments/9002`,
+    });
+  });
+});
+
+describe('buildInboundMessageFields — types 19 and 20, comment id present', () => {
+  it('a plain comment (type 20) arrives with the comment message id and its text', () => {
+    const activity = activityOfType(
+      20,
+      pullRequestCommented({
+        commentId: 7000001,
+        text: 'Looks good, one question about the timeout.',
+      })
+    );
+
+    const fields = buildInboundMessageFields(activity, pullRequestInput());
+
+    expect(fields.messageId).toBe(
+      `${FIXTURE.host}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}:c7000001`
+    );
+    expect(fields.text).toBe('Looks good, one question about the timeout.');
+    expect(fields.changes).toEqual([]);
+  });
+
+  it('a summary change (type 19) carries the PATCH comment text and both bodies', () => {
+    const activity = activityOfType(
+      19,
+      pullRequestUpdated({ commentId: 7000002 })
+    );
+
+    const fields = buildInboundMessageFields(activity, pullRequestInput());
+
+    expect(fields.messageId).toBe(
+      `${FIXTURE.host}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}:c7000002`
+    );
+    expect(fields.text).toBe('Rewording the summary.');
+    expect(fields.changes).toEqual([
+      {
+        field: 'summary',
+        oldValue: 'Retry the deploy step',
+        newValue: 'Retry the deploy step on a 5xx',
+      },
+    ]);
+  });
+
+  it('a merge arrives as a status change with empty text, not as a type of its own', () => {
+    const activity = activityOfType(19, pullRequestStatusChanged());
+
+    const fields = buildInboundMessageFields(activity, pullRequestInput());
+
+    expect(fields.text).toBe('');
+    expect(fields.changes).toEqual([
+      { field: 'status', newValue: '3', oldValue: '1' },
+    ]);
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('assigning the bot to a pull request is a mention', () => {
+    const fields = buildInboundMessageFields(
+      activityOfType(
+        19,
+        pullRequestAssigneeChanged({ assigneeName: FIXTURE.bot.name })
+      ),
+      pullRequestInput()
+    );
+
+    expect(fields.isMention).toBe(true);
+    expect(fields.text).toBe('');
+    expect(fields.changes[0]).toMatchObject({
+      field: 'assignee',
+      newValue: FIXTURE.bot.name,
+    });
+  });
+
+  it('assigning someone other than the bot to a pull request is not a mention', () => {
+    const fields = buildInboundMessageFields(
+      activityOfType(
+        19,
+        pullRequestAssigneeChanged({ assigneeName: FIXTURE.alice.name })
+      ),
+      pullRequestInput()
+    );
+
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('raw mention notation in a comment is not a mention, only a summary keeps it literal', () => {
+    const activity = activityOfType(
+      20,
+      pullRequestCommented({ text: `cc <@U${FIXTURE.bot.id}>` })
+    );
+
+    const fields = buildInboundMessageFields(activity, pullRequestInput());
+
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('a file posted with a pull request comment reaches the webhook message as an attachment', () => {
+    const activity = activityOfType(
+      20,
+      pullRequestCommentWithAttachment({ fileName: 'trace.log' })
+    );
+
+    const fields = buildInboundMessageFields(activity, pullRequestInput());
+
+    expect(fields.attachments).toEqual([{ type: 'file', name: 'trace.log' }]);
+    expect(fields.changes).toEqual([
+      { field: 'attachment', newValue: 'trace.log', oldValue: '' },
+    ]);
+  });
+
+  it('an attachment the changes name as removed is not offered as a file', () => {
+    const activity = activityOfType(
+      20,
+      pullRequestCommented({
+        changes: [
+          { field: 'attachment', new_value: '', old_value: 'gone.log' },
+        ],
+      })
+    );
+
+    const fields = buildInboundMessageFields(activity, pullRequestInput());
+
+    expect(fields.attachments).toEqual([]);
+  });
+});
+
+describe('buildInboundMessageFields — type 19 without a comment id', () => {
+  it('uses the :u: message id and empty text', () => {
+    // Every measured pull-request update carried a changelog comment, so the
+    // fixture builder always attaches one; the `:u:` path exists for a body
+    // that does not.
+    const payload = pullRequestUpdated();
+    (payload['content'] as Record<string, unknown>)['comment'] = null;
+
+    const fields = buildInboundMessageFields(
+      activityOfType(19, payload),
+      pullRequestInput()
+    );
+
+    expect(fields.messageId).toBe(
+      `${FIXTURE.host}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}:u:2026-09-03T04:05:06Z`
+    );
+    expect(fields.text).toBe('');
+  });
+});
+
+describe('buildInboundMessageFields — the subject the caller resolved', () => {
+  it('builds every id from that subject, whatever kind it is', () => {
+    const fields = buildInboundMessageFields(
       commented(issueCommented({ commentId: 7000001 })),
-      input({ subject: pullRequestSubject })
+      pullRequestInput()
     );
 
     expect(fields.messageId).toBe(
@@ -415,5 +719,96 @@ describe('buildAuthor', () => {
 
     expect(author.isMe).toBe(true);
     expect(author.isBot).toBe(true);
+  });
+});
+
+describe('one pull request comment seen twice (§6.6)', () => {
+  const ATTACHMENT_ID = 4242;
+  const ENDPOINT_REF = {
+    projectId: FIXTURE.projectId,
+    repositoryId: FIXTURE.repositoryId,
+    number: FIXTURE.pullRequestNumber,
+  };
+
+  /** The comment `fetchMessages` reads back for the file the webhook announced. */
+  function restComment(fileName: string): BacklogComment {
+    return {
+      id: 7000001,
+      content: 'Trace attached.',
+      changeLog: [
+        {
+          field: 'attachment',
+          newValue: fileName,
+          oldValue: '',
+          attachmentInfo: null,
+        },
+      ],
+      createdUser: {
+        id: FIXTURE.alice.id,
+        userId: FIXTURE.alice.userId,
+        name: FIXTURE.alice.name,
+        mailAddress: null,
+      },
+      created: new Date('2026-09-03T04:05:06Z'),
+      updated: new Date('2026-09-03T04:05:06Z'),
+      stars: [],
+    };
+  }
+
+  it('the same pull request comment carries the same attachment through the webhook and through a read', async () => {
+    const listPullRequestAttachments = vi.fn().mockResolvedValue([
+      {
+        id: ATTACHMENT_ID,
+        name: 'trace.log',
+        size: 12,
+        created: new Date('2026-09-03T04:05:06Z'),
+      },
+    ]);
+    const downloadPullRequestAttachment = vi.fn().mockResolvedValue({
+      filename: 'trace.log',
+      contentType: 'text/plain',
+      data: Buffer.from('trace'),
+    });
+    const subject = createPullRequestSubjectClient(
+      {
+        listPullRequestAttachments,
+        downloadPullRequestAttachment,
+      } as unknown as BacklogApi,
+      {
+        kind: 'pullRequest',
+        repositoryId: FIXTURE.repositoryId,
+        number: FIXTURE.pullRequestNumber,
+      },
+      { host: FIXTURE.host, projectId: FIXTURE.projectId }
+    );
+
+    const fromWebhook = buildInboundMessageFields(
+      activityOfType(
+        20,
+        pullRequestCommentWithAttachment({ fileName: 'trace.log' })
+      ),
+      input({ subject })
+    ).attachments;
+    const fromRead = subject.commentAttachments(restComment('trace.log'));
+
+    expect(fromWebhook).toHaveLength(1);
+    expect(
+      fromWebhook.map(({ type, name, size, url }) => ({
+        type,
+        name,
+        size,
+        url,
+      }))
+    ).toEqual(
+      fromRead.map(({ type, name, size, url }) => ({ type, name, size, url }))
+    );
+
+    await fromWebhook[0]?.fetchData?.();
+    await fromRead[0]?.fetchData?.();
+
+    expect(downloadPullRequestAttachment.mock.calls).toEqual([
+      [ENDPOINT_REF, ATTACHMENT_ID],
+      [ENDPOINT_REF, ATTACHMENT_ID],
+    ]);
   });
 });

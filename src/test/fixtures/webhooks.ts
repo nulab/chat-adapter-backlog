@@ -76,6 +76,20 @@ function createdUserOf(user: FixtureUser): Record<string, unknown> {
   };
 }
 
+/**
+ * `changes[]` as Backlog serialises it: the three documented keys plus
+ * `field_text` and `type`, which every measured payload carries.
+ */
+function changeEntries(changes: FixtureChange[]): Record<string, unknown>[] {
+  return changes.map((change) => ({
+    field: change.field,
+    new_value: change.new_value ?? '',
+    old_value: change.old_value ?? '',
+    field_text: change.field,
+    type: 'standard',
+  }));
+}
+
 function envelope(
   type: number,
   content: Record<string, unknown>,
@@ -196,13 +210,7 @@ export function issueUpdated(
       id: options.commentId ?? 3002,
       content: options.text ?? null,
     },
-    changes: (options.changes ?? []).map((change) => ({
-      field: change.field,
-      new_value: change.new_value ?? '',
-      old_value: change.old_value ?? '',
-      field_text: change.field,
-      type: 'standard',
-    })),
+    changes: changeEntries(options.changes ?? []),
     shared_files: [],
     external_file_links: [],
   };
@@ -226,15 +234,9 @@ export function issueUpdatedWithoutComment(
       key_id: FIXTURE.issueKeyId,
       summary: 'Deploy fails on the staging space',
       description: 'Reproduces on every push to main.',
-      changes: (
+      changes: changeEntries(
         options.changes ?? [{ field: 'status', new_value: '4', old_value: '3' }]
-      ).map((change) => ({
-        field: change.field,
-        new_value: change.new_value ?? '',
-        old_value: change.old_value ?? '',
-        field_text: change.field,
-        type: 'standard',
-      })),
+      ),
     },
     options
   );
@@ -371,6 +373,263 @@ export function commentNotificationAdded(
         id: options.commentId ?? 3001,
         content: options.text ?? 'Any progress on this?',
       },
+    },
+    options
+  );
+}
+
+/**
+ * The mention notation a pull-request **summary** keeps: the server rewrites
+ * `<@U…>` to `@<display name>` in a description or a comment, but not in a
+ * summary, where the literal survives (measured 2026-09-06,
+ * `.claude/rules/backlog-pull-request-facts.md` "Mentions"). Detection must
+ * therefore match both forms, so both have a fixture.
+ */
+export const RAW_MENTION = `<@U${FIXTURE.bot.id}>`;
+
+/** The rewritten form a description or a comment carries instead. */
+export const RESOLVED_MENTION = `@${FIXTURE.bot.name}`;
+
+/**
+ * A pull request is addressed by repository id and number; `pullRequestId` is
+ * the space-wide id that only `POST /stars` accepts.
+ */
+interface PullRequestOptions extends ActivityOptions {
+  repositoryId?: number;
+  repositoryName?: string;
+  number?: number;
+  pullRequestId?: number;
+}
+
+function repositoryOf(options: PullRequestOptions): Record<string, unknown> {
+  return {
+    id: options.repositoryId ?? FIXTURE.repositoryId,
+    name: options.repositoryName ?? FIXTURE.repositoryName,
+    description: null,
+  };
+}
+
+/**
+ * The one `content` key set types 18, 19 and 20 share (measured 2026-09-06 on
+ * the activity API form, `.claude/rules/backlog-pull-request-facts.md`): no
+ * `assignee`, no `attachments`, no `status`, `base` or `branch`, and
+ * `repository.name` on every one.
+ */
+function pullRequestContent(
+  options: PullRequestOptions & {
+    summary?: string;
+    description?: string | null;
+    comment?: { id: number; content: string | null } | null;
+    changes?: FixtureChange[];
+    issue?: Record<string, unknown> | null;
+  }
+): Record<string, unknown> {
+  return {
+    id: options.pullRequestId ?? FIXTURE.pullRequestId,
+    number: options.number ?? FIXTURE.pullRequestNumber,
+    summary: options.summary ?? 'Retry the deploy step on a 5xx',
+    description: options.description ?? 'Fixes the flaky staging deploy.',
+    comment: options.comment ?? null,
+    changes: changeEntries(options.changes ?? []),
+    issue: options.issue ?? null,
+    repository: repositoryOf(options),
+  };
+}
+
+/**
+ * Type 18 — Pull Request Added.
+ *
+ * The assignee and the attachments a create call takes are **not in the
+ * activity at all**, so no option adds them; `linkedIssue` populates
+ * `content.issue`, which is display data and never routing (D-PR6).
+ */
+export function pullRequestAdded(
+  options: PullRequestOptions & {
+    summary?: string;
+    description?: string | null;
+    linkedIssue?: boolean;
+  } = {}
+): Record<string, unknown> {
+  return envelope(
+    18,
+    pullRequestContent({
+      ...options,
+      comment: null,
+      changes: [],
+      issue: options.linkedIssue
+        ? {
+            id: options.issueId ?? FIXTURE.issueId,
+            key_id: FIXTURE.issueKeyId,
+            issue_key: `${FIXTURE.projectKey}-${FIXTURE.issueKeyId}`,
+            summary: 'Deploy fails on the staging space',
+            description: 'Reproduces on every push to main.',
+          }
+        : null,
+    }),
+    options
+  );
+}
+
+/** Type 20 — Comment Added on Pull Request. A plain comment carries no changes. */
+export function pullRequestCommented(
+  options: PullRequestOptions & {
+    commentId?: number;
+    text?: string | null;
+    changes?: FixtureChange[];
+  } = {}
+): Record<string, unknown> {
+  return envelope(
+    20,
+    pullRequestContent({
+      ...options,
+      comment: {
+        id: options.commentId ?? 7000001,
+        content: options.text ?? 'Looks good, one question about the timeout.',
+      },
+      changes: options.changes ?? [],
+    }),
+    options
+  );
+}
+
+/**
+ * Type 19 — Pull Request Updated, with the changelog comment Backlog attaches
+ * to every field update. A `PATCH` carrying a `comment` puts its text here.
+ */
+export function pullRequestUpdated(
+  options: PullRequestOptions & {
+    commentId?: number;
+    text?: string | null;
+    changes?: FixtureChange[];
+  } = {}
+): Record<string, unknown> {
+  return envelope(
+    19,
+    pullRequestContent({
+      ...options,
+      comment: {
+        id: options.commentId ?? 7000002,
+        content: options.text ?? 'Rewording the summary.',
+      },
+      changes: options.changes ?? [
+        {
+          field: 'summary',
+          old_value: 'Retry the deploy step',
+          new_value: 'Retry the deploy step on a 5xx',
+        },
+      ],
+    }),
+    options
+  );
+}
+
+/**
+ * A merge or a close: both arrive as type 19 with a status change, never as a
+ * type of their own, and the status is an **id string** — `1` Open, `2`
+ * Closed, `3` Merged (measured 2026-09-06).
+ */
+export function pullRequestStatusChanged(
+  options: PullRequestOptions & {
+    newStatusId?: string;
+    oldStatusId?: string;
+  } = {}
+): Record<string, unknown> {
+  return pullRequestUpdated({
+    ...options,
+    text: '',
+    changes: [
+      {
+        field: 'status',
+        new_value: options.newStatusId ?? '3',
+        old_value: options.oldStatusId ?? '1',
+      },
+    ],
+  });
+}
+
+/**
+ * An assignee change reports the new assignee by **display name** under the
+ * field name `assignee` — the issue side calls the same thing `assigner`
+ * (measured 2026-09-06).
+ */
+export function pullRequestAssigneeChanged(
+  options: PullRequestOptions & {
+    assigneeName?: string;
+    previousName?: string;
+  } = {}
+): Record<string, unknown> {
+  return pullRequestUpdated({
+    ...options,
+    text: '',
+    changes: [
+      {
+        field: 'assignee',
+        new_value: options.assigneeName ?? FIXTURE.bot.name,
+        old_value: options.previousName ?? '',
+      },
+    ],
+  });
+}
+
+/**
+ * A comment posted with `attachmentId[]`: the change names the file and
+ * carries **no id**, so the attachment can only be resolved by name against
+ * the pull request's attachment list (D-PR10).
+ */
+export function pullRequestCommentWithAttachment(
+  options: PullRequestOptions & {
+    commentId?: number;
+    text?: string | null;
+    fileName?: string;
+  } = {}
+): Record<string, unknown> {
+  return pullRequestCommented({
+    ...options,
+    text: options.text ?? 'Trace attached.',
+    changes: [
+      {
+        field: 'attachment',
+        new_value: options.fileName ?? 'trace.log',
+        old_value: '',
+      },
+    ],
+  });
+}
+
+/**
+ * Type 21, for the "200 Ignored" case only.
+ *
+ * No type-21 activity was ever observed, so this body is a **guess** wearing
+ * the type-18 content shape (measured 2026-09-06,
+ * `.claude/rules/backlog-pull-request-facts.md`). It is only ever fed to the
+ * ladder's type gate, which ignores it before any schema runs; nothing may
+ * assert on its content.
+ */
+export function pullRequestDeleted(
+  options: PullRequestOptions = {}
+): Record<string, unknown> {
+  return envelope(21, pullRequestContent(options), options);
+}
+
+/**
+ * Type 12 — Git Pushed. A push carries no pull-request reference at all, so
+ * it can never be routed to a thread even when it is the push that merges a
+ * pull request (measured 2026-09-06).
+ */
+export function gitPushed(
+  options: PullRequestOptions & { ref?: string } = {}
+): Record<string, unknown> {
+  return envelope(
+    12,
+    {
+      repository: repositoryOf(options),
+      change_type: 'update',
+      revision_type: 'commit',
+      ref: options.ref ?? 'refs/heads/main',
+      revision_count: 1,
+      revisions: [
+        { rev: '0f1e2d3c4b5a69788796a5b4c3d2e1f009182736', comment: 'Merge' },
+      ],
     },
     options
   );

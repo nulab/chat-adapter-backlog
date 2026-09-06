@@ -10,7 +10,8 @@ The body is one Activity object as returned by
 Backlog publishes no dedicated webhook-payload page, and measured payloads match
 the activity shape field for field. Vocabulary throughout: host
 `example.backlog.com`, bot `Chatbot` (id 999), users `Alice` (100) and `Bob`
-(101), project 500, issue 8001.
+(101), project 500, issue 8001, repository 700 (`example-repo`), pull request
+12.
 
 Three properties of these payloads decide how a handler must read them:
 
@@ -22,6 +23,11 @@ Three properties of these payloads decide how a handler must read them:
   on `content.changes[]`.
 - **`notifications` is always empty** (emptied by Backlog in 2022), so who was
   notified cannot be read from a delivery.
+
+The pull-request payloads below are the **activity API** form, measured on a
+real space on 2026-09-06. The webhook form of types 18–20 is unmeasured; the
+adapter therefore requires only `content.id`, `content.number` and
+`content.repository.id`, and tolerates any key it does not name.
 
 ## Type 1 — Issue Created
 
@@ -503,6 +509,400 @@ dispatched as `processMessageDeleted` on the root message
       "id": 3001,
       "content": "Any progress on this?"
     }
+  },
+  "notifications": [],
+  "createdUser": {
+    "id": 100,
+    "userId": "alice",
+    "name": "Alice",
+    "roleType": 2,
+    "lang": "ja",
+    "mailAddress": "alice@example.com",
+    "nulabAccount": null
+  },
+  "created": "2026-09-03T04:05:06Z"
+}
+```
+
+## Type 18 — Pull Request Added
+
+`<host>:pr:<repositoryId>:<number>:r` — the thread id comes from `content.repository.id` and `content.number`, never from `content.id`, which addresses no endpoint. The `summary` keeps mention notation raw while a description or comment carries it rewritten.
+
+```json
+{
+  "id": 71828,
+  "project": {
+    "id": 500,
+    "projectKey": "EXAMPLE",
+    "name": "Example project",
+    "archived": false,
+    "displayOrder": 2147483646
+  },
+  "type": 18,
+  "content": {
+    "id": 90001,
+    "number": 12,
+    "summary": "Retry the deploy step <@U999>",
+    "description": "Fixes the flaky staging deploy.",
+    "comment": null,
+    "changes": [],
+    "issue": null,
+    "repository": {
+      "id": 700,
+      "name": "example-repo",
+      "description": null
+    }
+  },
+  "notifications": [],
+  "createdUser": {
+    "id": 100,
+    "userId": "alice",
+    "name": "Alice",
+    "roleType": 2,
+    "lang": "ja",
+    "mailAddress": "alice@example.com",
+    "nulabAccount": null
+  },
+  "created": "2026-09-03T04:05:06Z"
+}
+```
+
+## Type 20 — Comment Added on Pull Request
+
+`…:c<commentId>` — pull-request comment ids come from a different sequence than issue comment ids
+
+```json
+{
+  "id": 71828,
+  "project": {
+    "id": 500,
+    "projectKey": "EXAMPLE",
+    "name": "Example project",
+    "archived": false,
+    "displayOrder": 2147483646
+  },
+  "type": 20,
+  "content": {
+    "id": 90001,
+    "number": 12,
+    "summary": "Retry the deploy step on a 5xx",
+    "description": "Fixes the flaky staging deploy.",
+    "comment": {
+      "id": 7000001,
+      "content": "Looks good, one question about the timeout."
+    },
+    "changes": [],
+    "issue": null,
+    "repository": {
+      "id": 700,
+      "name": "example-repo",
+      "description": null
+    }
+  },
+  "notifications": [],
+  "createdUser": {
+    "id": 100,
+    "userId": "alice",
+    "name": "Alice",
+    "roleType": 2,
+    "lang": "ja",
+    "mailAddress": "alice@example.com",
+    "nulabAccount": null
+  },
+  "created": "2026-09-03T04:05:06Z"
+}
+```
+
+## Type 20 — Comment Added on Pull Request — with an attachment
+
+`changes[].field` is `attachment` and names the file with **no id**; the id is resolved lazily from `GET …/pullRequests/:number/attachments`
+
+```json
+{
+  "id": 71828,
+  "project": {
+    "id": 500,
+    "projectKey": "EXAMPLE",
+    "name": "Example project",
+    "archived": false,
+    "displayOrder": 2147483646
+  },
+  "type": 20,
+  "content": {
+    "id": 90001,
+    "number": 12,
+    "summary": "Retry the deploy step on a 5xx",
+    "description": "Fixes the flaky staging deploy.",
+    "comment": {
+      "id": 7000001,
+      "content": "Trace attached."
+    },
+    "changes": [
+      {
+        "field": "attachment",
+        "new_value": "trace.log",
+        "old_value": "",
+        "field_text": "attachment",
+        "type": "standard"
+      }
+    ],
+    "issue": null,
+    "repository": {
+      "id": 700,
+      "name": "example-repo",
+      "description": null
+    }
+  },
+  "notifications": [],
+  "createdUser": {
+    "id": 100,
+    "userId": "alice",
+    "name": "Alice",
+    "roleType": 2,
+    "lang": "ja",
+    "mailAddress": "alice@example.com",
+    "nulabAccount": null
+  },
+  "created": "2026-09-03T04:05:06Z"
+}
+```
+
+## Type 19 — Pull Request Updated — merged or closed
+
+merge (from the UI or by pushing the merge to the base branch) and close both arrive here, as a `status` change by id string (`1` Open, `2` Closed, `3` Merged). There is no separate merge or delete activity.
+
+```json
+{
+  "id": 71828,
+  "project": {
+    "id": 500,
+    "projectKey": "EXAMPLE",
+    "name": "Example project",
+    "archived": false,
+    "displayOrder": 2147483646
+  },
+  "type": 19,
+  "content": {
+    "id": 90001,
+    "number": 12,
+    "summary": "Retry the deploy step on a 5xx",
+    "description": "Fixes the flaky staging deploy.",
+    "comment": {
+      "id": 7000002,
+      "content": ""
+    },
+    "changes": [
+      {
+        "field": "status",
+        "new_value": "3",
+        "old_value": "1",
+        "field_text": "status",
+        "type": "standard"
+      }
+    ],
+    "issue": null,
+    "repository": {
+      "id": 700,
+      "name": "example-repo",
+      "description": null
+    }
+  },
+  "notifications": [],
+  "createdUser": {
+    "id": 100,
+    "userId": "alice",
+    "name": "Alice",
+    "roleType": 2,
+    "lang": "ja",
+    "mailAddress": "alice@example.com",
+    "nulabAccount": null
+  },
+  "created": "2026-09-03T04:05:06Z"
+}
+```
+
+## Type 19 — Pull Request Updated — assignee
+
+`changes[].field` is `assignee` — not the issue side’s `assigner`
+
+```json
+{
+  "id": 71828,
+  "project": {
+    "id": 500,
+    "projectKey": "EXAMPLE",
+    "name": "Example project",
+    "archived": false,
+    "displayOrder": 2147483646
+  },
+  "type": 19,
+  "content": {
+    "id": 90001,
+    "number": 12,
+    "summary": "Retry the deploy step on a 5xx",
+    "description": "Fixes the flaky staging deploy.",
+    "comment": {
+      "id": 7000002,
+      "content": ""
+    },
+    "changes": [
+      {
+        "field": "assignee",
+        "new_value": "Chatbot",
+        "old_value": "",
+        "field_text": "assignee",
+        "type": "standard"
+      }
+    ],
+    "issue": null,
+    "repository": {
+      "id": 700,
+      "name": "example-repo",
+      "description": null
+    }
+  },
+  "notifications": [],
+  "createdUser": {
+    "id": 100,
+    "userId": "alice",
+    "name": "Alice",
+    "roleType": 2,
+    "lang": "ja",
+    "mailAddress": "alice@example.com",
+    "nulabAccount": null
+  },
+  "created": "2026-09-03T04:05:06Z"
+}
+```
+
+## Type 19 — Pull Request Updated — summary
+
+the `PATCH`’s own `comment` text arrives as `content.comment.content`
+
+```json
+{
+  "id": 71828,
+  "project": {
+    "id": 500,
+    "projectKey": "EXAMPLE",
+    "name": "Example project",
+    "archived": false,
+    "displayOrder": 2147483646
+  },
+  "type": 19,
+  "content": {
+    "id": 90001,
+    "number": 12,
+    "summary": "Retry the deploy step on a 5xx",
+    "description": "Fixes the flaky staging deploy.",
+    "comment": {
+      "id": 7000002,
+      "content": "Rewording the summary."
+    },
+    "changes": [
+      {
+        "field": "summary",
+        "new_value": "Retry the deploy step on a 5xx",
+        "old_value": "Retry the deploy step",
+        "field_text": "summary",
+        "type": "standard"
+      }
+    ],
+    "issue": null,
+    "repository": {
+      "id": 700,
+      "name": "example-repo",
+      "description": null
+    }
+  },
+  "notifications": [],
+  "createdUser": {
+    "id": 100,
+    "userId": "alice",
+    "name": "Alice",
+    "roleType": 2,
+    "lang": "ja",
+    "mailAddress": "alice@example.com",
+    "nulabAccount": null
+  },
+  "created": "2026-09-03T04:05:06Z"
+}
+```
+
+## Type 21 — Pull Request Deleted (documented) / Merged (`backlog-js`)
+
+200 Ignored — never observed on a real space, and the two sources disagree on what it even means, so it is not registered and not dispatched
+
+```json
+{
+  "id": 71828,
+  "project": {
+    "id": 500,
+    "projectKey": "EXAMPLE",
+    "name": "Example project",
+    "archived": false,
+    "displayOrder": 2147483646
+  },
+  "type": 21,
+  "content": {
+    "id": 90001,
+    "number": 12,
+    "summary": "Retry the deploy step on a 5xx",
+    "description": "Fixes the flaky staging deploy.",
+    "comment": null,
+    "changes": [],
+    "issue": null,
+    "repository": {
+      "id": 700,
+      "name": "example-repo",
+      "description": null
+    }
+  },
+  "notifications": [],
+  "createdUser": {
+    "id": 100,
+    "userId": "alice",
+    "name": "Alice",
+    "roleType": 2,
+    "lang": "ja",
+    "mailAddress": "alice@example.com",
+    "nulabAccount": null
+  },
+  "created": "2026-09-03T04:05:06Z"
+}
+```
+
+## Type 12 — Git Pushed
+
+200 Ignored — a push is not a conversation, and the payload carries no pull-request reference
+
+```json
+{
+  "id": 71828,
+  "project": {
+    "id": 500,
+    "projectKey": "EXAMPLE",
+    "name": "Example project",
+    "archived": false,
+    "displayOrder": 2147483646
+  },
+  "type": 12,
+  "content": {
+    "repository": {
+      "id": 700,
+      "name": "example-repo",
+      "description": null
+    },
+    "change_type": "update",
+    "revision_type": "commit",
+    "ref": "refs/heads/main",
+    "revision_count": 1,
+    "revisions": [
+      {
+        "rev": "0f1e2d3c4b5a69788796a5b4c3d2e1f009182736",
+        "comment": "Merge"
+      }
+    ]
   },
   "notifications": [],
   "createdUser": {

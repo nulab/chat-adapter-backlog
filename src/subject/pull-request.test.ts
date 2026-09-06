@@ -548,6 +548,44 @@ describe('the pull request subject client', () => {
     );
   });
 
+  it('the attachment a webhook names resolves its id by name when it is first read', async () => {
+    const listPullRequestAttachments = vi.fn().mockResolvedValue([
+      {
+        id: ATTACHMENT_ID,
+        name: 'trace.log',
+        size: 12,
+        created: new Date('2026-09-02T00:00:00.000Z'),
+      },
+    ]);
+    const downloadPullRequestAttachment = vi.fn().mockResolvedValue({
+      filename: 'trace.log',
+      contentType: 'text/plain',
+      data: Buffer.from('trace'),
+    });
+    const { subject, calls } = clientWith({
+      listPullRequestAttachments,
+      downloadPullRequestAttachment,
+    });
+
+    const attachment = subject.webhookChangeAttachment({
+      field: 'attachment',
+      newValue: 'trace.log',
+      oldValue: '',
+    });
+
+    expect(attachment).toMatchObject({ type: 'file', name: 'trace.log' });
+    expect(attachment?.url).toBeUndefined();
+    expect(calls).toEqual([]);
+
+    const data = await attachment?.fetchData?.();
+
+    expect(downloadPullRequestAttachment).toHaveBeenCalledWith(
+      ENDPOINT_REF,
+      ATTACHMENT_ID
+    );
+    expect(Buffer.from(data as Buffer).toString()).toBe('trace');
+  });
+
   it('a webhook attachment on a pull request points at the pull request endpoint', () => {
     const { subject } = clientWith();
 

@@ -7,6 +7,7 @@ import {
   commentWithStatusChange,
   descriptionEdited,
   FIXTURE,
+  gitPushed,
   issueCommented,
   issueCreated,
   issueCreatedFromActivityApi,
@@ -14,6 +15,15 @@ import {
   issueMultiUpdated,
   issueUpdated,
   issueUpdatedWithoutComment,
+  pullRequestAdded,
+  pullRequestAssigneeChanged,
+  pullRequestCommented,
+  pullRequestCommentWithAttachment,
+  pullRequestDeleted,
+  pullRequestStatusChanged,
+  pullRequestUpdated,
+  RAW_MENTION,
+  RESOLVED_MENTION,
   statusChanged,
   unrelatedActivity,
   webhookRequest,
@@ -176,6 +186,172 @@ describe('webhook fixtures', () => {
 
   it('uses an activity type the adapter ignores for the unrelated case', () => {
     expect(unrelatedActivity()['type']).toBe(5);
+  });
+});
+
+/**
+ * The pull-request builders stand in for the **activity API** form measured on
+ * 2026-09-06 (`.claude/rules/backlog-pull-request-facts.md` "What each
+ * pull-request operation emits"); the webhook form of 18–20 is unmeasured, so
+ * these assertions pin what is known and nothing more.
+ */
+describe('pull-request webhook fixtures', () => {
+  it('carries one content key set on all three types, with the repository name on every one', () => {
+    for (const payload of [
+      pullRequestAdded(),
+      pullRequestUpdated(),
+      pullRequestCommented(),
+    ]) {
+      const content = payload['content'] as Record<string, unknown>;
+      expect(Object.keys(content).sort()).toEqual([
+        'changes',
+        'comment',
+        'description',
+        'id',
+        'issue',
+        'number',
+        'repository',
+        'summary',
+      ]);
+      expect(content['repository']).toMatchObject({
+        id: FIXTURE.repositoryId,
+        name: FIXTURE.repositoryName,
+      });
+      expect(payload['notifications']).toEqual([]);
+    }
+  });
+
+  it('omits the assignee and the attachments from a created pull request', () => {
+    const content = pullRequestAdded()['content'] as Record<string, unknown>;
+    expect(content).not.toHaveProperty('assignee');
+    expect(content).not.toHaveProperty('attachments');
+    expect(content['comment']).toBeNull();
+    expect(content['changes']).toEqual([]);
+    expect(pullRequestAdded()['type']).toBe(18);
+  });
+
+  it('addresses the pull request by number and repository, and carries the star-only global id apart from them', () => {
+    const content = pullRequestAdded()['content'] as Record<string, unknown>;
+    expect(content['number']).toBe(FIXTURE.pullRequestNumber);
+    expect(content['id']).toBe(FIXTURE.pullRequestId);
+    expect(content).not.toHaveProperty('issueKey');
+  });
+
+  it('gives a pull-request comment a 7-digit id from its own sequence', () => {
+    const comment = (
+      pullRequestCommented()['content'] as Record<string, unknown>
+    )['comment'] as Record<string, unknown>;
+    expect(String(comment['id'])).toHaveLength(7);
+    expect(pullRequestCommented()['type']).toBe(20);
+  });
+
+  it('reports a merge as a type-19 status change by id string, not a type of its own', () => {
+    const payload = pullRequestStatusChanged();
+    expect(payload['type']).toBe(19);
+    const content = payload['content'] as Record<string, unknown>;
+    expect(content['changes']).toEqual([
+      expect.objectContaining({
+        field: 'status',
+        new_value: '3',
+        old_value: '1',
+      }),
+    ]);
+    expect((content['comment'] as Record<string, unknown>)['content']).toBe('');
+  });
+
+  it('names the pull-request assignee field `assignee`, where the issue side says `assigner`', () => {
+    const changes = (
+      pullRequestAssigneeChanged()['content'] as Record<string, unknown>
+    )['changes'] as Record<string, unknown>[];
+    expect(changes[0]).toMatchObject({
+      field: 'assignee',
+      new_value: FIXTURE.bot.name,
+      old_value: '',
+    });
+
+    const issueSide = (assigneeChanged()['content'] as Record<string, unknown>)[
+      'changes'
+    ] as Record<string, unknown>[];
+    expect(issueSide[0]).toMatchObject({ field: 'assigner' });
+  });
+
+  it('names a comment attachment by file name and carries no id for it', () => {
+    const content = pullRequestCommentWithAttachment({
+      fileName: 'stack.txt',
+    })['content'] as Record<string, unknown>;
+    const changes = content['changes'] as Record<string, unknown>[];
+    expect(changes[0]).toMatchObject({
+      field: 'attachment',
+      new_value: 'stack.txt',
+      old_value: '',
+    });
+    expect(changes[0]).not.toHaveProperty('id');
+    expect(content).not.toHaveProperty('attachments');
+  });
+
+  it('populates the linked issue only when one is asked for', () => {
+    expect(
+      (pullRequestAdded()['content'] as Record<string, unknown>)['issue']
+    ).toBeNull();
+
+    const linked = (
+      pullRequestAdded({ linkedIssue: true })['content'] as Record<
+        string,
+        unknown
+      >
+    )['issue'] as Record<string, unknown>;
+    expect(linked['id']).toBe(FIXTURE.issueId);
+    expect(linked['issue_key']).toBe(
+      `${FIXTURE.projectKey}-${FIXTURE.issueKeyId}`
+    );
+  });
+
+  it('keeps mention notation raw in a summary and rewritten in a description', () => {
+    const content = pullRequestAdded({
+      summary: `Retry the deploy step ${RAW_MENTION}`,
+      description: `${RESOLVED_MENTION} please review.`,
+    })['content'] as Record<string, unknown>;
+    expect(content['summary']).toContain('<@U999>');
+    expect(content['description']).toContain('@Chatbot');
+    expect(content['description']).not.toContain('<@U');
+  });
+
+  it('tolerates the extra keys real payloads carry inside changes[]', () => {
+    const changes = (
+      pullRequestStatusChanged()['content'] as Record<string, unknown>
+    )['changes'] as Record<string, unknown>[];
+    expect(changes[0]).toHaveProperty('field_text');
+    expect(changes[0]).toHaveProperty('type', 'standard');
+  });
+
+  it('varies the repository and the number so two threads can be told apart', () => {
+    const content = pullRequestCommented({
+      repositoryId: 701,
+      number: 13,
+    })['content'] as Record<string, unknown>;
+    expect(content['number']).toBe(13);
+    expect(content['repository']).toMatchObject({ id: 701 });
+  });
+
+  it('gives a git push no pull-request reference at all', () => {
+    const payload = gitPushed();
+    expect(payload['type']).toBe(12);
+    const content = payload['content'] as Record<string, unknown>;
+    expect(Object.keys(content).sort()).toEqual([
+      'change_type',
+      'ref',
+      'repository',
+      'revision_count',
+      'revision_type',
+      'revisions',
+    ]);
+    expect(content).not.toHaveProperty('number');
+  });
+
+  it('offers a type-21 body for the ignored case only', () => {
+    // Never observed on a real space (measured 2026-09-06): the body is a
+    // guess, so only its type may be asserted on.
+    expect(pullRequestDeleted()['type']).toBe(21);
   });
 });
 

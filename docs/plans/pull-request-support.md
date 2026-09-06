@@ -535,9 +535,20 @@ written on purpose, stack declared in the first line of the body (CLAUDE.md
 ### P3 — pull-request webhook ingress (`webhook`)
 
 - **Title**: `feat(webhook): dispatch pull request activities 18–20`. Label `enhancement`.
-- **Branch**: off P2. Body: `Stacked on #<P2> — merge that first.` **Gated on
-  the webhook half of M1** being recorded in
-  `.claude/rules/backlog-pull-request-facts.md` (M2–M5 are recorded).
+- **Branch**: off P2. Body: `Stacked on #<P2> — merge that first.` The gate on
+  the webhook half of M1 was **waived by the maintainer** (2026-09-06): the
+  measurement needs a receiver Backlog's servers can reach, which the
+  development environment cannot provide, and the activity form is measured.
+  The waiver is safe only because of how the schemas are written — required
+  fields are the three identity fields (`content.id`, `content.number`,
+  `content.repository.id`), everything else is optional, and unknown keys are
+  tolerated — so a webhook body that carries *more* than the activity form
+  parses, and one that carries *less* than the three identity fields is the 400
+  it should be. What stays unknown is whether a webhook adds a field the
+  adapter would want (an `assignee` on 18, as type 1 does); that costs a
+  missing mention, not a rejection. The `UNMEASURED` entry in
+  `.claude/rules/backlog-pull-request-facts.md` stays until somebody captures a
+  body.
 - **Scope**: `src/webhook/payload.ts` (schemas for 18–20 from the measured
   shapes; `DISPATCHED_ACTIVITY_TYPES` widened; `subjectOfActivity`),
   `src/webhook/inbound.ts` (root and comment builders shared with types 1–3
