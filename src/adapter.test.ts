@@ -238,6 +238,48 @@ describe('BacklogAdapter construction', () => {
     );
   });
 
+  it("botUserName reports each installation's own display name", () => {
+    const adapter = new BacklogAdapter({
+      installations: [
+        {
+          host: 'one.backlog.com',
+          apiKey: 'k1',
+          botUserId: 999,
+          botUserName: 'Chatbot',
+          webhookSecret: 's1',
+        },
+        {
+          host: 'two.backlog.jp',
+          apiKey: 'k2',
+          botUserId: 998,
+          botUserName: 'Helperbot',
+          webhookSecret: 's2',
+        },
+      ],
+    });
+
+    expect(adapter.botUserName('one.backlog.com')).toBe('Chatbot');
+    expect(adapter.botUserName('two.backlog.jp')).toBe('Helperbot');
+    expect(adapter.userName).toBe('Chatbot');
+  });
+
+  it('botUserName ignores a userName override', () => {
+    const adapter = new BacklogAdapter({
+      ...validConfig(),
+      userName: 'Support Bot',
+    });
+
+    expect(adapter.userName).toBe('Support Bot');
+    expect(adapter.botUserName('example.backlog.com')).toBe('Chatbot');
+  });
+
+  it('botUserName("unknown.backlog.com") reports the installation as not found', () => {
+    const adapter = new BacklogAdapter(validConfig());
+    expect(() => adapter.botUserName('unknown.backlog.com')).toThrow(
+      ResourceNotFoundError
+    );
+  });
+
   it('constructs from environment variables when config is empty', () => {
     process.env.BACKLOG_HOST = 'example.backlog.com';
     process.env.BACKLOG_API_KEY = 'env-api-key';

@@ -714,6 +714,18 @@ export class BacklogAdapter implements Adapter<
   }
 
   /**
+   * The bot's display name on that installation (docs/specs/adapter.md §3.3).
+   * `userName` is one string for the whole adapter — the first installation's
+   * name — so a consumer running several spaces under different display names
+   * cannot build or match its own mention string from it. Only the name is
+   * exposed, not the installation: `botUserId` stays private (§3.3) and a
+   * credential must never leave through a getter.
+   */
+  botUserName(host: string): string {
+    return this.resolveInstallation(host).botUserName;
+  }
+
+  /**
    * Synchronous and cache-only (docs/specs/adapter.md §9.1, D14): `target`,
    * when given, is a thread **or channel** id (§4.1) whose formatting rule
    * `ensureProject` (webhook ingress) or `getConverter` (egress) may already

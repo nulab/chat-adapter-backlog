@@ -232,11 +232,18 @@ throws makes that call reject with `AuthenticationError` wrapping the cause.
   `ResourceNotFoundError("backlog", "installation", host)`.
 - `rateLimit(host: string): RateLimitSnapshots` — last observed
   `X-RateLimit-*` per bucket for that host (D5); empty object before any call.
+- `botUserName(host: string): string` — the bot's display name on that
+  installation (D19). Unknown host → the same
+  `ResourceNotFoundError("backlog", "installation", host)`. Unaffected by a
+  `config.userName` override, which renames the adapter to the core and not
+  the bot in any space.
 - `renderFormatted(content, target?: string)` — see §4 and §9.3 ⚑.
 
 `botUserId` is **not** exposed on the adapter: it differs per installation, and
 the core's use of it (an extra `@<id>` mention pattern) would be wrong for
-every space but one.
+every space but one. The display name **is**, through `botUserName(host)`,
+because a consumer that reads or writes a mention string needs it per space and
+Backlog has already published it in every rewritten comment body (D19).
 
 ### 3.4 Postable extras
 
@@ -311,7 +318,7 @@ channel ids (D-PR7, §6.7); each is stated where it differs.
 | Member | Status | Behaviour | Core calls it |
 | --- | --- | --- | --- |
 | `name` | implemented | `"backlog"`. Config key in `new Chat({ adapters: { backlog } })` MUST equal it (thread-id prefix routing). | dedupe key, `Thread.toJSON`, logs |
-| `userName` | implemented | `config.userName ?? installations[0].botUserName`. | fallback mention regex `(?<!\w)@<userName>(?![\w-])`, `SentMessage.author` |
+| `userName` | implemented | `config.userName ?? installations[0].botUserName`. One string for the whole adapter; the per-installation name is `botUserName(host)` (§3.3, D19). | fallback mention regex `(?<!\w)@<userName>(?![\w-])`, `SentMessage.author` |
 | `initialize(chat)` | implemented | Stores the `ChatInstance`, swaps logger to `chat.getLogger("backlog")`. No API call. | first webhook / `chat.initialize()` |
 | `handleWebhook(request, options?)` | implemented | §5. | `chat.webhooks.backlog(req)` |
 | `encodeThreadId` / `decodeThreadId` | implemented | §2 grammar; exact round trip of `{ host, projectId, subject }`, the nested `BacklogSubjectRef` (D-PR2). | never (test kit) |
@@ -526,7 +533,10 @@ API response returns the **resolved** text `@<display name>`; the payload's
 
 `message.isMention` is pre-set from these; the core additionally runs its own
 `@<userName>` regex (case-insensitive) which, because `userName` defaults to
-`botUserName`, agrees for the first installation. A hand-typed `@Chatbot` is
+`botUserName`, agrees for the first installation — and only for it, so
+detection on every other space is the adapter's alone, and a consumer building
+its own mention string reads `botUserName(host)` rather than `userName` (§3.3,
+D19). A hand-typed `@Chatbot` is
 indistinguishable from a real mention; false positives are accepted and
 documented. A display-name collision with another user is likewise accepted.
 
@@ -1203,7 +1213,8 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   field names its env var; empty-string field is an error; shape A + B →
   error; duplicate hosts; host with scheme/port/path; `botUserId` non-integer
   env; no secret and no verifier → error; resolver functions invoked per call
-  and not cached; `userName` default.
+  and not cached; `userName` default; `botUserName(host)` per installation,
+  unchanged by a `userName` override, unknown host → `ResourceNotFoundError`.
 - **webhook**: one test per ladder row in §5.1 (405, 400 unreadable, 413, 401
   verifier false/throw, 401 unknown host, 401 missing host with two
   installations, 200 missing host with one installation, 401 missing/wrong
@@ -1401,6 +1412,7 @@ for one scratch space is worse than requiring the two to share it.
 | D-PR8 | `fetchSubject().type` is `"pull_request"` | The `@chat-adapter/github` convention; the core types it as a free string, so bot authors already branch on that literal. | `"pullRequest"` (matches our `kind`, not the ecosystem). |
 | D-PR9 | Root part tag `r` for both kinds (was `i`) | `i` meant "issue" and would mislead on a pull request; a tagless root makes the grammar irregular. | Keep `i`; no tag. |
 | D-PR10 ⚑ | Pull-request comment attachments resolve their id by **name** through the attachment list, newest match first | Neither the type-20 `changes[]` nor the REST `changeLog` carries an attachment id for pull requests (measured 2026-09-06); the list is the only id source and names are not unique. | Omitting `fetchData` on pull-request comment attachments (loses the file entirely); one list call per comment eagerly (a read per message). |
+| D19 | `botUserName(host)` exposed; `botUserId` still private | `userName` is one string, so a consumer running spaces under different display names has no way to build or match its own mention string per space and must duplicate the installation config to get one; the name is already public in every rewritten comment body, while the id is not and would mislead the core's `@<id>` pattern. | Requiring one display name across all spaces (an operational constraint the adapter cannot enforce); exposing the whole `ResolvedInstallation` (leaks credentials and `botUserId`); a `userName(host)` name (reads like the core's `userName`, which it deliberately is not). |
 | — | Self messages are not dispatched by the adapter | `selfMessageContract` asserts nothing is dispatched; the core's own `isMe` skip is a second line of defence. | Relying on the core alone. |
 | — ⚑ | No timestamp-staleness window | See §5.1: unsigned timestamps give no protection and would drop measured late redeliveries. | Rejecting payloads older than N minutes. |
 
