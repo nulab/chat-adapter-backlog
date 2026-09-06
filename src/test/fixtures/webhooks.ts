@@ -22,6 +22,9 @@ export const FIXTURE = {
   projectKey: 'EXAMPLE',
   issueId: 8001,
   issueKeyId: 42,
+  // A second issue, so a bulk update has more than one to fan out to.
+  otherIssueId: 8002,
+  otherIssueKeyId: 43,
   // The pull-request vocabulary P3's builders address a thread with: a pull
   // request is keyed by repository id + number, never by `pullRequestId` —
   // that space-wide id addresses no endpoint and exists here only because
@@ -365,27 +368,77 @@ export function issueDeleted(
   );
 }
 
+/** One issue of a bulk update, as `content.link[]` names it. */
+export interface FixtureBulkIssue {
+  issueId: number;
+  keyId: number;
+  title: string;
+  commentId: number;
+}
+
+const DEFAULT_BULK_ISSUES: FixtureBulkIssue[] = [
+  {
+    issueId: FIXTURE.issueId,
+    keyId: FIXTURE.issueKeyId,
+    title: 'Deploy fails on the staging space',
+    commentId: 3101,
+  },
+  {
+    issueId: FIXTURE.otherIssueId,
+    keyId: FIXTURE.otherIssueKeyId,
+    title: 'Retry the failed deploy',
+    commentId: 3102,
+  },
+];
+
 /**
- * Type 14 — Issue Multi Updated. A bulk status change never arrives as a
- * type 2 per issue, so there is no per-issue comment to build a message from.
+ * Type 14 — Issue Multi Updated: one delivery for a bulk update made from the
+ * issue list, however many issues it covered.
+ *
+ * Three details are measured (on a development space, 2026-09-06) and are the
+ * reason this builder does not go through {@link changeEntries} or reuse the
+ * numeric ids the other builders emit:
+ *
+ * - `content.link[].id` and `key_id` are decimal **strings** here, while every
+ *   other activity writes the same fields as numbers.
+ * - `changes[]` entries carry `field`, `new_value` and `type` and **no**
+ *   `old_value` — a bulk update reports where the issues ended up, not where
+ *   each of them started.
+ * - `link[].comment` exists even when the comment box was left empty, with
+ *   `content: ""`, and its `id` is a comment that really was written on that
+ *   issue.
+ *
+ * `content.comment` repeats the typed text with no `id` of its own.
  */
 export function issueMultiUpdated(
-  options: ActivityOptions = {}
+  options: ActivityOptions & {
+    issues?: FixtureBulkIssue[];
+    text?: string;
+    changes?: FixtureChange[];
+    individualUpdate?: boolean;
+  } = {}
 ): Record<string, unknown> {
+  const text = options.text ?? '';
+  const issues = options.issues ?? DEFAULT_BULK_ISSUES;
   return envelope(
     14,
     {
       tx_id: '9876',
-      comment: { content: '' },
-      link: [
-        {
-          id: FIXTURE.issueId,
-          key_id: FIXTURE.issueKeyId,
-          title: 'Deploy fails on the staging space',
-          comment: { id: 3003, content: '' },
-        },
-      ],
-      changes: [{ field: 'status', new_value: '4', type: 'standard' }],
+      comment: { content: text },
+      link: issues.map((issue) => ({
+        id: String(issue.issueId),
+        key_id: String(issue.keyId),
+        title: issue.title,
+        comment: { id: issue.commentId, content: text },
+      })),
+      individual_update: options.individualUpdate ?? false,
+      changes: (options.changes ?? [{ field: 'status', new_value: '4' }]).map(
+        (change) => ({
+          field: change.field,
+          new_value: change.new_value ?? '',
+          type: 'standard',
+        })
+      ),
     },
     options
   );

@@ -452,14 +452,17 @@ persisted cursor and a backoff.
 **Activity types** ([Get
 Activity](https://developer.nulab.com/docs/backlog/api/2/get-activity/)) that
 matter here: **1** Issue Created, **2** Issue Updated, **3** Issue Commented,
-**4** Issue Deleted, **18** Pull Request Added, **19** Pull Request Updated,
-**20** Comment Added on Pull Request. **17** Comment Notification Added is
-acknowledged, not dispatched. Two routes to addressing somebody on a comment
-were measured, and only one of them emits it: picking recipients while
-posting the comment produces a plain type 3, while adding recipients to an
-**already existing** comment via
-`POST /issues/:id/comments/:commentId/notifications` produces a type 17 that
-repeats that comment's own id and text
+**4** Issue Deleted, **14** Issue Multi Updated, **18** Pull Request Added,
+**19** Pull Request Updated, **20** Comment Added on Pull Request. **14** is
+the only one whose single delivery stands for several issues: a bulk update
+from the issue list emits one type 14 naming every issue in `content.link[]`
+and no type 2 or 3 for any of them, so ingress fans it out into one message
+per entry (D22). **17** Comment Notification Added is acknowledged, not
+dispatched. Two routes to addressing somebody on a comment were measured, and
+only one of them emits it: picking recipients while posting the comment
+produces a plain type 3, while adding recipients to an **already existing**
+comment via `POST /issues/:id/comments/:commentId/notifications` produces a
+type 17 that repeats that comment's own id and text
 (`.claude/rules/backlog-webhook-facts.md`). What else may emit it is not
 established here. It is not the "project notifications" of the package
 description. **21** is documented as "Pull Request Deleted" and typed by
@@ -470,10 +473,12 @@ neither dispatched nor named in the registration guidance (D-PR5). Subscribe
 explicitly via `activityTypeIds[]` rather than setting `allEvent` — the full
 range runs to 49 and includes git push, wiki and document events this adapter
 has no meaning for. The guidance users are given is
-`activityTypeIds: [1, 2, 3, 18, 19, 20]`, plus **4** when deletion events are
-wanted; what the code accepts is `DISPATCHED_ACTIVITY_TYPES` in
-`src/webhook/payload.ts` (`[1, 2, 3, 4, 18, 19, 20]` — 4 is always dispatched
-when it arrives), and every other type, 21 included, is answered 200 Ignored.
+`activityTypeIds: [1, 2, 3, 14, 18, 19, 20]`, plus **4** when deletion events
+are wanted; what the code accepts is `DISPATCHED_ACTIVITY_TYPES` in
+`src/webhook/payload.ts` (`[1, 2, 3, 4, 14, 18, 19, 20]` — 4 is always
+dispatched when it arrives), and every other type, 21 included, is answered
+200 Ignored. Leaving 14 out of the registration is the documented way to
+decline the fan-out; there is no adapter option for it (D-PR4, D22).
 Pull-request facts (three-coordinate addressing, no comment delete,
 `read`-bucket listing, the `assignee` vs `assigner` field name) live in that
 rules file; do not reason about them from the issue side.

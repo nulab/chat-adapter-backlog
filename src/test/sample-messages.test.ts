@@ -59,7 +59,7 @@ describe('published sample payloads', () => {
       commentWithStatusChange(),
       issueUpdatedWithoutComment(),
       issueDeleted(),
-      issueMultiUpdated(),
+      issueMultiUpdated({ text: 'Moving these to done.' }),
       commentNotificationAdded(),
     ]) {
       expect(samples).toContain(JSON.stringify(payload, null, 2));

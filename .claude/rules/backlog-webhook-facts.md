@@ -192,11 +192,37 @@ answer who was notified even when the original delivery could.
     A handler that dedupes on `content.comment.id` alone therefore drops the
     type 17 as a repeat of the type 3 and loses the later recipient entirely
     (docs/specs/adapter.md D10 accepts that cost deliberately).
-- Bulk operations from the issue list ("multi update") → one type 14
-  `{ tx_id, comment{content}, link[{id,key_id,title,comment{id,content}}],
-  changes[{field,new_value,type}] }`, not one type 2 per issue (measured
-  2026-08-28; shape per `backlog-js` `IssueMultiUpdateContent`). A status
-  change made this way never arrives as type 2.
+- Bulk operations from the issue list ("multi update") → **one** type 14
+  however many issues were touched, and **no** type 2 or 3 for any of them
+  (measured 2026-08-28 and again 2026-09-06). `content` has exactly five keys:
+  `tx_id` (string), `comment{content}` (**no `id`**), `link[{id, key_id, title,
+  comment{id, content}}]`, `individual_update` (boolean) and
+  `changes[{field, new_value, type}]`. There is no `content.id` and no issue
+  snapshot (no status, assignee or summary), and `changes[]` carries **no
+  `old_value`** — a bulk update reports where the issues ended up, not where
+  each of them started.
+- In `link[]`, `id` and `key_id` are decimal **strings** (`"8001"` for issue id 8001) where
+  every other activity writes numbers; `GET /space/activities` returns those
+  two, and `tx_id`, as numbers. `individual_update` is webhook-only (absent
+  from the activity form) and was `false` on every measured delivery
+  (2026-09-06).
+- `link[].comment` is present even when the comment box was left empty, and its
+  `id` is a comment that really was created on that issue, with a `changeLog`.
+  An empty comment's `content` is `""` in the webhook and `null` in REST. A
+  bulk update's per-issue comments are therefore fetchable like any others: the
+  batch is the only thing Backlog collapses, not the comments.
+- `changes[].field` for an assignee change is `assigner`, the same name type 2
+  uses, and its `new_value` is a **display name** — while a `status` change's
+  `new_value` is the status **id** as a string (`"2"`, `"4"`). Changing several
+  fields at once lists them all (status before assigner, observed). Both value
+  systems appear in one array; do not assume one.
+- `notifications[]` on a type 14 carries the assignee notification (reason 1)
+  once per issue whose assignee the batch changed, so the same user repeats
+  across entries; a batch that changes no assignee delivers `notifications:
+  []`, the same as any other activity type (measured 2026-09-06).
+- The bulk comment box has no mention autocomplete, and a plain-text `@name`
+  typed there notifies nobody. The text is copied verbatim into
+  `content.comment.content` and into every `link[].comment.content`.
 - Issue deleted → type 4 with `content: { id, key_id }`. Types 5–13, 15–16 and
   18–49 are wiki, file, git, pull-request, member and document events.
 
@@ -341,6 +367,9 @@ label a user sees, and only three fields carry an id:
 - Subscribing to `[1, 2, 3, 4, 14, 17]` covers every issue-related activity,
   including bulk updates and post-hoc notifications. `allEvent: true` also
   delivers wiki, file, git, pull-request and document events.
+- 14 is the only type whose single delivery stands for several issues, so
+  subscribing to it decides whether a bulk update reaches a receiver at all:
+  there is no way to ask Backlog for the per-issue events instead.
 
 ## Activity type ids that concern issues
 
@@ -350,7 +379,7 @@ label a user sees, and only three fields carry an id:
 | 2 | Issue Updated | `{ id, key_id, summary, description, comment{id,content}, changes[], attachments[], shared_files[], external_file_links[] }` |
 | 3 | Issue Commented | same as 2; `comment.content` holds the text |
 | 4 | Issue Deleted | `{ id, key_id }` |
-| 14 | Issue Multi Updated | `{ tx_id, comment{content}, link[], changes[] }` |
+| 14 | Issue Multi Updated | `{ tx_id, comment{content}, link[], individual_update, changes[] }`; no `content.id` (measured 2026-09-06) |
 | 17 | Comment Notification Added | same key set as 2/3, no `link`; `comment` is the target comment unchanged and `changes` is `[]` (measured 2026-09-06; undocumented) |
 
 Names: https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/

@@ -41,6 +41,8 @@ import type {
   BacklogNotification,
 } from './client/port';
 import type {
+  BacklogBulkUpdatePayload,
+  BacklogRawMessage,
   BacklogSubjectRef,
   BacklogThreadId,
   ResolvedInstallation,
@@ -820,20 +822,128 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
     expect(await response.text()).toBe('Invalid payload');
   });
 
-  it.each([[14], [17], [99]])(
-    'a bulk update is acknowledged and ignored (type %i)',
+  it.each([[17], [21], [99]])(
+    'an activity type the adapter maps to nothing is acknowledged and ignored (type %i)',
     async (type) => {
       const { adapter, chat } = await webhookAdapter();
-      const payload =
-        type === 14 ? issueMultiUpdated() : { ...unrelatedActivity(), type };
 
-      const response = await adapter.handleWebhook(webhookRequest(payload));
+      const response = await adapter.handleWebhook(
+        webhookRequest({ ...unrelatedActivity(), type })
+      );
 
       expect(response.status).toBe(200);
       expect(await response.text()).toBe('Ignored');
       expect(chat).not.toHaveDispatched('processMessage');
     }
   );
+
+  it('a bulk update is accepted and dispatched, once per issue it touched', async () => {
+    const { adapter, chat } = await webhookAdapter();
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueMultiUpdated())
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('OK');
+    expect(chat.processMessage).toHaveBeenCalledTimes(2);
+    expect(threadIdsProcessedBy(chat)).toEqual([
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`,
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.otherIssueId}`,
+    ]);
+  });
+
+  it('a bulk update made by the bot itself dispatches nothing', async () => {
+    const { adapter, chat } = await webhookAdapter();
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(
+        issueMultiUpdated({
+          createdUser: { id: FIXTURE.bot.id, name: FIXTURE.bot.name },
+        })
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('OK');
+    expect(chat).not.toHaveDispatched('processMessage');
+  });
+
+  it('a bulk update naming no issues is accepted and dispatches nothing', async () => {
+    const { adapter, chat } = await webhookAdapter();
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueMultiUpdated({ issues: [] }))
+    );
+
+    expect(response.status).toBe(200);
+    expect(chat).not.toHaveDispatched('processMessage');
+  });
+
+  it('a bulk update whose link entry has no usable issue id is rejected with 400', async () => {
+    const { adapter } = await webhookAdapter();
+    const payload = issueMultiUpdated();
+    const content = payload['content'] as Record<string, unknown>;
+    const links = content['link'] as Record<string, unknown>[];
+    links[0]!['id'] = 'not-a-number';
+
+    const response = await adapter.handleWebhook(webhookRequest(payload));
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe('Invalid payload');
+  });
+
+  it('a bulk update looks the project up once, however many issues it touched', async () => {
+    const getProject = vi.fn(() =>
+      Promise.resolve(conformanceFixture.baseProject())
+    );
+    const { adapter, chat } = await webhookAdapter({
+      createApi: () => {
+        const api = createInMemoryBacklogApi({
+          projects: [conformanceFixture.baseProject()],
+        });
+        api.getProject = getProject;
+        return api;
+      },
+    });
+
+    await adapter.handleWebhook(webhookRequest(issueMultiUpdated()));
+    await Promise.all(messageFactoriesOf(chat).map((factory) => factory()));
+
+    expect(getProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('each message of a bulk update carries the batch changes and its own comment', async () => {
+    const { adapter, chat } = await webhookAdapter();
+
+    await adapter.handleWebhook(
+      webhookRequest(
+        issueMultiUpdated({
+          text: 'Moving these to done.',
+          changes: [
+            { field: 'status', new_value: '4' },
+            { field: 'assigner', new_value: FIXTURE.bot.name },
+          ],
+        })
+      )
+    );
+
+    const messages = await Promise.all(
+      messageFactoriesOf(chat).map((factory) => factory())
+    );
+    expect(messages.map((message) => message.id)).toEqual([
+      `${FIXTURE.host}:issue:${FIXTURE.issueId}:c3101`,
+      `${FIXTURE.host}:issue:${FIXTURE.otherIssueId}:c3102`,
+    ]);
+    for (const message of messages) {
+      expect(message.text).toBe('Moving these to done.');
+      expect(message.raw?.changes).toEqual([
+        { field: 'status', newValue: '4', oldValue: null },
+        { field: 'assigner', newValue: FIXTURE.bot.name, oldValue: null },
+      ]);
+      expect(message.isMention).toBe(true);
+    }
+  });
 
   it('a payload failing its type-specific schema is rejected with 400', async () => {
     const { adapter } = await webhookAdapter();
@@ -1019,6 +1129,32 @@ describe('BacklogAdapter.handleWebhook — identity fields that are not ids (§5
     }
   });
 });
+
+/**
+ * The `(adapter, threadId, factory)` triples a mock chat instance was handed.
+ * A bulk update is the only ingress that dispatches more than once per
+ * request, so the two helpers below exist for it.
+ */
+function processMessageCallsOf(
+  chat: ChatInstance
+): [Adapter, string, () => Promise<Message<BacklogRawMessage>>][] {
+  const processMessage = chat.processMessage as unknown as {
+    mock: {
+      calls: [Adapter, string, () => Promise<Message<BacklogRawMessage>>][];
+    };
+  };
+  return processMessage.mock.calls;
+}
+
+function threadIdsProcessedBy(chat: ChatInstance): string[] {
+  return processMessageCallsOf(chat).map(([, threadId]) => threadId);
+}
+
+function messageFactoriesOf(
+  chat: ChatInstance
+): (() => Promise<Message<BacklogRawMessage>>)[] {
+  return processMessageCallsOf(chat).map(([, , factory]) => factory);
+}
 
 describe('BacklogAdapter.handleWebhook — dispatch ordering and error handling', () => {
   it('processing starts after the response is returned', async () => {
@@ -1569,6 +1705,57 @@ describe('BacklogAdapter.parseMessage', () => {
           created: '',
           updated: '',
         },
+        changes: [],
+      })
+    ).toThrow(ValidationError);
+  });
+
+  it('builds one issue of a bulk update from the delivery and the issue id', () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const payload = issueMultiUpdated({
+      text: 'Moving these to done.',
+    }) as unknown as BacklogBulkUpdatePayload;
+
+    const message = adapter.parseMessage({
+      kind: 'bulkUpdate',
+      host: FIXTURE.host,
+      payload,
+      issueId: FIXTURE.otherIssueId,
+      changes: [],
+    });
+
+    expect(message.id).toBe(
+      `${FIXTURE.host}:issue:${FIXTURE.otherIssueId}:c3102`
+    );
+    expect(message.threadId).toBe(
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.otherIssueId}`
+    );
+    expect(message.text).toBe('Moving these to done.');
+  });
+
+  it('rejects a bulk update raw message naming an issue the delivery does not cover', () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+
+    expect(() =>
+      adapter.parseMessage({
+        kind: 'bulkUpdate',
+        host: FIXTURE.host,
+        payload: issueMultiUpdated() as unknown as BacklogBulkUpdatePayload,
+        issueId: 123456,
+        changes: [],
+      })
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects a bulk update raw message whose payload is not a type-14 activity', () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+
+    expect(() =>
+      adapter.parseMessage({
+        kind: 'bulkUpdate',
+        host: FIXTURE.host,
+        payload: issueCommented() as unknown as BacklogBulkUpdatePayload,
+        issueId: FIXTURE.issueId,
         changes: [],
       })
     ).toThrow(ValidationError);

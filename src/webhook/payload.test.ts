@@ -30,14 +30,30 @@ import {
   subjectOfActivity,
 } from './payload';
 
-import type { RecognisedActivity } from './payload';
+import type { IssueMultiUpdatedActivity, ParsedActivity } from './payload';
 
-function activity(type: number, payload: object): RecognisedActivity {
+function parsed(type: number, payload: object): ParsedActivity {
   const result = parseActivity(type, payload);
   if (!('activity' in result)) {
     throw new Error(`fixture failed to validate as type ${type}`);
   }
   return result.activity;
+}
+
+function activity(type: number, payload: object) {
+  const value = parsed(type, payload);
+  if (value.type === 14) {
+    throw new Error('type 14 names no single subject; use bulkActivity');
+  }
+  return value;
+}
+
+function bulkActivity(payload: object): IssueMultiUpdatedActivity {
+  const value = parsed(14, payload);
+  if (value.type !== 14) {
+    throw new Error('fixture failed to validate as type 14');
+  }
+  return value;
 }
 
 describe('parseEnvelope', () => {
@@ -56,11 +72,14 @@ describe('parseEnvelope', () => {
 
 describe('DISPATCHED_ACTIVITY_TYPES', () => {
   it('names exactly the issue and pull-request types the ladder dispatches (§5.1 step 8)', () => {
-    expect(DISPATCHED_ACTIVITY_TYPES).toEqual([1, 2, 3, 4, 18, 19, 20]);
+    expect(DISPATCHED_ACTIVITY_TYPES).toEqual([1, 2, 3, 4, 14, 18, 19, 20]);
   });
 
-  it('a bulk update and a comment-notification type are not among them', () => {
-    expect(DISPATCHED_ACTIVITY_TYPES).not.toContain(14);
+  it('a bulk update is dispatched, because its per-issue comments are real', () => {
+    expect(DISPATCHED_ACTIVITY_TYPES).toContain(14);
+  });
+
+  it('a comment-notification type is not among them', () => {
     expect(DISPATCHED_ACTIVITY_TYPES).not.toContain(17);
   });
 
@@ -124,9 +143,9 @@ describe('parseActivity', () => {
 
   it('tolerates unknown keys everywhere, including inside changes[] and comment notifications', () => {
     const payload = issueMultiUpdated();
-    // Type 14 has its own shape and is never schema-validated (it is
-    // filtered out at the envelope-type gate before reaching a schema), but
-    // commentNotificationAdded (17) reuses the type-3-shaped fixture surface.
+    // A type-14 body carries the top-level key like every other type, and
+    // the fixture leaves it naming nobody; commentNotificationAdded (17)
+    // reuses the type-3-shaped fixture surface and carries it too.
     expect(payload['notifications']).toEqual([]);
 
     const activity = commentNotificationAdded();
@@ -165,6 +184,68 @@ describe('parseActivity', () => {
     delete payload['notifications'];
 
     expect(activity(3, payload).notifications).toEqual([]);
+  });
+
+  it('reads a bulk update as its issues, its batch changes and its per-issue comments', () => {
+    const activity = bulkActivity(
+      issueMultiUpdated({ text: 'Moving these to done.' })
+    );
+
+    expect(activity.content.link).toEqual([
+      {
+        id: FIXTURE.issueId,
+        key_id: FIXTURE.issueKeyId,
+        title: 'Deploy fails on the staging space',
+        comment: { id: 3101, content: 'Moving these to done.' },
+      },
+      {
+        id: FIXTURE.otherIssueId,
+        key_id: FIXTURE.otherIssueKeyId,
+        title: 'Retry the failed deploy',
+        comment: { id: 3102, content: 'Moving these to done.' },
+      },
+    ]);
+    expect(activity.content.changes).toEqual([
+      { field: 'status', new_value: '4' },
+    ]);
+    expect(activity.content.individual_update).toBe(false);
+  });
+
+  it('reads a bulk update issue id whether it arrives as a string or a number', () => {
+    const asStrings = bulkActivity(issueMultiUpdated());
+    const payload = issueMultiUpdated();
+    const content = payload['content'] as Record<string, unknown>;
+    for (const link of content['link'] as Record<string, unknown>[]) {
+      link['id'] = Number(link['id']);
+      link['key_id'] = Number(link['key_id']);
+    }
+
+    expect(bulkActivity(payload).content.link).toEqual(asStrings.content.link);
+  });
+
+  it('rejects a bulk update whose link entry names no usable issue', () => {
+    const payload = issueMultiUpdated();
+    const content = payload['content'] as Record<string, unknown>;
+    const links = content['link'] as Record<string, unknown>[];
+    links[0]!['id'] = '0';
+
+    const result = parseActivity(14, payload);
+
+    expect('issuePaths' in result).toBe(true);
+    if ('issuePaths' in result) {
+      expect(result.issuePaths).toContain('content.link.0.id');
+    }
+  });
+
+  it('accepts a bulk update whose link entry carries no comment', () => {
+    const payload = issueMultiUpdated();
+    const content = payload['content'] as Record<string, unknown>;
+    const links = content['link'] as Record<string, unknown>[];
+    delete links[0]!['comment'];
+
+    const activity = bulkActivity(payload);
+
+    expect(activity.content.link[0]?.comment).toBeUndefined();
   });
 
   it('project.projectKey and content.key_id are optional, not required identity', () => {

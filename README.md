@@ -134,16 +134,29 @@ core's `@<id>` pattern would be wrong for every space but one.
    accepted silently and read with this space's credentials — **Webhook
    authenticity** below says what that does.
 
-   Select activity types **1, 2, 3** (issue created, updated, commented) and
-   **18, 19, 20** (pull request added, updated, commented), plus **4** if you
-   want issue-deletion events. Leave **21** unchecked: the adapter ignores it,
-   and merging or closing a pull request arrives as a type-19 update anyway.
-   **Never `allEvent`** — the full range runs to 49 and would deliver git push,
-   wiki and document activity this adapter has no meaning for.
+   Select activity types **1, 2, 3** (issue created, updated, commented),
+   **14** (issues updated in bulk) and **18, 19, 20** (pull request added,
+   updated, commented), plus **4** if you want issue-deletion events. Leave
+   **21** unchecked: the adapter ignores it, and merging or closing a pull
+   request arrives as a type-19 update anyway. **Never `allEvent`** — the full
+   range runs to 49 and would deliver git push, wiki and document activity this
+   adapter has no meaning for.
 
    These checkboxes are the on/off switch per kind, and the only one — there is
    no config option for it. Subscribe to 1, 2, 3 alone and no pull request
    reaches a handler; subscribe to 18, 19, 20 alone and no issue does.
+
+   **Type 14 is the one that costs more than it looks.** When someone updates
+   issues in bulk from the issue list, Backlog sends a *single* webhook for the
+   whole batch and no per-issue event at all — so without 14 a bulk status
+   change reaches no handler, while the comment it wrote on each issue is still
+   there for `thread.messages()` to find. With 14 registered, the adapter
+   unpacks that delivery into one message per issue, each in its own thread. A
+   batch of fifty issues is fifty handler runs from one request, and if your
+   handler calls the Backlog API each time, fifty calls against a per-minute
+   bucket. If that is more than your deployment can absorb, leave 14
+   unregistered — that is the switch, and it is better than one in the adapter
+   because nothing is delivered in the first place.
 
 ## Webhook authenticity — read this
 

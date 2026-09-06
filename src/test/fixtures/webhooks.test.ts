@@ -186,12 +186,44 @@ describe('webhook fixtures', () => {
     );
   });
 
-  it('reports a bulk update as one type-14 activity with no per-issue comment', () => {
+  it('reports a bulk update as one type-14 activity naming its issues in content.link[]', () => {
     const payload = issueMultiUpdated();
     expect(payload['type']).toBe(14);
     const content = payload['content'] as Record<string, unknown>;
     expect(content).toHaveProperty('tx_id');
     expect(content).not.toHaveProperty('id');
+    expect(content['individual_update']).toBe(false);
+    expect(content['link']).toHaveLength(2);
+  });
+
+  it("writes a bulk update's issue ids as strings, as the webhook form does", () => {
+    const content = issueMultiUpdated()['content'] as Record<string, unknown>;
+    const [first] = content['link'] as Record<string, unknown>[];
+    expect(first?.['id']).toBe(String(FIXTURE.issueId));
+    expect(first?.['key_id']).toBe(String(FIXTURE.issueKeyId));
+  });
+
+  it('gives a bulk update a comment per issue even when the comment box was empty', () => {
+    const content = issueMultiUpdated()['content'] as Record<string, unknown>;
+    const links = content['link'] as Record<string, unknown>[];
+    const commentIds = links.map(
+      (link) => (link['comment'] as Record<string, unknown>)['id']
+    );
+    expect(new Set(commentIds).size).toBe(links.length);
+    for (const link of links) {
+      expect((link['comment'] as Record<string, unknown>)['content']).toBe('');
+    }
+    expect(content['comment']).toEqual({ content: '' });
+  });
+
+  it("omits old_value from a bulk update's changes[], which reports only the new state", () => {
+    const content = issueMultiUpdated()['content'] as Record<string, unknown>;
+    const [change] = content['changes'] as Record<string, unknown>[];
+    expect(change).toEqual({
+      field: 'status',
+      new_value: '4',
+      type: 'standard',
+    });
   });
 
   it('gives a Nulab-account user a null userId', () => {

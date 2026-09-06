@@ -1,7 +1,10 @@
 import { z } from 'zod';
 
 import type { BacklogApi } from './client/port';
-import type { RecognisedActivity } from './webhook/payload';
+import type {
+  IssueMultiUpdatedActivity,
+  RecognisedActivity,
+} from './webhook/payload';
 import type { Logger } from 'chat';
 
 /**
@@ -106,6 +109,14 @@ export interface BacklogChange {
 export type BacklogWebhookPayload = RecognisedActivity;
 
 /**
+ * A type-14 body that has passed validation. Kept out of
+ * {@link BacklogWebhookPayload} because a bulk update names no single subject
+ * (docs/specs/adapter.md §5.2): the types in that union are the ones an id can
+ * be built from without asking which issue of several is meant.
+ */
+export type BacklogBulkUpdatePayload = IssueMultiUpdatedActivity;
+
+/**
  * A comment as `message.raw` carries it. The parent is **not** a field here:
  * a pull-request comment has no parent reference of its own (measured
  * 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`), so the
@@ -161,24 +172,48 @@ export interface BacklogRawPullRequest {
 }
 
 /**
- * The four shapes `parseMessage` accepts (docs/specs/adapter.md §3.5): a
- * webhook activity, a REST comment fetched for a known project and subject,
- * or a REST issue or pull request fetched as a thread's root message. The two
- * root variants stay flat rather than one `root` variant with a nested
- * discriminator, so `raw.issue` is reachable after one `kind` check — the
- * common case — instead of descending into `raw.subject.kind` first.
+ * The five shapes `parseMessage` accepts (docs/specs/adapter.md §3.5): a
+ * webhook activity, one issue out of a bulk update, a REST comment fetched
+ * for a known project and subject, or a REST issue or pull request fetched as
+ * a thread's root message. The two root variants stay flat rather than one
+ * `root` variant with a nested discriminator, so `raw.issue` is reachable
+ * after one `kind` check — the common case — instead of descending into
+ * `raw.subject.kind` first.
  * `changes` is always normalised to
  * `BacklogChange`, but the value systems underneath are not unified —
  * webhook `status` changes carry ids and `assigner` changes carry display
  * names, while REST `changeLog` carries display names for both (measured
  * 2026-08-28, docs/specs/adapter.md §3.5) — so consumers read `raw.kind`
- * before interpreting `changes`.
+ * before interpreting `changes`. `bulkUpdate` is on the webhook side of that
+ * split: its `changes` come from the same `content.changes[]`, so a `status`
+ * entry there is a status **id** as a string too.
  */
 export type BacklogRawMessage =
   | {
       kind: 'webhook';
       host: string;
       payload: BacklogWebhookPayload;
+      changes: BacklogChange[];
+    }
+  | {
+      /**
+       * One issue of a type-14 bulk update (docs/specs/adapter.md §5.3, D22).
+       * `payload` is the whole delivery as Backlog sent it — the same
+       * `content.link[]`, `content.changes[]` and `tx_id` reach every message
+       * the batch produced — and `issueId` says which `content.link[]` entry
+       * this message is. The entry is named by its issue id rather than by
+       * its index, so the field survives a redelivery arriving in another
+       * order and means something on its own.
+       *
+       * It is its own kind rather than a field added to `webhook` because
+       * `webhook` guarantees that `payload` names one subject, and code that
+       * relies on that (`subjectOfActivity`) must not silently be handed a
+       * body that names several.
+       */
+      kind: 'bulkUpdate';
+      host: string;
+      payload: BacklogBulkUpdatePayload;
+      issueId: number;
       changes: BacklogChange[];
     }
   | {

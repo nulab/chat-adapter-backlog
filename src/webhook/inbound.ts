@@ -117,7 +117,9 @@ function changeAttachments(
   return attachments;
 }
 
-function normaliseChanges(raw: ActivityChange[] | undefined): BacklogChange[] {
+export function normaliseChanges(
+  raw: ActivityChange[] | undefined
+): BacklogChange[] {
   return (raw ?? []).map((change) => ({
     field: change.field,
     newValue: change.new_value === undefined ? null : String(change.new_value),
@@ -135,7 +137,7 @@ function normaliseChanges(raw: ActivityChange[] | undefined): BacklogChange[] {
 const ASSIGNMENT_CHANGE_FIELDS: readonly string[] = ['assigner', 'assignee'];
 
 /** What §5.4 decides `isMention` from. */
-interface MentionEvidence {
+export interface MentionEvidence {
   botUserName: string;
   botUserId: number;
   text: string;
@@ -161,7 +163,7 @@ interface MentionEvidence {
  * `@name` survives in `text` at all — so without this rule it reads as an
  * unaddressed comment.
  */
-function detectMention(evidence: MentionEvidence): boolean {
+export function detectMention(evidence: MentionEvidence): boolean {
   const {
     botUserName,
     botUserId,

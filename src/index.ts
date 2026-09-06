@@ -57,6 +57,7 @@ export { BacklogNotationConverter } from './format/notation';
 
 export type {
   BacklogAdapterConfig,
+  BacklogBulkUpdatePayload,
   BacklogChannelId,
   BacklogChannelPostableExtras,
   BacklogInstallation,

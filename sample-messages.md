@@ -500,7 +500,7 @@ dispatched as `processMessageDeleted` on the root message
 
 ## Type 14 — Issue Multi Updated
 
-200 Ignored — no per-issue comment exists
+one delivery, one message per `content.link[]` entry: the thread id comes from `link[].id` (a decimal **string** here) and the message id from `link[].comment.id`, the comment the batch really wrote on that issue. `content.comment` repeats the text with no id, `changes[]` describes the whole batch and carries no `old_value`, and a `status` change is a status **id**.
 
 ```json
 {
@@ -516,19 +516,29 @@ dispatched as `processMessageDeleted` on the root message
   "content": {
     "tx_id": "9876",
     "comment": {
-      "content": ""
+      "content": "Moving these to done."
     },
     "link": [
       {
-        "id": 8001,
-        "key_id": 42,
+        "id": "8001",
+        "key_id": "42",
         "title": "Deploy fails on the staging space",
         "comment": {
-          "id": 3003,
-          "content": ""
+          "id": 3101,
+          "content": "Moving these to done."
+        }
+      },
+      {
+        "id": "8002",
+        "key_id": "43",
+        "title": "Retry the failed deploy",
+        "comment": {
+          "id": 3102,
+          "content": "Moving these to done."
         }
       }
     ],
+    "individual_update": false,
     "changes": [
       {
         "field": "status",
