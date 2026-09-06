@@ -100,15 +100,22 @@ import type {
  * result (docs/specs/adapter.md §3.2, §8.2), so a caller whose OAuth token
  * expires hourly refreshes it without reconstructing the adapter. Resolving it
  * here instead would pin the first value for the process's lifetime.
+ *
+ * The logger is passed as an accessor for the same reason: `initialize`
+ * replaces `this.logger` with the `ChatInstance`'s, while `apiCache` keeps the
+ * port built before it, so a resolved `Logger` would send the rate-limit lines
+ * to the construction-time `ConsoleLogger` forever.
  */
 function defaultCreateApi(
-  retry: RetryOptions
+  retry: RetryOptions,
+  logger: () => Logger
 ): (installation: ResolvedInstallation) => BacklogApi {
   return (installation) =>
     createBacklogJsApi({
       host: installation.host,
       credentials: toCredentials(installation),
       retry,
+      logger,
     });
 }
 
@@ -604,9 +611,10 @@ export class BacklogAdapter implements Adapter<
       ),
       webhookVerifier: config.webhookVerifier,
     };
-    this.createApi =
-      config.createApi ?? defaultCreateApi(this.ingressConfig.rateLimit);
     this.logger = config.logger ?? new ConsoleLogger('info').child('backlog');
+    this.createApi =
+      config.createApi ??
+      defaultCreateApi(this.ingressConfig.rateLimit, () => this.logger);
   }
 
   /**

@@ -359,6 +359,40 @@ any polling loop falls into. Listing or counting **pull requests** spends `read`
 instead, so the two lists draw on different budgets and one being exhausted says
 nothing about the other.
 
+### A 429 blocks the call for up to a minute
+
+Backlog sends no `Retry-After`, so a 429 is retried once by waiting until
+`X-RateLimit-Reset` — **up to `rateLimit.maxWaitMs`, 60 seconds by default,
+during which the call simply does not return**. On a paid space the wait is
+rare; on a free plan (15 updates per minute) a burst of comments reaches it
+easily, and a wait of ~55 seconds was measured on 2026-09-06.
+
+That matters wherever execution time is capped. Serverless runtimes commonly
+stop a request at 60 seconds by default — no longer than the wait itself — and
+kill the call in the middle of it. The comment then disappears without an
+error, because the webhook already answered 200 and the work was running in the
+background. Either raise the runtime's ceiling above `maxWaitMs`, or lower
+`maxWaitMs` and catch `AdapterRateLimitError` yourself:
+
+```ts
+createBacklogAdapter({ rateLimit: { maxWaitMs: 5_000 } });
+// beyond 5 s the call rejects with AdapterRateLimitError instead of blocking
+```
+
+Both outcomes are logged, at `warn`, through the Chat SDK logger — one line
+when the adapter starts waiting, one when it refuses to:
+
+```
+rate limited; waiting for the bucket to reset
+  { bucket: 'update', remaining: 0, resetAt: '2026-09-06T12:34:00.000Z', waitMs: 55_500, attempt: 1 }
+rate limited; not retrying
+  { bucket: 'update', remaining: 0, resetAt: '2026-09-06T12:39:00.000Z', waitMs: 300_000, attempt: 1 }
+```
+
+Nothing else about rate limiting is logged; a line per request would be one
+entry per API call against a per-minute bucket. Call `adapter.rateLimit(host)`
+when you want the running counts.
+
 ## Testing
 
 `createInMemoryBacklogApi` is a full in-memory port, so a consumer's tests need

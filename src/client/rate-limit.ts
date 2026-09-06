@@ -112,6 +112,13 @@ export interface RetryDecision {
   waitMs: number;
   /** Seconds to report on `AdapterRateLimitError` when `shouldRetry` is `false`. */
   retryAfterSeconds: number;
+  /**
+   * `X-RateLimit-Reset` as a `Date`, or `undefined` when the header was
+   * absent or unparseable. Returned rather than re-read from the response by
+   * the caller so the logged `resetAt` and the computed `waitMs` cannot
+   * disagree about the same header (docs/specs/adapter.md §8.4).
+   */
+  resetAt: Date | undefined;
 }
 
 /**
@@ -131,18 +138,23 @@ export function decideRetry(
   const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
   const maxWaitMs = options?.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
 
-  const resetSeconds = resetHeader === null ? null : Number(resetHeader);
+  const resetSeconds =
+    resetHeader === null || Number.isNaN(Number(resetHeader))
+      ? undefined
+      : Number(resetHeader);
+  const resetAt =
+    resetSeconds === undefined ? undefined : new Date(resetSeconds * 1000);
   const waitMs =
-    resetSeconds === null || Number.isNaN(resetSeconds)
+    resetSeconds === undefined
       ? maxWaitMs
       : Math.max(resetSeconds * 1000 - now, 0);
   const retryAfterSeconds = Math.ceil(waitMs / 1000);
 
   if (attempt >= maxRetries || waitMs > maxWaitMs) {
-    return { shouldRetry: false, waitMs, retryAfterSeconds };
+    return { shouldRetry: false, waitMs, retryAfterSeconds, resetAt };
   }
 
-  return { shouldRetry: true, waitMs, retryAfterSeconds };
+  return { shouldRetry: true, waitMs, retryAfterSeconds, resetAt };
 }
 
 /** Builds the error thrown when a 429 cannot be retried further. */

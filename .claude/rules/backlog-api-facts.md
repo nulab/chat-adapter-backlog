@@ -188,6 +188,17 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
 - `GET /rateLimit` → `{ rateLimit: { read: {limit, remaining, reset}, update,
   search, icon } }`
   (https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/).
+- A **free-plan** space reports far smaller buckets than the documented
+  example: `read` 60/min and `update` 15/min (measured 2026-09-06). Treat
+  600/150 as one plan's numbers, not a floor.
+- The retry's wait is long enough to hit a serverless execution cap. Against
+  those buckets, 20 comments posted in sequence made the 16th take **55.5 s**
+  end to end — 429, sleep to `X-RateLimit-Reset`, retry, success — while the
+  ones after it took ~260 ms; 20 in parallel put 4 of them ~60 s out. 30 in
+  parallel against an already-empty bucket produced 2 `AdapterRateLimitError`
+  with `retryAfter=60` (measured 2026-09-06). A runtime whose execution ceiling
+  is 60 s, a common serverless default, dies inside that sleep — after the
+  webhook has already answered 200, so the work is lost with no error.
 
 ## Errors and auth beyond CLAUDE.md
 

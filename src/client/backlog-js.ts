@@ -30,6 +30,7 @@ import {
 } from './schemas.js';
 
 import type { BacklogErrorBodyEntry } from './errors.js';
+import type { RetryDecision } from './rate-limit.js';
 import type {
   AddCommentInput,
   AddPullRequestCommentInput,
@@ -53,10 +54,12 @@ import type {
   ListNotificationsOptions,
   ListPullRequestsOptions,
   PullRequestRef,
+  RateLimitBucket,
   RateLimitSnapshots,
   RetryOptions,
   StarTarget,
 } from './port.js';
+import type { Logger } from 'chat';
 import type { ZodType } from 'zod';
 
 type Fetch = typeof globalThis.fetch;
@@ -74,6 +77,14 @@ export interface CreateBacklogJsApiOptions {
   /** Request timeout via `AbortSignal`, in milliseconds. Default 30 000 (docs/specs/adapter.md §8.2). */
   timeoutMs?: number;
   retry?: RetryOptions;
+  /**
+   * Sink for the two rate-limit lines (docs/specs/adapter.md §8.4, §10).
+   * Taken as an accessor rather than a `Logger`, because `BacklogAdapter`
+   * replaces its own logger in `initialize()` and caches this port across
+   * that swap — a captured `Logger` would pin the pre-initialize
+   * `ConsoleLogger` for the process's lifetime.
+   */
+  logger?: () => Logger;
 }
 
 interface RequestArgs {
@@ -112,6 +123,7 @@ export function createBacklogJsApi(
     fetch = globalThis.fetch,
     timeoutMs = 30_000,
     retry,
+    logger,
   } = options;
   const tracker = new RateLimitTracker();
 
@@ -177,9 +189,23 @@ export function createBacklogJsApi(
             retry
           );
           if (decision.shouldRetry) {
+            logRateLimit(
+              'rate limited; waiting for the bucket to reset',
+              bucket,
+              cause.response.headers,
+              decision,
+              attempt
+            );
             await wait(decision.waitMs);
             return call(args, attempt + 1);
           }
+          logRateLimit(
+            'rate limited; not retrying',
+            bucket,
+            cause.response.headers,
+            decision,
+            attempt
+          );
           throw mapBacklogError({
             status: cause.status,
             url: stripQueryString(cause.url),
@@ -215,6 +241,38 @@ export function createBacklogJsApi(
       code: entry.code,
       moreInfo: entry.moreInfo,
     };
+  }
+
+  /**
+   * The only two lines this port logs. Every other request stays silent on
+   * purpose: an `X-RateLimit-Remaining` line per request would be one entry
+   * per API call against a 150-per-minute bucket, which buries the two
+   * moments an operator acts on — the request that blocked, and the request
+   * that failed instead of blocking.
+   */
+  function logRateLimit(
+    message: string,
+    bucket: RateLimitBucket,
+    headers: Headers,
+    decision: RetryDecision,
+    attempt: number
+  ): void {
+    const log = logger?.();
+    if (log === undefined) {
+      return;
+    }
+    const remainingHeader = headers.get('X-RateLimit-Remaining');
+    const remaining =
+      remainingHeader === null ? Number.NaN : Number(remainingHeader);
+    log.warn(message, {
+      bucket,
+      ...(Number.isFinite(remaining) && { remaining }),
+      ...(decision.resetAt !== undefined && {
+        resetAt: decision.resetAt.toISOString(),
+      }),
+      waitMs: decision.waitMs,
+      attempt: attempt + 1,
+    });
   }
 
   async function wait(ms: number): Promise<void> {
