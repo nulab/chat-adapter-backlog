@@ -15,6 +15,7 @@ import {
   pullRequestCommentWithAttachment,
   pullRequestStatusChanged,
   pullRequestUpdated,
+  RESOLVED_MENTION,
   statusChanged,
 } from '../test/fixtures/webhooks';
 import { createPullRequestSubjectClient } from '../subject/pull-request';
@@ -681,6 +682,114 @@ describe('mention regex negative cases (§5.4)', () => {
       expect(fields.isMention).toBe(true);
     }
   );
+});
+
+describe('mention detection from notifications[] (§5.4 rule 6)', () => {
+  it('a comment that named the bot only in the notification field is a mention', () => {
+    const activity = commented(
+      issueCommented({
+        text: 'notify via the picker only',
+        notifications: [{ user: FIXTURE.bot, reason: 2 }],
+      })
+    );
+
+    const fields = buildInboundMessageFields(activity, input());
+
+    expect(fields.text).not.toContain('@');
+    expect(fields.isMention).toBe(true);
+  });
+
+  it('a comment that notified only other users is not a mention', () => {
+    const activity = commented(
+      issueCommented({
+        text: 'notify via the picker only',
+        notifications: [
+          { user: FIXTURE.alice, reason: 2 },
+          { user: FIXTURE.bob, reason: 2 },
+        ],
+      })
+    );
+
+    const fields = buildInboundMessageFields(activity, input());
+
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('a typed mention arrives together with the notification it created', () => {
+    const activity = commented(
+      issueCommented({
+        text: `${RESOLVED_MENTION} mention in text`,
+        notifications: [{ user: FIXTURE.bot, reason: 2 }],
+      })
+    );
+
+    const fields = buildInboundMessageFields(activity, input());
+
+    expect(fields.isMention).toBe(true);
+  });
+
+  it.each([[1], [2], [10]])(
+    'a notification naming the bot counts whatever its reason code (%i)',
+    (reason) => {
+      const activity = commented(
+        issueCommented({
+          text: 'no @ in this text',
+          notifications: [{ user: FIXTURE.bot, reason }],
+        })
+      );
+
+      const fields = buildInboundMessageFields(activity, input());
+
+      expect(fields.isMention).toBe(true);
+    }
+  );
+
+  it('an issue assigned to the bot is notified as well as reported in changes[]', () => {
+    const activity = updated(
+      assigneeChanged({
+        assigneeName: FIXTURE.bot.name,
+        notifications: [{ user: FIXTURE.bot, reason: 1 }],
+      })
+    );
+
+    const fields = buildInboundMessageFields(activity, input());
+
+    expect(fields.isMention).toBe(true);
+    expect(fields.changes[0]).toMatchObject({ field: 'assigner' });
+  });
+
+  it('a multi-field pull-request update whose assignee change Backlog omitted is a mention through its notification', () => {
+    const activity = activityOfType(
+      19,
+      pullRequestUpdated({
+        changes: [
+          {
+            field: 'summary',
+            old_value: 'Retry the deploy step',
+            new_value: 'Retry the deploy step on a 5xx',
+          },
+        ],
+        notifications: [{ user: FIXTURE.bot, reason: 10 }],
+      })
+    );
+
+    const fields = buildInboundMessageFields(activity, pullRequestInput());
+
+    expect(fields.changes.map((change) => change.field)).toEqual(['summary']);
+    expect(fields.isMention).toBe(true);
+  });
+
+  it('an activity body replayed from the activity API carries no notifications and falls back to the text', () => {
+    const withoutText = commented(issueCommented({ text: 'no @ here' }));
+    const withText = commented(
+      issueCommented({ text: `${RESOLVED_MENTION} please look` })
+    );
+
+    expect(buildInboundMessageFields(withoutText, input()).isMention).toBe(
+      false
+    );
+    expect(buildInboundMessageFields(withText, input()).isMention).toBe(true);
+  });
 });
 
 describe('buildAuthor', () => {

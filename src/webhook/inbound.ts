@@ -11,6 +11,7 @@ import type {
   ActivityAttachment,
   ActivityChange,
   ActivityCreatedUser,
+  ActivityNotification,
   IssueCreatedActivity,
   IssueUpdatedOrCommentedActivity,
   PullRequestAddedActivity,
@@ -140,6 +141,8 @@ interface MentionEvidence {
   text: string;
   assigneeId: number | undefined;
   changes: BacklogChange[];
+  /** The activity's top-level `notifications[]`: who Backlog notified. */
+  notifications: readonly ActivityNotification[];
   /**
    * Whether `text` was assembled from a field Backlog stores **without**
    * rewriting `<@U<id>>` into `@<display name>` — a pull request's summary,
@@ -149,15 +152,30 @@ interface MentionEvidence {
 }
 
 /**
- * Textual plus assignment mention detection (docs/specs/adapter.md §5.4).
- * `mentionPattern` alone only proves a hand-typed `@name` is present in
- * `text`; the assignment checks below catch the case Backlog signals
- * structurally instead of textually — assigning the bot to an issue or a
- * pull request, or changing its assignee, mentions nobody in `text` at all.
+ * Notification, textual and assignment mention detection
+ * (docs/specs/adapter.md §5.4). `notifications[]` is the one rule that reads
+ * what Backlog decided rather than guessing from text: `mentionPattern` only
+ * proves a hand-typed `@name` is present, and the assignment checks only
+ * cover the two events Backlog signals structurally. A comment whose
+ * recipients were picked in the notification field carries neither — no
+ * `@name` survives in `text` at all — so without this rule it reads as an
+ * unaddressed comment.
  */
 function detectMention(evidence: MentionEvidence): boolean {
   const { botUserName, botUserId, text, assigneeId, changes } = evidence;
 
+  // Not narrowed to `reason: 2` (Issue Commented). An assignment (reason 1)
+  // is already a mention through the rules below, so a reason allowlist
+  // could only ever drop a directed notification whose code this adapter has
+  // not measured — the pull-request reasons 10-13 among them — while adding
+  // a second place that has to be kept in step with Backlog's reason table.
+  if (
+    evidence.notifications.some(
+      (notification) => notification.user.id === botUserId
+    )
+  ) {
+    return true;
+  }
   if (mentionPattern(botUserName).test(text)) {
     return true;
   }
@@ -176,8 +194,9 @@ function detectMention(evidence: MentionEvidence): boolean {
   }
   // A pull-request `PATCH` touching several fields at once was measured once
   // to omit the `assignee` entry while still notifying the new assignee, so
-  // this rule under-reports; the payload carries nothing else to read an
-  // assignment from.
+  // this rule under-reports on its own; the notification rule above is what
+  // covers that case, and it is kept for a delivery whose `notifications[]`
+  // is empty (every `GET /space/activities` body replayed as a webhook).
   return changes.some(
     (change) =>
       ASSIGNMENT_CHANGE_FIELDS.includes(change.field) &&
@@ -232,6 +251,7 @@ function buildRootFields(
       text,
       assigneeId: assigneeIdOf(activity.content),
       changes,
+      notifications: activity.notifications,
       rawMentionNotationSurvives: activity.type === 18,
     }),
     changes,
@@ -288,6 +308,7 @@ function buildCommentOrUpdateFields(
       text,
       assigneeId: undefined,
       changes,
+      notifications: activity.notifications,
       rawMentionNotationSurvives: false,
     }),
     changes,

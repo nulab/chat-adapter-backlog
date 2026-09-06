@@ -227,7 +227,7 @@ What a pull-request thread cannot do — delete a comment, get listed by
 | Post and edit a comment | yes — both kinds |
 | Delete a comment | partial — issue comments only (see below) |
 | File uploads and downloads | yes — a pull-request comment's attachment resolves by name (see below) |
-| Mentions | yes — text match, or assignment to the bot |
+| Mentions | yes — the webhook's notification list, a text match, or assignment to the bot |
 | Reactions | partial — one Backlog star; the emoji is ignored (see below) |
 | Streaming | partial — buffered, posted once (see below) |
 | Issue creation via `channel.post()` | yes |
@@ -298,9 +298,12 @@ Limitations worth knowing before you build on this:
   `&color()`, `#contents`, `#rev`, `#attach`, `#thumbnail`, wiki links and
   issue-key auto-links pass through as text.
 - **A hand-typed `@Chatbot` is indistinguishable from a real mention.** Backlog
-  rewrites mentions to resolved display text before storing them, and the
-  payload carries no record of who was notified, so detection is textual. False
-  positives are accepted; assignment to the bot is the reliable trigger.
+  rewrites mentions to resolved display text before storing them, so a text
+  match cannot tell a real mention from someone typing the bot's name. False
+  positives are accepted. The webhook's own notification list and assignment to
+  the bot are the reliable triggers — but only a webhook has that list: the
+  same activity read back through `GET /space/activities` reports no
+  recipients, so a poller cannot reproduce the detection.
 - **`chat.getUser()` cannot route to this adapter** — the core infers the
   adapter from the id shape and does not recognise `<host>:<id>`. Call
   `adapter.getUser()` directly.
@@ -353,11 +356,20 @@ repository.
 
 ## Mentions
 
-Detected when the message text matches `@<botUserName>` (case-sensitive,
-left-bounded, so `@Chatbot2` and `foo@Chatbot` do not match), or when the bot is
-assigned the issue or the pull request. The name compared is the one configured
-for the space the event came from, so several spaces under different display
-names each match their own; `adapter.botUserName(host)` reports it.
+Detected when the delivery names the bot among the users it notified, when the
+message text matches `@<botUserName>` (case-sensitive, left-bounded, so
+`@Chatbot2` and `foo@Chatbot` do not match), or when the bot is assigned the
+issue or the pull request. The name compared is the one configured for the space
+the event came from, so several spaces under different display names each match
+their own; `adapter.botUserName(host)` reports it.
+
+The notification list is what makes the UI's own way of addressing someone work.
+A comment whose recipients were chosen in the issue's notification field —
+rather than by typing `@name` — leaves no `@` in the stored text at all, so it
+would otherwise arrive as an unaddressed comment. Backlog carries that list on
+the **webhook** only; the same activity fetched from the activities API reports
+none. The reason code is not filtered: anything Backlog notified the bot about
+counts as a mention.
 
 One asymmetry is worth knowing: a pull request's **summary keeps mention
 notation raw**. `<@U999>` is stored literally there, while a description or a

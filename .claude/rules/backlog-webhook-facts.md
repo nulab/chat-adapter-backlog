@@ -14,7 +14,7 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
 ## Payload envelope
 
 - The body is one Activity object: `{ id, project{ id, projectKey, name, ... },
-  type, content, notifications: [], createdUser, created }`, the same shape
+  type, content, notifications[], createdUser, created }`, the same shape
   `GET /space/activities` returns ("the webhook type is the same as the Backlog
   API response for Get recent updates",
   https://support.nulab.com/hc/en-us/articles/8840133998489). Measured
@@ -39,11 +39,23 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
   persisted identifiers on `content.id` and `project.id`, never on `key_id` or
   `${projectKey}-${key_id}`: renaming a project key rewrites every issue key
   under it, ids never change.
-- `notifications` is always `[]` (emptied 2022-02-09 per the Get Recent Updates
-  page; `backlog-js` types it `notifications: []`). Measured 2026-08-20 and
-  2026-09-03: `[]` on types 2, 3 and 17, and `content.comment.notifications`
-  is absent too, including for comments posted through the UI mention picker
-  and for API comments sent with `notifiedUserId[]`.
+- Top-level `notifications` **is populated on a webhook delivery** and names
+  every user the activity notified: `[{ id, alreadyRead, reason,
+  resourceAlreadyRead, user{ id, name, roleType, lang, ... } }]` (measured
+  2026-09-06). `reason` follows Get Notification's codes
+  (`backlog-api-facts.md`): a comment addressed to someone through the UI
+  notification field or by a `<@U…>` in its text arrives as `reason: 2`, a
+  `PATCH` that changes the assignee as `reason: 1`. `content.comment.
+  notifications` is still absent.
+- The **same activity fetched from `GET /space/activities` or `GET /projects/
+  :id/activities` carries `notifications: []`** (measured 2026-08-20,
+  2026-09-03 and 2026-09-06), which is also what the Get Recent Updates page
+  and `backlog-js`'s `notifications: []` typing describe. So the two bodies
+  are *not* interchangeable in this one field, and the webhook is the only
+  place the notification list can be read at all. An activity-API body
+  replayed as a webhook is still valid — it just says nothing about who was
+  notified, which is why mention detection keeps its textual and assignment
+  rules (docs/specs/adapter.md §5.4).
 - Top-level `created` on the webhook and on the same activity fetched later via
   the API are identical strings (measured 2026-08-31). Top-level `id` is the
   activity id, not the issue or comment id.
@@ -117,9 +129,10 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
   webhook `content.comment.content` carry the **rewritten** text. Code must not
   expect `<@U…>` in inbound text; the measured form wins until re-measured.
 - A hand-typed `@Display Name` and a real mention are byte-identical in the
-  stored text (measured 2026-09-04). The only difference is the notification,
-  which the payload does not carry. Text-based detection can therefore only
-  establish "possibly mentioned".
+  stored text (measured 2026-09-04). The difference is the notification, which
+  a **webhook** payload does carry (see § Payload envelope) and an
+  activity-API body does not; text alone can therefore only establish
+  "possibly mentioned".
 - Unresolvable forms stay literal and notify nobody: `<@U0>` (ids must match
   `[1-9]\d*`), lowercase `<@u123>`, `<@project >` (whitespace inside the tag).
   A nonexistent team id resolves to the literal text `Team-<id>` (measured
@@ -129,9 +142,13 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
   2026-09-04). `notifiedUserId[]` and text mentions are independent: either
   alone produces a notification, and `notifiedUserId[]` alone leaves no `@name`
   in the text.
-- The only ways to learn who was notified are `GET /issues/:id/comments/
-  :commentId/notifications` or matching the bot's display name in the text. A
-  fixture with a populated `notifications` array tests code that never runs.
+- Who was notified is readable three ways, and only the first is available
+  without a second request: the webhook's own top-level `notifications[]`,
+  `GET /issues/:id/comments/:commentId/notifications`, or matching the bot's
+  display name in the text. A comment whose recipients were picked in the UI
+  notification field leaves **no `@name` in the stored text at all** (measured
+  2026-09-06), so text matching alone misses the UI's normal way of addressing
+  somebody.
 
 ## Delivery semantics
 

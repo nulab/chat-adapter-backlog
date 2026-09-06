@@ -21,8 +21,11 @@ Three properties of these payloads decide how a handler must read them:
 - **Backlog attaches a changelog comment to every field update.** A set
   `content.comment.id` therefore does not mean "no field change" — handlers key
   on `content.changes[]`.
-- **`notifications` is always empty** (emptied by Backlog in 2022), so who was
-  notified cannot be read from a delivery.
+- **`notifications` names who the delivery notified**, by user id and reason
+  code (measured on a development space, 2026-09-06). The same activity read
+  back from the activities API carries `[]` there, so a webhook is the only
+  place that list exists; most samples below show it empty because nobody was
+  notified.
 
 The pull-request payloads below are the **activity API** form, measured on a
 real space on 2026-09-06. The webhook form of types 18–20 is unmeasured; the
@@ -95,6 +98,62 @@ adapter therefore requires only `content.id`, `content.number` and
     "changes": []
   },
   "notifications": [],
+  "createdUser": {
+    "id": 100,
+    "userId": "alice",
+    "name": "Alice",
+    "roleType": 2,
+    "lang": "ja",
+    "mailAddress": "alice@example.com",
+    "nulabAccount": null
+  },
+  "created": "2026-09-03T04:05:06Z"
+}
+```
+
+## Type 3 — Issue Commented — recipients chosen in the notification field
+
+the text carries no `@` at all; `notifications[]` is the only record that the comment was addressed to the bot, and only a webhook carries it (`reason: 2`, Issue Commented)
+
+```json
+{
+  "id": 71828,
+  "project": {
+    "id": 500,
+    "projectKey": "EXAMPLE",
+    "name": "Example project",
+    "archived": false,
+    "displayOrder": 2147483646
+  },
+  "type": 3,
+  "content": {
+    "id": 8001,
+    "key_id": 42,
+    "summary": "Deploy fails on the staging space",
+    "description": "Reproduces on every push to main.",
+    "comment": {
+      "id": 3001,
+      "content": "Please take a look when you get a chance."
+    },
+    "changes": []
+  },
+  "notifications": [
+    {
+      "id": 4100,
+      "alreadyRead": false,
+      "reason": 2,
+      "user": {
+        "id": 999,
+        "userId": "chatbot",
+        "name": "Chatbot",
+        "roleType": 2,
+        "lang": "ja",
+        "mailAddress": "chatbot@example.com",
+        "nulabAccount": null
+      },
+      "resourceAlreadyRead": false
+    }
+  ],
   "createdUser": {
     "id": 100,
     "userId": "alice",

@@ -4,6 +4,7 @@ import {
   attachmentAdded,
   commentNotificationAdded,
   descriptionEdited,
+  FIXTURE,
   issueCommented,
   issueCreated,
   issueCreatedFromActivityApi,
@@ -125,12 +126,45 @@ describe('parseActivity', () => {
     const payload = issueMultiUpdated();
     // Type 14 has its own shape and is never schema-validated (it is
     // filtered out at the envelope-type gate before reaching a schema), but
-    // commentNotificationAdded (17) reuses the type-3-shaped fixture surface
-    // with a `notifications` key that no schema names.
+    // commentNotificationAdded (17) reuses the type-3-shaped fixture surface.
     expect(payload['notifications']).toEqual([]);
 
     const activity = commentNotificationAdded();
     expect('notifications' in activity).toBe(true);
+  });
+
+  it('reads who an activity notified, and why, off the top-level notifications[]', () => {
+    const parsed = activity(
+      3,
+      issueCommented({
+        notifications: [
+          { user: FIXTURE.bot, reason: 2 },
+          { user: FIXTURE.alice, reason: 1 },
+        ],
+      })
+    );
+
+    expect(parsed.notifications).toEqual([
+      { user: { id: FIXTURE.bot.id }, reason: 2 },
+      { user: { id: FIXTURE.alice.id }, reason: 1 },
+    ]);
+  });
+
+  it('a notifications array in an unexpected shape leaves the activity valid', () => {
+    const payload = issueCommented();
+    payload['notifications'] = [{ user: 'someone' }, 7];
+
+    const parsed = activity(3, payload);
+
+    expect(parsed.notifications).toEqual([]);
+    expect(parsed.type).toBe(3);
+  });
+
+  it('an activity carrying no notifications key reads as notifying nobody', () => {
+    const payload = issueCommented();
+    delete payload['notifications'];
+
+    expect(activity(3, payload).notifications).toEqual([]);
   });
 
   it('project.projectKey and content.key_id are optional, not required identity', () => {

@@ -12,8 +12,7 @@ import type { BacklogSubjectRef } from '../types';
  * Every schema here validates only the fields the adapter reads. `z.object`
  * strips fields it does not know about rather than rejecting the input, so a
  * real payload's extra keys (`field_text`, `type` inside `changes[]`,
- * `notifications`, `shared_files`, `status`, `priority`, …) pass validation
- * without being named — the tolerance §5.2 requires is zod's default
+ * `shared_files`, `status`, `priority`, …) pass validation without being named — the tolerance §5.2 requires is zod's default
  * behaviour, not something added on top of it. `raw.payload` is built from
  * the parsed JSON directly, never from a schema's output, so those unnamed
  * keys still reach the message as received.
@@ -77,6 +76,25 @@ const commentSchema = z
   .nullable();
 
 /**
+ * One top-level `notifications[]` entry: a user this activity notified, and
+ * the reason code Get Notification documents (1 assigned to the issue, 2 a
+ * comment addressed to you, …).
+ *
+ * Only `user.id` is read — mention detection does not branch on `reason`
+ * (docs/specs/adapter.md §5.4 rule 6) — but the code is named here because
+ * it is the field a consumer reaching through `raw.payload` needs to tell an
+ * assignment apart from a comment, and naming it documents that the array is
+ * populated at all.
+ */
+const notificationSchema = z.object({
+  reason: z.number().optional(),
+  user: z.object({ id: z.number() }),
+});
+
+/** One top-level `notifications[]` entry (docs/specs/adapter.md §5.2). */
+export type ActivityNotification = z.infer<typeof notificationSchema>;
+
+/**
  * Shared by types 1–4 and 18–20: every mapped activity type carries
  * `project.id`, `createdUser` and `content.id` (docs/specs/adapter.md §5.2
  * "Required").
@@ -90,6 +108,12 @@ const baseActivitySchema = z.object({
     projectKey: z.string().optional(),
   }),
   createdUser: createdUserSchema,
+  // `.catch([])` rather than `.optional()`: an absent array and an array in a
+  // shape this adapter has not measured both mean "no notification evidence",
+  // and neither is worth the 400 a failed field would cost. Nothing here is
+  // identity data, so a malformed entry must not lose the message — detection
+  // falls back to the textual and assignment rules.
+  notifications: z.array(notificationSchema).catch([]),
 });
 
 /** Type 1 — Issue Created. `assignee` is webhook-only (§5.3 "measured 2026-08-28"). */

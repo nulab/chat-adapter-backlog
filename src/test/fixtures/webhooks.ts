@@ -2,11 +2,13 @@
  * Webhook payload builders for the activity types the adapter processes.
  *
  * Shapes follow `.claude/rules/backlog-webhook-facts.md`: the body is one
- * Activity object as returned by Get Recent Updates, every measured payload
- * carries extra keys (`field_text`, `type` inside `changes[]`, `notifications`,
- * `shared_files`), and `notifications` is always empty. Builders therefore emit
- * those keys rather than a minimal shape, so a schema that only tolerates the
- * documented fields fails here rather than in production.
+ * Activity object as returned by Get Recent Updates, and every measured payload
+ * carries extra keys (`field_text`, `type` inside `changes[]`, `shared_files`).
+ * Builders therefore emit those keys rather than a minimal shape, so a schema
+ * that only tolerates the documented fields fails here rather than in
+ * production. `notifications` defaults to `[]` — the shape a body replayed from
+ * `GET /space/activities` has — and every builder takes `notifications` so a
+ * real delivery's populated array can be built too.
  *
  * @see https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/
  */
@@ -55,11 +57,22 @@ export interface FixtureAttachment {
   size: number;
 }
 
+/**
+ * One top-level `notifications[]` entry. `reason` follows Get Notification's
+ * codes: 1 Assigned to Issue, 2 Issue Commented
+ * (`.claude/rules/backlog-api-facts.md`).
+ */
+export interface FixtureNotification {
+  user: FixtureUser;
+  reason: number;
+}
+
 interface ActivityOptions {
   created?: string;
   createdUser?: FixtureUser;
   projectId?: number;
   issueId?: number;
+  notifications?: FixtureNotification[];
 }
 
 const DEFAULT_CREATED = '2026-09-03T04:05:06Z';
@@ -74,6 +87,23 @@ function createdUserOf(user: FixtureUser): Record<string, unknown> {
     mailAddress: `${user.userId ?? user.name.toLowerCase()}@example.com`,
     nulabAccount: null,
   };
+}
+
+/**
+ * One `notifications[]` entry as Backlog serialises it: the read flags and the
+ * full user object surround the two fields the adapter reads
+ * (measured 2026-09-06).
+ */
+function notificationEntries(
+  notifications: FixtureNotification[]
+): Record<string, unknown>[] {
+  return notifications.map((notification, index) => ({
+    id: 4100 + index,
+    alreadyRead: false,
+    reason: notification.reason,
+    user: createdUserOf(notification.user),
+    resourceAlreadyRead: false,
+  }));
 }
 
 /**
@@ -108,9 +138,10 @@ function envelope(
     },
     type,
     content,
-    // Emptied by Backlog in 2022 and measured empty on every type since; a
-    // fixture with entries here would exercise code that never runs.
-    notifications: [],
+    // Empty by default because that is what a body replayed from `GET
+    // /space/activities` carries; a real delivery names the users it notified
+    // (measured 2026-09-06), which is what `notifications` builds.
+    notifications: notificationEntries(options.notifications ?? []),
     createdUser: createdUserOf(user),
     created: options.created ?? DEFAULT_CREATED,
   };
