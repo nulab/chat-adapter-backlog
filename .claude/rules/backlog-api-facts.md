@@ -203,11 +203,17 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
   (https://developer.nulab.com/docs/backlog/rate-limit/).
 - `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` (UTC epoch
   seconds) are on **every** response, success included; the doc example is
-  `150 / 142 / 1605484860`. `Retry-After` is not documented and the 429 body is
-  the standard envelope with code 13.
+  `150 / 142 / 1605484860`. `Retry-After` is not documented, and a real 429
+  carried none (measured 2026-09-06); the 429 body is the standard envelope
+  with code 13.
 - `GET /rateLimit` → `{ rateLimit: { read: {limit, remaining, reset}, update,
   search, icon } }`
-  (https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/).
+  (https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/). Its `reset`
+  is UTC epoch **seconds**, like the header, so `new Date(reset)` without the
+  ×1000 lands in 1970. The response is the only way to learn a bucket this
+  process has not spent; the headers only ever describe the bucket the request
+  just consumed. Whether the call itself decrements a bucket is unstated on
+  that page and unmeasured.
 - A **free-plan** space reports far smaller buckets than the documented
   example: `read` 60/min and `update` 15/min (measured 2026-09-06). Treat
   600/150 as one plan's numbers, not a floor.

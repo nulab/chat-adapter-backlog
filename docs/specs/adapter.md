@@ -231,7 +231,10 @@ throws makes that call reject with `AuthenticationError` wrapping the cause.
   hatch for endpoints outside the Chat SDK contract, D7). Unknown host →
   `ResourceNotFoundError("backlog", "installation", host)`.
 - `rateLimit(host: string): RateLimitSnapshots` — last observed
-  `X-RateLimit-*` per bucket for that host (D5); empty object before any call.
+  `X-RateLimit-*` per bucket for that host (D5); empty object before any call,
+  and never informed by another instance's traffic. The figures the space
+  reports irrespective of this instance's history are one call further out:
+  `api(host).getRateLimit()` (§8.4).
 - `botUserName(host: string): string` — the bot's display name on that
   installation (D19). Unknown host → the same
   `ResourceNotFoundError("backlog", "installation", host)`. Unaffected by a
@@ -921,6 +924,7 @@ types), throws only §3.6 classes, and is implemented twice (§8.2, §8.3).
 | `updatePullRequestComment(ref, commentId, content)` | `PATCH …/pullRequests/:number/comments/:cid` | update |
 | `listPullRequestAttachments(ref)` | `GET …/pullRequests/:number/attachments` | read |
 | `downloadPullRequestAttachment(ref, attachmentId)` | `GET …/pullRequests/:number/attachments/:aid` | read |
+| `getRateLimit()` | `GET /rateLimit` | read |
 | `rateLimit()` | none | — snapshot of §8.4 |
 
 `addStar` takes a discriminated `StarTarget` (`{ commentId }` or
@@ -985,7 +989,8 @@ user), `now()`. It exposes
 allocates ids from a single counter initialised above every seeded id (issues
 included), applies exclusive `minId`/`maxId`, sorts by `order`, mirrors
 `deleteStar` in `state`, and throws the same error classes as §8.2 for missing
-resources. It records synthetic rate-limit headers so `rateLimit()` is testable.
+resources. Both `rateLimit()` and `getRateLimit()` answer with the documented
+example figures, so either is testable without modelling consumption.
 
 ### 8.4 Rate-limit tracking and retry (D5)
 
@@ -995,9 +1000,18 @@ resources. It records synthetic rate-limit headers so `rateLimit()` is testable.
   [Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/)).
   `rateLimit()` returns the snapshot; missing headers leave the bucket
   undefined. Limits are per **user** per minute and differ per plan, so no
-  number is ever hard-coded; `GET /rateLimit`
+  number is ever hard-coded.
+- Two sources, and a caller picks by what it can rely on. `rateLimit()` is
+  free but replays only what **this instance** observed: a bucket it has not
+  spent is absent, a `reset` already past means the window rolled over, and an
+  instance that lives for one serverless invocation sees almost nothing.
+  `getRateLimit()` spends one request on `GET /rateLimit`
   ([Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/))
-  is available through `api(host)` for callers who want the figures up front.
+  and answers with the figures the space applies to the credentialed user right
+  now, whatever this instance has done. Its body reports `reset` in UTC epoch
+  **seconds**, as the header does. The four buckets it reports are not folded
+  into `rateLimit()`, which stays a record of observation; only the response's
+  own headers are, in the `read` bucket the request spends.
 - On HTTP 429 or error code 13: compute `waitMs = reset*1000 - now`; if
   `waitMs > maxWaitMs` (default 60 000) or retries are exhausted
   (`maxRetries`, default 1), throw `AdapterRateLimitError("backlog", ceil(waitMs/1000))`;
@@ -1060,7 +1074,9 @@ types and priorities readable; stars carry `presenter` and are removable by
 star id, deleting a missing star is a 404; notifications list newest-first
 with `comment.id`, exclusive `maxId`, markable as read; upload returns
 `{ id, name, size }`; `rateLimit()` reflects the last response's headers per
-bucket and a `GET /issues` call updates `search`, not `read`; 429 with a
+bucket and a `GET /issues` call updates `search`, not `read`; `getRateLimit()`
+reports buckets the client has never spent, with `reset` a date read from epoch
+seconds; 429 with a
 near `reset` is retried once and then succeeds; 429 with a distant `reset`
 throws `AdapterRateLimitError` without waiting; code→class table of §8.5;
 schema mismatch → `AdapterError("SCHEMA")`, not `ZodError`. Pull requests: a

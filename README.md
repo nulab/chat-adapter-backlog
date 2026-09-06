@@ -409,12 +409,29 @@ error ever escapes the package.
 ## Rate limits and the raw API
 
 Limits are **per user, per minute**, in four independent buckets, and the
-numbers differ by plan — so read them from the API rather than assuming:
+numbers differ by plan — so read them from the API rather than assuming. Two
+members do that, and they answer different questions:
 
 ```ts
-adapter.rateLimit('example.backlog.com');
-// { read: { limit, remaining, reset }, update: {…}, search: {…} }
+// What the space applies to your credential right now: every bucket, whatever
+// this process has or has not spent. Costs one request, in the `read` bucket.
+await adapter.api('example.backlog.com').getRateLimit();
+// { read: { limit, remaining, reset }, update: {…}, search: {…}, icon: {…} }
 
+// What this adapter instance last saw in `X-RateLimit-*` response headers.
+// Free, and only ever as complete and as current as its own traffic.
+adapter.rateLimit('example.backlog.com');
+// { read: {…} } — a bucket nothing here has spent is simply absent
+```
+
+`rateLimit()` is a record of observation, so two things follow. A `reset`
+already in the past means that window has rolled over and `remaining` no longer
+describes the budget. And where an instance handles one request and exits — a
+serverless function, most obviously — it can only ever report that one
+invocation's calls, which is why anything that needs to *decide* against a
+budget should ask `getRateLimit()` instead.
+
+```ts
 // Anything outside the Chat SDK contract — including the pull-request list
 // `listThreads` deliberately does not cover:
 const api = adapter.api('example.backlog.com');
@@ -458,8 +475,9 @@ rate limited; not retrying
 ```
 
 Nothing else about rate limiting is logged; a line per request would be one
-entry per API call against a per-minute bucket. Call `adapter.rateLimit(host)`
-when you want the running counts.
+entry per API call against a per-minute bucket. For the running counts, call
+`adapter.rateLimit(host)` for what this instance has seen, or
+`adapter.api(host).getRateLimit()` for what the space applies right now.
 
 ## Testing
 

@@ -463,6 +463,24 @@ export function describeBacklogApiConformance(
       expect(snapshot.update).toBeDefined();
     });
 
+    it('the rate-limit endpoint reports buckets this client has never spent', async () => {
+      const api = await factory();
+      const snapshot = await api.getRateLimit();
+      expect(snapshot.update).toBeDefined();
+      expect(snapshot.search).toBeDefined();
+    });
+
+    it('a reported reset is a date, read from epoch seconds rather than milliseconds', async () => {
+      const api = await factory();
+      const snapshot = await api.getRateLimit();
+      const reset = snapshot.read?.reset;
+      expect(reset).toBeInstanceOf(Date);
+      // Epoch seconds passed to `new Date` unmultiplied land in 1970, and the
+      // resulting snapshot still type-checks and still looks like a Date, so
+      // only a bound on the value catches it.
+      expect(reset?.getTime()).toBeGreaterThan(Date.parse('2020-01-01Z'));
+    });
+
     it('a repository and a pull request are fetched by their ids, and a missing one is a ResourceNotFoundError', async () => {
       const api = await factory();
       await expect(api.listGitRepositories(PROJECT_ID)).resolves.toEqual(

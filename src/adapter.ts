@@ -717,6 +717,13 @@ export class BacklogAdapter implements Adapter<
     return api;
   }
 
+  /**
+   * The `X-RateLimit-*` headers **this adapter instance** observed for that
+   * host, per bucket (`BacklogApi.rateLimit`). It is empty until this instance
+   * has made a request and never learns about traffic from another one, so
+   * where instances are short-lived — one per serverless invocation, say —
+   * ask the space instead: `adapter.api(host).getRateLimit()`.
+   */
   rateLimit(host: string): RateLimitSnapshots {
     return this.api(host).rateLimit();
   }

@@ -8,7 +8,12 @@ import {
   mapTransportError,
   stripQueryString,
 } from './errors.js';
-import { classifyBucket, decideRetry, RateLimitTracker } from './rate-limit.js';
+import {
+  classifyBucket,
+  decideRetry,
+  RATE_LIMIT_BUCKETS,
+  RateLimitTracker,
+} from './rate-limit.js';
 import {
   commentListSchema,
   commentSchema,
@@ -25,6 +30,7 @@ import {
   pullRequestAttachmentListSchema,
   pullRequestListSchema,
   pullRequestSchema,
+  rateLimitResponseSchema,
   uploadedFileSchema,
   userResponseSchema,
 } from './schemas.js';
@@ -624,6 +630,31 @@ export function createBacklogJsApi(
         path: `issues/${issueId}/attachments/${attachmentId}`,
       });
       return toDownloadedFile(response, attachmentId);
+    },
+
+    async getRateLimit(): Promise<RateLimitSnapshots> {
+      const body = await requestJson('getRateLimit', rateLimitResponseSchema, {
+        method: 'GET',
+        path: 'rateLimit',
+      });
+      const snapshots: RateLimitSnapshots = {};
+      for (const bucket of RATE_LIMIT_BUCKETS) {
+        const reported = body.rateLimit[bucket];
+        if (reported !== undefined) {
+          snapshots[bucket] = {
+            limit: reported.limit,
+            remaining: reported.remaining,
+            reset: new Date(reported.reset * 1000),
+          };
+        }
+      }
+      // The four buckets this answer describes are deliberately not fed to
+      // `tracker`: it reports what this instance's own requests observed, and
+      // mixing in a server-reported figure would make `rateLimit()` claim
+      // knowledge of buckets nothing here has spent. The `read` entry the
+      // response headers produced in `call()` is the honest part and is
+      // already recorded.
+      return snapshots;
     },
 
     rateLimit(): RateLimitSnapshots {
