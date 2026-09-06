@@ -1073,3 +1073,30 @@ describe('one pull request comment seen twice (§6.6)', () => {
     ]);
   });
 });
+
+/**
+ * The shape a type 3 delivery had when a consumer reported the mention
+ * `RangeError`: the stored text carries the resolved mention and
+ * `notifications[]` names the bot as well (measured on a development space,
+ * 2026-09-06).
+ */
+describe('a comment naming the bot in its text and its notifications[] (§5.3, §5.4)', () => {
+  it('is mapped whole — mention, text and message id — without throwing', () => {
+    const activity = commented(
+      issueCommented({
+        commentId: 3001,
+        text: `${RESOLVED_MENTION} mention in text`,
+        notifications: [{ user: FIXTURE.bot, reason: 2 }],
+      })
+    );
+
+    const fields = buildInboundMessageFields(activity, input());
+
+    expect(fields.isMention).toBe(true);
+    expect(fields.text).toBe(`${RESOLVED_MENTION} mention in text`);
+    expect(fields.changes).toEqual([]);
+    expect(fields.messageId).toBe(
+      `${FIXTURE.host}:issue:${FIXTURE.issueId}:c3001`
+    );
+  });
+});
