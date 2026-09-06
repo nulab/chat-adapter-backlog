@@ -558,6 +558,13 @@ interface PullRequestOptions extends ActivityOptions {
   repositoryName?: string;
   number?: number;
   pullRequestId?: number;
+  /**
+   * The subject's **current** assignee, which the webhook form carries on 18,
+   * 19 and 20 alike while the activity form carries it on none of them
+   * (measured 2026-09-06). Left out of `content` entirely unless given, so a
+   * fixture that models the activity form still has the key set that form has.
+   */
+  assignee?: FixtureUser | null;
 }
 
 function repositoryOf(options: PullRequestOptions): Record<string, unknown> {
@@ -569,10 +576,12 @@ function repositoryOf(options: PullRequestOptions): Record<string, unknown> {
 }
 
 /**
- * The one `content` key set types 18, 19 and 20 share (measured 2026-09-06 on
- * the activity API form, `.claude/rules/backlog-pull-request-facts.md`): no
- * `assignee`, no `attachments`, no `status`, `base` or `branch`, and
- * `repository.name` on every one.
+ * The one `content` key set types 18, 19 and 20 share
+ * (`.claude/rules/backlog-pull-request-facts.md`): no `attachments`, no
+ * `status`, and `repository.name` on every one. The activity form carries
+ * nothing more (measured 2026-09-06 on 17 activities); the webhook form adds
+ * `assignee`, `base`, `branch` and `diff` (measured 2026-09-06), of which
+ * only `assignee` changes any behaviour, so only it has an option.
  */
 function pullRequestContent(
   options: PullRequestOptions & {
@@ -583,7 +592,7 @@ function pullRequestContent(
     issue?: Record<string, unknown> | null;
   }
 ): Record<string, unknown> {
-  return {
+  const content: Record<string, unknown> = {
     id: options.pullRequestId ?? FIXTURE.pullRequestId,
     number: options.number ?? FIXTURE.pullRequestNumber,
     summary: options.summary ?? 'Retry the deploy step on a 5xx',
@@ -593,14 +602,22 @@ function pullRequestContent(
     issue: options.issue ?? null,
     repository: repositoryOf(options),
   };
+  if (options.assignee !== undefined) {
+    content['assignee'] =
+      options.assignee === null
+        ? null
+        : { id: options.assignee.id, name: options.assignee.name };
+  }
+  return content;
 }
 
 /**
  * Type 18 — Pull Request Added.
  *
- * The assignee and the attachments a create call takes are **not in the
- * activity at all**, so no option adds them; `linkedIssue` populates
- * `content.issue`, which is display data and never routing (D-PR6).
+ * The attachments a create call takes are **not in the activity at all**, so
+ * no option adds them; the `assignee` it takes is in the webhook form only,
+ * so `assignee` adds a key the activity form has none of. `linkedIssue`
+ * populates `content.issue`, which is display data and never routing (D-PR6).
  */
 export function pullRequestAdded(
   options: PullRequestOptions & {

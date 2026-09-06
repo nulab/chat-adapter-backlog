@@ -431,22 +431,31 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
     expect(fields.isMention).toBe(false);
   });
 
-  it('an assignee a webhook body turns out to carry is read', () => {
-    // The activity form of type 18 carries no `assignee` at all (measured
-    // 2026-09-06) and the webhook form is unmeasured, so the field is added
-    // by hand here rather than through the fixture builder.
-    const payload = pullRequestAdded();
-    (payload['content'] as Record<string, unknown>)['assignee'] = {
-      id: FIXTURE.bot.id,
-      name: FIXTURE.bot.name,
-    };
-
+  it('opening a pull request assigned to the bot is a mention', () => {
     const fields = buildInboundMessageFields(
-      activityOfType(18, payload),
+      activityOfType(18, pullRequestAdded({ assignee: FIXTURE.bot })),
       pullRequestInput()
     );
 
     expect(fields.isMention).toBe(true);
+  });
+
+  it('opening a pull request assigned to someone else is not a mention', () => {
+    const fields = buildInboundMessageFields(
+      activityOfType(18, pullRequestAdded({ assignee: FIXTURE.alice })),
+      pullRequestInput()
+    );
+
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('opening a pull request that an activity replay strips the assignee from is not a mention', () => {
+    const fields = buildInboundMessageFields(
+      activityOfType(18, pullRequestAdded()),
+      pullRequestInput()
+    );
+
+    expect(fields.isMention).toBe(false);
   });
 
   it('attachments a webhook body turns out to carry map through the subject', () => {
@@ -550,6 +559,76 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
       ),
       pullRequestInput()
     );
+
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('a multi-field update naming no assignee mentions the bot when the bot is the assignee', () => {
+    const fields = buildInboundMessageFields(
+      activityOfType(19, pullRequestUpdated({ assignee: FIXTURE.bot })),
+      pullRequestInput()
+    );
+
+    expect(fields.changes.map((change) => change.field)).toEqual(['summary']);
+    expect(fields.isMention).toBe(true);
+  });
+
+  it('a multi-field update naming no assignee is not a mention when someone else is the assignee', () => {
+    const fields = buildInboundMessageFields(
+      activityOfType(19, pullRequestUpdated({ assignee: FIXTURE.alice })),
+      pullRequestInput()
+    );
+
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('a comment on a pull request the bot is assigned to is not a mention', () => {
+    const fields = buildInboundMessageFields(
+      activityOfType(20, pullRequestCommented({ assignee: FIXTURE.bot })),
+      pullRequestInput()
+    );
+
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('merging a pull request the bot is assigned to is not a mention', () => {
+    const fields = buildInboundMessageFields(
+      activityOfType(19, pullRequestStatusChanged({ assignee: FIXTURE.bot })),
+      pullRequestInput()
+    );
+
+    expect(fields.changes.map((change) => change.field)).toEqual(['status']);
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('unassigning the bot from a pull request is not a mention', () => {
+    const fields = buildInboundMessageFields(
+      activityOfType(
+        19,
+        pullRequestAssigneeChanged({
+          assigneeName: '',
+          previousName: FIXTURE.bot.name,
+          assignee: null,
+        })
+      ),
+      pullRequestInput()
+    );
+
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('an issue update is decided by its changes entry alone, whatever assignee a body carries', () => {
+    // No measured issue webhook carries `content.assignee` on type 2 at all
+    // (2026-08-28), so the field is added by hand: the point of the test is
+    // that the pull-request rule above cannot start firing on issues if one
+    // ever does.
+    const payload = descriptionEdited();
+    (payload['content'] as Record<string, unknown>)['assignee'] = {
+      id: FIXTURE.bot.id,
+      name: FIXTURE.bot.name,
+    };
+
+    const fields = buildInboundMessageFields(updated(payload), input());
 
     expect(fields.isMention).toBe(false);
   });
