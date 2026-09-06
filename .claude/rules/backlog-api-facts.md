@@ -133,6 +133,14 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
   is the only per-resource view. One kind of star, no emoji; a user may add
   several to one comment. The UI's emoji reactions on comments have **no API**
   (https://support.nulab.com/hc/en-us/articles/8709986448153; endpoint index).
+- `POST /stars` is **not idempotent**: the same comment starred twice by the
+  same user answers success both times and ends up with two stars in `stars[]`
+  (measured 2026-09-06). The server has no upsert and no conflict error, so
+  the only way to make a repeat call a no-op is to read the comment first and
+  look for a star whose `presenter.id` is the caller's — which is what
+  docs/specs/adapter.md §6.5 requires and `src/egress.ts` does. That guard is
+  read-then-write, so it deduplicates a retry or a redelivered webhook but not
+  two calls in flight at once.
 
 ## Notifications (per authenticated user)
 

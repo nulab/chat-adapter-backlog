@@ -25,6 +25,15 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
 - Nothing in the body identifies the space (host). `projectKey` and the numeric
   ids are not unique across spaces. Derive the space from the request URL the
   webhook was registered with, never from the payload.
+- A body from space B posted to space A's own hook URL — right secret, wrong
+  `?host=` — is therefore **indistinguishable from a genuine delivery** and is
+  answered 200 (measured 2026-09-06 across two spaces). The receiver then
+  reads space B's ids through space A's credentials. That is not reliably a
+  404: two spaces were observed allocating issue ids from interleaving ranges
+  within minutes of each other (measured 2026-09-06), so an id from one space
+  can name a real, unrelated issue in the other. Only the registered URL
+  prevents this; see docs/specs/adapter.md D19 for why the payload cannot be
+  cross-checked against the host.
 - `content.id` is the issue's space-wide numeric id; `content.key_id` is the
   trailing number of the issue key; the `issueKey` string is absent. Key
   persisted identifiers on `content.id` and `project.id`, never on `key_id` or

@@ -91,7 +91,9 @@ createBacklogAdapter({
 Register each space's webhook with its own `?host=`. Nothing in a Backlog
 payload identifies the space — `projectKey` and the numeric ids are not unique
 across spaces — so the host comes from the URL, and it is part of every thread,
-message and user id this adapter mints.
+message and user id this adapter mints. Because the URL is the only source,
+getting that one parameter wrong is not a validation error but a silent
+cross-space read: see **Webhook authenticity** below.
 
 ## Platform setup
 
@@ -110,6 +112,10 @@ message and user id this adapter mints.
    ```
    https://<your-app>/api/webhooks/backlog?host=<host>&token=<secret>
    ```
+
+   Check the `host` against the space you are registering in. A wrong one is
+   accepted silently and read with this space's credentials — **Webhook
+   authenticity** below says what that does.
 
    Select activity types **1, 2, 3** (issue created, updated, commented) and
    **18, 19, 20** (pull request added, updated, commented), plus **4** if you
@@ -140,15 +146,34 @@ check: an IP allowlist against
 (they are "subject to change"), Basic auth credentials in the hook URL, mTLS,
 or a reverse-proxy assertion.
 
+**A right secret with a wrong `host` is authentic.** Verification proves that
+the caller knows one space's secret, and nothing more: no Backlog payload says
+which space it came from, so the adapter believes the URL. Register space B's
+webhook with `?host=<space A>&token=<space A's secret>` and every delivery
+verifies, gets its 200, and is then addressed with space A's credentials.
+Nothing is posted, and the sender sees a success.
+
+Do not count on that being a harmless 404. Two spaces measured on 2026-09-06
+were minting issue ids from interleaving ranges, so an id from one space can
+name a real, unrelated issue in the other — and the bot comments there. The
+adapter cannot catch this for you: the payload carries no value that can be
+tied back to a host, and the one candidate for a consistency check
+(`project.projectKey`) would start dropping real events the first time
+somebody renames a project key (docs/specs/adapter.md D19).
+
+So check the `host` in every hook URL you register. The trace to grep for when
+a space has gone quiet is `textFormattingRule lookup failed; assuming markdown`
+naming a project id that host does not have.
+
 Keep the URL out of logs and issue trackers: it carries the secret.
 
 ## Issues and pull requests
 
-Both are threads of the same shape: the root message is the summary and the
-body, every comment — Backlog's auto-generated changelog comments included — is
-a message, `thread.post()` comments on the thread, and the **project** is the
-channel for both. Nothing in the `Adapter` surface asks you which kind you are
-on; the id says it.
+Both are threads of the same shape: the root message's `text` is the summary, a
+blank line, then the description; every comment — Backlog's auto-generated
+changelog comments included — is a message, `thread.post()` comments on the
+thread, and the **project** is the channel for both. Nothing in the `Adapter`
+surface asks you which kind you are on; the id says it.
 
 `message.subject` says it too, when a handler needs to branch:
 
@@ -186,7 +211,7 @@ What a pull-request thread cannot do — delete a comment, get listed by
 | Delete a comment | partial — issue comments only (see below) |
 | File uploads and downloads | yes — a pull-request comment's attachment resolves by name (see below) |
 | Mentions | yes — text match, or assignment to the bot |
-| Reactions | partial — one Backlog star; the emoji is ignored |
+| Reactions | partial — one Backlog star; the emoji is ignored (see below) |
 | Streaming | partial — buffered, posted once (see below) |
 | Issue creation via `channel.post()` | yes |
 | Pull-request creation, merge or close | **no** — Backlog exposes no API (see below) |
@@ -223,11 +248,33 @@ Limitations worth knowing before you build on this:
   request's attachments and takes the newest match — two files with the same
   name in one pull request are indistinguishable. The list call is spent only
   when someone actually reads the file, not once per message.
+- **A reaction is one star, and a repeat call costs a read instead of a
+  second star.** `POST /stars` is not idempotent — Backlog accepts the same
+  star twice from the same user and shows two (measured 2026-09-06) — so
+  `addReaction` reads the comment first and does nothing when the bot's own
+  star is already there. That covers a retry, a redelivered webhook and a
+  handler reacting to one comment twice; it is not a lock, so two
+  `addReaction` calls racing for the same comment can still leave two stars.
+  `removeReaction` deletes only stars the bot presented, never a human's.
+- **A root message leads with the summary.** Its `text` is the summary, a
+  blank line, then the description, so a bot that reads the first word of a
+  message as a command reads a word of the issue title on the thread's first
+  message. Parse the line the mention is on, not the whole text.
 - **`stream()` is buffered on purpose.** Left unimplemented, Chat SDK posts a
   message and edits it every 500 ms — roughly 120 edits a minute against a
   documented example limit of 150 updates a minute, so one streamed reply could
   exhaust the user's write quota. This adapter accumulates the stream and posts
-  once, which makes `streamingUpdateIntervalMs` irrelevant.
+  once, which makes `streamingUpdateIntervalMs` irrelevant. An **empty stream
+  still posts a single space**, so `stream()` always resolves to a message the
+  caller can edit or delete. Watch for that when you hand an AI SDK
+  `fullStream` straight to `thread.post()`: a model failure arrives as an
+  `{ type: 'error' }` chunk rather than a thrown error, Chat SDK's
+  `fromFullStream` forwards text and three known chunk types and drops
+  everything else, so the failure reaches this adapter as a stream with no
+  content and lands in Backlog as a comment holding one space. Iterate
+  `fullStream` yourself if you want the error to surface (measured against
+  Chat SDK 4.40 and AI SDK 7 on 2026-09-06; the chunk filter is identical in
+  the pinned 4.39.0).
 - **Backlog notation is not Markdown.** A project set to `backlog` uses a
   different syntax, and the converter is deliberately lossy in two places:
   inline code becomes plain text and table column alignment is dropped.
@@ -372,6 +419,9 @@ const api = createInMemoryBacklogApi({
     { id: 500, projectKey: 'EXAMPLE', name: 'Example', textFormattingRule: 'markdown' },
   ],
   issues: [/* BacklogIssue values — see the type for the full shape */],
+  // Needed to exercise `channel.post()`: it defaults to the project's first
+  // issue type, and a project with none is a `ValidationError`.
+  issueTypes: { 500: [{ id: 1, name: 'Task' }] },
   repositories: [{ id: 700, projectId: 500, name: 'example-repo', description: '' }],
   pullRequests: [/* BacklogPullRequest values */],
   // Keyed `<repositoryId>:<number>`, because a pull-request comment carries no

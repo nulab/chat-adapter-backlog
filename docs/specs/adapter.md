@@ -330,7 +330,7 @@ channel ids (D-PR7, §6.7); each is stated where it differs.
 
 | Member | Status | Behaviour / core degradation when absent |
 | --- | --- | --- |
-| `stream(threadId, textStream, options?)` | **implemented, buffered** (D4) | Consumes the whole stream, joins `markdown_text` chunks, then one `postMessage`; returns its `RawMessage`. Never returns `null` before the stream is consumed (that re-enables the core's 500 ms edit loop). Empty stream → posts `" "`, matching the core's own fallback, so a `SentMessage` always exists ⚑. |
+| `stream(threadId, textStream, options?)` | **implemented, buffered** (D4) | Consumes the whole stream, joins `markdown_text` chunks, then one `postMessage`; returns its `RawMessage`. Never returns `null` before the stream is consumed (that re-enables the core's 500 ms edit loop). Empty stream → posts `" "`, matching the core's own fallback, so a `SentMessage` always exists (§15 question 7, settled). |
 | `isDM(threadId)` | implemented | Always `false`. |
 | `fetchMessage(threadId, messageId)` | implemented | §7.2. |
 | `fetchSubject(raw)` | implemented | §7.4; the parent issue (`type: "issue"`) or pull request (`type: "pull_request"`) as `MessageSubject`. |
@@ -625,9 +625,16 @@ buffered so far if non-empty.
   thread
   ([Add Star](https://developer.nulab.com/docs/backlog/api/2/add-star/)).
   The emoji is ignored (one star kind). Before posting, read the comment; if
-  the bot already has a star on it, resolve without a call (Backlog allows
-  unlimited stars per user, so this is the only way to make the call
-  idempotent).
+  the bot already has a star on it, resolve without a call. `POST /stars` is
+  not idempotent server-side — the same comment starred twice by the same user
+  succeeds twice and carries two stars (measured 2026-09-06,
+  `.claude/rules/backlog-api-facts.md`) — and the API has no upsert, so the
+  read is the only way to make a repeat call a no-op. It is read-then-write,
+  which is the right shape for what actually repeats here (a retry, a
+  redelivered webhook, a handler that reacts to the same comment twice) and
+  not a lock: two `addReaction` calls in flight for one comment can still both
+  observe no star and both post. README says so, because the visible result is
+  a comment wearing two stars.
 - `removeReaction(...)`: read the comment (§7.2), find `stars[]` entries
   whose `presenter.id === botUserId`, `DELETE /stars/:starId` for each
   ([Remove Star](https://developer.nulab.com/docs/backlog/api/2/remove-star/)).
@@ -1157,6 +1164,15 @@ plain text. Documented in README under "Limitations".
   `webhookVerifier`.
 - **No host enumeration**: unknown or missing host, missing or wrong token,
   and a failing verifier all produce the same 401 body.
+- **A misregistered `?host=` is authentic** (D19): a payload from space B sent
+  to space A's hook URL with space A's own secret passes every check on the
+  ladder, because nothing in a Backlog body identifies its space (measured,
+  `.claude/rules/backlog-webhook-facts.md`). The receiver then addresses space
+  B's ids with space A's credentials, and cross-space ids are not reliably
+  absent from one another (measured 2026-09-06: two spaces minting issue ids
+  from interleaving ranges), so the outcome ranges from a 404 to a comment on
+  an unrelated issue in space A. The registered URL is the only control;
+  README states it where the URL is registered.
 - **SSRF**: the only outbound URLs the adapter constructs are
   `https://<configured host>/api/v2/...`; `rehydrateAttachment` refuses URLs on
   any other host. HTTPS is always used; no redirects are followed for
@@ -1385,6 +1401,7 @@ for one scratch space is worse than requiring the two to share it.
 | D16 | Layout `src/{adapter,ids,types,index}.ts`, `src/webhook/*`, `src/client/*`, `src/format/*`, `src/test/fixtures/*` | Directories mirror the PR scopes `adapter`/`webhook`/`client`/`format`, so a change's scope is its path. | Flat `src/`. |
 | D17 | Measurements live in `.claude/rules/*.md`, referenced here | One place to re-measure; this spec states consequences, not evidence. | Duplicating measurements here. |
 | D18 | `processMessageUpdated` unsupported | Comment edits emit no webhook (measured 2026-09-03; pull-request comment edits likewise, 2026-09-06); there is nothing to deliver. | Polling for edits (search-bucket cost, no cursor finer than a day). |
+| D19 | The space is taken from `?host=` alone; the payload is **not** cross-checked against it | No body field identifies the space, and the one candidate for a consistency check cannot carry it: `project.projectKey` would have to be compared against the configured host's own project, but `projectCache` holds `projectKey` for the process's lifetime (D14), so after a project-key rename a check that rejected would drop **every** event until a `fetchChannelInfo` refreshed it — trading a misconfiguration nobody has made for silent data loss on a supported operation. A check that only warned would also land inside the dispatched factory, after the 200 (§5.1), so it could never become a 401, and the misregistration already leaves a trace there: `ensureProject` fails on a project the host does not have and logs `textFormattingRule lookup failed`. Naming the trap where the URL is registered beats a heuristic that cannot reject and cannot report. | Rejecting on a `projectKey` mismatch (drops everything after a rename); warning on one (a second meaning for the project lookup, no new information); a `spaceId` config field to compare (no payload field to compare it with). |
 | D-PR1 | The channel of a pull-request thread is its **project** | Webhooks carry `project.id`; the formatting rule is per project; `channelIdFromThreadId` stays "first three segments". | The repository as channel (N+1 channels per project, no formatting rule of its own). |
 | D-PR2 | Kind-explicit ids for **both** kinds; one nested `subject: BacklogSubjectRef` shared by thread ids, message ids, raws and the subject layer | Backlog addresses issues and pull requests through different endpoint families with different coordinates and separate comment id sequences; the GitHub adapter's "PR is the unmarked default" is back-compat debt its maintainers annotate as such. | Flat `{ kind, issueId?, repositoryId?, number? }`; keeping issues unmarked. |
 | D-PR3 | `deleteMessage` on a pull-request thread throws `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call | The endpoint does not exist (400/6 `Undefined resource`, measured); `ValidationError` would blame a correct call; silent success is a fabricated result; the member is required. | `ValidationError`; no-op; omitting `deleteMessage`. |
@@ -1413,8 +1430,20 @@ for one scratch space is worse than requiring the two to share it.
 5. **Non-POST**: 405 (assumed) or ignore method.
 6. **`maxWebhookBodyBytes`**: keep the knob with a 5 MiB default (assumed) or
    drop it.
-7. **Empty stream** (§4.2 `stream`): post `" "` like the core fallback
-   (assumed) or return `null` after consumption.
+7. ~~**Empty stream** (§4.2 `stream`): post `" "` like the core fallback
+   (assumed) or return `null` after consumption.~~ **Settled**: `" "` stands.
+   An empty stream is not hypothetical — `fromFullStream` in `chat` yields
+   only strings, `markdown_text`/`task_update`/`plan_update` and `text-delta`
+   and drops every other chunk type (read in 4.39.0,
+   `.claude/rules/chat-sdk-core-facts.md`), so an AI SDK `fullStream` whose
+   model failed arrives here empty rather than throwing. `" "` keeps the
+   contract every caller can rely on (`stream()` resolves to a `SentMessage`
+   the handler can edit or delete) and matches the core's own fallback for the
+   same input; `null` after consumption is a shape no measurement covers, and
+   it would hand `thread.post(stream)` a null the caller has to branch on for
+   a case they cannot distinguish from success. The cost is a comment holding
+   one space, which is visible in Backlog and therefore documented in README's
+   Streaming limitation rather than hidden.
 8. **Empty summary** in `postChannelMessage`: `ValidationError` (assumed) or a
    placeholder summary.
 9. ~~**Type 4 deletion**: ship in the first release or defer.~~ **Settled**:

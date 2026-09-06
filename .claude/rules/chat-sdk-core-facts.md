@@ -91,6 +91,19 @@ wins, so re-verify against the tag before changing code.
   `ChatConfig.streamingUpdateIntervalMs`), final edit (`thread.ts:942-1057`);
   an empty stream posts `" "` (`thread.ts:1034`). Why to override: CLAUDE.md §
   `stream()` must be overridden.
+- `fromFullStream` (`from-full-stream.ts`, read in the published
+  `chat@4.39.0` bundle `dist/chunk-PC3CQD3F.js:15-48`, which names that source
+  file) is what `thread.post(fullStream)` funnels an AI SDK stream through, and
+  it forwards **only** four things: bare strings, the three chunk types in
+  `STREAM_CHUNK_TYPES` (`markdown_text`, `task_update`, `plan_update`) and
+  `text-delta` (reading `text ?? delta ?? textDelta`, inserting `"\n\n"`
+  after a `finish-step`). Every other chunk type is dropped by a bare
+  `continue` — `error` included. An AI SDK v7 model failure is an
+  `{ type: "error" }` chunk rather than a thrown error, so a failed generation
+  reaches `stream()` as a stream that yields nothing at all, not as a
+  rejection. An adapter cannot distinguish it from a genuinely empty stream;
+  only the consumer iterating `fullStream` itself can (see
+  docs/specs/adapter.md §15 question 7).
 - `startTyping` is required but may be a no-op (github `index.ts:1258-1260`);
   `endTyping` runs after the next post only if defined (`thread.ts:885-893`).
   No `shouldAcknowledge` exists in 4.39.0.
