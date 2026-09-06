@@ -561,6 +561,13 @@ describe('mentionUser', () => {
   it('rejects with a built-in RangeError, not a ValidationError', () => {
     expect(() => mentionUser(0)).not.toThrow(ValidationError);
   });
+
+  it('rejects NaN with a RangeError that names it', () => {
+    expect(() => mentionUser(Number.NaN)).toThrow(RangeError);
+    expect(() => mentionUser(Number.NaN)).toThrow(
+      'NaN is not a positive integer'
+    );
+  });
 });
 
 describe('mentionTeam', () => {
@@ -570,6 +577,7 @@ describe('mentionTeam', () => {
 
   it('rejects a non-positive-integer id', () => {
     expect(() => mentionTeam(0)).toThrow(RangeError);
+    expect(() => mentionTeam(Number.NaN)).toThrow(RangeError);
   });
 });
 
