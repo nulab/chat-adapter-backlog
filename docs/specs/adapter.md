@@ -487,7 +487,7 @@ of length 1 as "really a type 2":
 | 2 | Issue Updated, no comment id | `<host>:issue:<issueId>:u:<created>` | `""` | none | as above |
 | 3 | Issue Commented | `<host>:issue:<issueId>:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` | text |
 | 4 | Issue Deleted (D10) | root `<host>:issue:<issueId>:r` | — | — | — → `chat.processMessageDeleted({ adapter, channelId, threadId, messageId, raw, deletedAt: new Date(created) })` |
-| 14 | Issue Multi Updated (bulk) | one per `content.link[]` entry: `<host>:issue:<link.id>:c<link.comment.id>`, or `…:u:<created>` for an entry with no comment | `link[].comment.content ?? ""` | none (a bulk update names no file) | `changes[field="assigner"].new_value === botUserName` **or** text → **N** `chat.processMessage` calls, one per entry (D22) |
+| 14 | Issue Multi Updated (bulk) | one per `content.link[]` entry: `<host>:issue:<link.id>:c<link.comment.id>`, or `…:u:<created>` for an entry with no comment | `link[].comment.content ?? ""` | none (a bulk update names no file) | `changes[field="assigner"].new_value === botUserName` **or** text **or** the delivery's whole `notifications[]` (§5.4 rule 6, undivided — so it marks every message of the batch, D22) → **N** `chat.processMessage` calls, one per entry |
 | 17 | Comment Notification Added | — | — | — | 200 Ignored (D10): emitted by `POST /issues/:id/comments/:commentId/notifications`, which adds recipients to an **existing** comment (picking them while posting emits a plain type 3 instead); `content.comment` is that original comment, so its id has already been dispatched (measured 2026-09-06) |
 | 18 | Pull Request Added | `<host>:pr:<repository.id>:<number>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` if present | text (including the raw `<@U<botUserId>>` form, §5.4) |
 | 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present | `changes[field="assignee"].new_value === botUserName` **or** text |
@@ -554,12 +554,13 @@ Behavioural consequences of measured facts (details and dates in
   nowhere and a redelivery need not preserve. So no message gets "its"
   notification and no per-issue field is derived from the array; it reaches
   every message whole through `raw.payload`, where it means what it is — a
-  fact about the batch. A rule in
-  §5.4 that read `notifications[]` for mention detection would therefore mark
-  **every** message of a batch that assigned the bot as a mention. That is the
-  same answer rule 3's `assigner` comparison already gives for the same batch,
-  because a bulk update assigns every issue in it to the same person, so the
-  undivided array costs nothing there.
+  fact about the batch. §5.4 rule 6 reads that same whole array for every
+  message, so a batch that assigned the bot marks **every** message of the
+  batch a mention. That is the answer rule 3's `assigner` comparison already
+  gives for the same batch, because a bulk update assigns every issue in it to
+  the same person, so the undivided array costs nothing there — and it is what
+  keeps a bulk update whose recipients Backlog chose structurally from reading
+  as an unaddressed batch.
 - **The `:u:` path is rare.** Every measured field change carried a comment id;
   the `:u:` id exists so an update without one is still a well-formed message
   rather than a 400.

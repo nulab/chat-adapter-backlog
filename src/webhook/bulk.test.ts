@@ -179,6 +179,22 @@ describe('buildBulkUpdateMessage', () => {
     expect(messages.every((message) => message.isMention)).toBe(true);
   });
 
+  it('mentions the bot on every message when the delivery notified it, with nothing in the text or the changes saying so', () => {
+    // Rule 6 in isolation: a status-only batch, no `@name` anywhere, and the
+    // bot named only by the delivery's own `notifications[]`.
+    const messages = messagesOf(
+      issueMultiUpdated({
+        notifications: [
+          { user: FIXTURE.bot, reason: 1 },
+          { user: FIXTURE.bot, reason: 1 },
+        ],
+      })
+    );
+
+    expect(messages).toHaveLength(2);
+    expect(messages.every((message) => message.isMention)).toBe(true);
+  });
+
   it('mentions the bot when the bulk comment names it', () => {
     const messages = messagesOf(
       issueMultiUpdated({ text: `@${FIXTURE.bot.name} please review` })
