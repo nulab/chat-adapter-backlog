@@ -548,7 +548,7 @@ dispatched as `processMessageDeleted` on the root message
 
 ## Type 17 — Comment Notification Added
 
-200 Ignored — repeats an existing comment
+200 Ignored — `POST /issues/:id/comments/:commentId/notifications` added recipients to a comment that already exists, so `content.comment` is that **original** comment — no new comment exists and nothing changed — and the message id repeats one already dispatched. Choosing recipients while posting a comment emits a plain type 3 instead.
 
 ```json
 {

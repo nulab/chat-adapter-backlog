@@ -59,15 +59,41 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
 - Top-level `created` on the webhook and on the same activity fetched later via
   the API are identical strings (measured 2026-08-31). Top-level `id` is the
   activity id, not the issue or comment id.
-- `changes[]` entries carry `field`, `new_value`, `old_value` plus extra keys
-  `field_text` (localized label) and `type` (`"standard"`); `old_value` is `""`
-  when the previous assignee was empty (measured 2026-09-03). Parse `changes[]`
-  with a schema that tolerates unknown keys.
+- `changes[]` entries on a **webhook** carry `field`, `new_value`, `old_value`
+  and `type` (`"standard"`) and nothing else; `old_value` is present on an
+  assignee change and is `""` when the previous assignee was empty (measured
+  2026-09-03, re-measured 2026-09-06). The activity-API form of the same entry
+  adds `field_text`, the localized display label — see "Webhook versus Get
+  Recent Updates". Parse `changes[]` with a schema that tolerates unknown keys.
 - `changes[].new_value` in activity JSON uses the same value system as the
   webhook: status as an id string (`{"field":"status","new_value":"4",
   "old_value":"3"}`), assignee as a display name. The REST comment `changeLog`
   is different (camelCase `newValue`/`originalValue`, status as a display
   name). Never rebuild one from the other (measured 2026-08-28).
+
+## Webhook versus Get Recent Updates
+
+The support page's "the webhook type is the same as the Backlog API response
+for Get recent updates" holds for the envelope, not field for field. The same
+activity was captured both ways on types 1, 2, 3 and 17 (measured on a
+development space, 2026-09-06); three differences appeared, identically on
+every type:
+
+- The webhook's `content` carries an **issue snapshot** the activity form
+  omits entirely: `assignee`, `status`, `priority`, `issueType`, `resolution`,
+  `category`, `versions`, `milestone`, `startDate`, `dueDate`,
+  `estimatedHours`, `actualHours`, `parentIssueId`, `customFields` and — on
+  the types that carry it at all, 2, 3 and 17 — `diff`. Code that reads the
+  issue's current state off the payload works on a delivery and silently reads
+  `undefined` on a replayed activity.
+- Key convention differs on one field: webhook `externalFileLinks`, activity
+  `external_file_links`.
+- `changes[]` entries on the activity form carry an extra `field_text`, the
+  localized display label; the webhook form does not.
+
+`notifications` differs as well and in the more consequential direction: the
+activity form is always `[]`, so an activity replayed from the API cannot
+answer who was notified even when the original delivery could.
 
 ## What each issue operation emits
 
@@ -108,14 +134,28 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
 - Comment edit (`PATCH /issues/:id/comments/:commentId`) fires **no** webhook
   and creates **no** activity, however many times the same comment is edited
   (measured 2026-09-03). Text placed by editing reaches nobody via webhooks.
-- Add Comment Notification (`POST /issues/:id/comments/:commentId/
-  notifications`) → type 17 with `content.comment` = the target comment (`id`,
-  and `content` as of the call). Top-level `notifications` is populated like
-  any other delivery, with `reason: 2`, and names **only the recipients that
-  call added** — a comment that had already notified someone else produced a
-  type 17 naming the added user alone (measured 2026-09-06; this supersedes a
-  2026-09-03 note that recorded `[]` here). The docs give no `content` shape
-  for type 17.
+- Choosing recipients in the comment form's notification picker emits **no**
+  type 17. One type 3 arrives and the chosen recipients are in its top-level
+  `notifications[]` with `reason: 2` (measured on a development space,
+  2026-09-06).
+- Type 17 is emitted only by Add Comment Notification
+  (`POST /issues/:id/comments/:commentId/notifications`), which adds
+  recipients to a comment that already exists; only that comment's own author
+  may call it (Add Comment Notification docs). Measured on a development
+  space, 2026-09-06 — the docs give no `content` shape:
+  - `content` has the **same key set as types 2 and 3**, issue snapshot
+    included; there is no `content.link` key.
+  - `content.comment` is the **original** comment, id and text unchanged. No
+    new comment is created, so the same comment id arrives on the type 3 and
+    again on every subsequent type 17.
+  - `content.changes` is `[]`.
+  - `notifications[]` is populated like any other delivery and holds **only
+    the recipients this call added**, with `reason: 2`. Users already
+    notified on that comment do not reappear, so the array is a delta, not
+    the comment's notification list. (This supersedes a 2026-09-03 note that
+    recorded `[]` here.)
+  - `createdUser` is the user who added the notification, which is the comment
+    author — not the person being notified.
 - Bulk operations from the issue list ("multi update") → one type 14
   `{ tx_id, comment{content}, link[{id,key_id,title,comment{id,content}}],
   changes[{field,new_value,type}] }`, not one type 2 per issue (measured
@@ -230,7 +270,7 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
 | 3 | Issue Commented | same as 2; `comment.content` holds the text |
 | 4 | Issue Deleted | `{ id, key_id }` |
 | 14 | Issue Multi Updated | `{ tx_id, comment{content}, link[], changes[] }` |
-| 17 | Comment Notification Added | `content.comment` of the target comment (measured 2026-09-03; undocumented) |
+| 17 | Comment Notification Added | same key set as 2/3, no `link`; `comment` is the target comment unchanged and `changes` is `[]` (measured 2026-09-06; undocumented) |
 
 Names: https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/
 (filter range `type(1-49)`; ids 27–33 undocumented). Shapes: `backlog-js`

@@ -30,7 +30,7 @@ const rows: [string, string, string, unknown][] = [
   ['2', 'Issue Updated — no comment id', '`<host>:issue:<issueId>:u:<created>`, the rare update-without-comment path', issueUpdatedWithoutComment()],
   ['4', 'Issue Deleted', 'dispatched as `processMessageDeleted` on the root message', issueDeleted()],
   ['14', 'Issue Multi Updated', '200 Ignored — no per-issue comment exists', issueMultiUpdated()],
-  ['17', 'Comment Notification Added', '200 Ignored — repeats an existing comment', commentNotificationAdded()],
+  ['17', 'Comment Notification Added', '200 Ignored — `POST /issues/:id/comments/:commentId/notifications` added recipients to a comment that already exists, so `content.comment` is that **original** comment — no new comment exists and nothing changed — and the message id repeats one already dispatched. Choosing recipients while posting a comment emits a plain type 3 instead.', commentNotificationAdded()],
   ['18', 'Pull Request Added', '`<host>:pr:<repositoryId>:<number>:r` — the thread id comes from `content.repository.id` and `content.number`, never from `content.id`, which addresses no endpoint. The `summary` keeps mention notation raw while a description or comment carries it rewritten.', pullRequestAdded({ summary: `Retry the deploy step ${RAW_MENTION}` })],
   ['20', 'Comment Added on Pull Request', '`…:c<commentId>` — pull-request comment ids come from a different sequence than issue comment ids', pullRequestCommented()],
   ['20', 'Comment Added on Pull Request — with an attachment', '`changes[].field` is `attachment` and names the file with **no id**; the id is resolved lazily from `GET …/pullRequests/:number/attachments`', pullRequestCommentWithAttachment()],
