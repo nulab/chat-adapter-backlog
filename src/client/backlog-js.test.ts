@@ -12,7 +12,44 @@ import {
   describeBacklogApiConformance,
 } from './conformance.js';
 
-const { host, projectId, issueId } = conformanceFixture;
+const { host, projectId, issueId, alice, baseIssue } = conformanceFixture;
+
+const REPOSITORY_ID = 700;
+const PULL_REQUEST_NUMBER = 12;
+const PULL_REQUEST_COMMENT_ID = 7_000_001;
+
+const rateLimitHeaders = {
+  'X-RateLimit-Limit': '600',
+  'X-RateLimit-Remaining': '599',
+  'X-RateLimit-Reset': '9999999999',
+};
+
+/** One pull request as Backlog puts it on the wire, `issue` left to the caller. */
+function pullRequestWire(issue: unknown) {
+  return {
+    id: 90_001,
+    projectId,
+    repositoryId: REPOSITORY_ID,
+    number: PULL_REQUEST_NUMBER,
+    summary: 'Add the thing',
+    description: 'Body of the PR.',
+    base: 'main',
+    branch: 'feature/thing',
+    status: { id: 1, name: 'Open' },
+    assignee: null,
+    issue,
+    baseCommit: null,
+    branchCommit: null,
+    mergeCommit: null,
+    closeAt: null,
+    mergeAt: null,
+    createdUser: alice,
+    created: '2026-01-01T00:00:00Z',
+    updated: '2026-01-01T00:00:00Z',
+    attachments: [],
+    stars: [],
+  };
+}
 
 describeBacklogApiConformance('createBacklogJsApi', () => {
   const server = createFakeBacklogServer();
@@ -216,6 +253,90 @@ describe('createBacklogJsApi', () => {
     expect(capturedForm).toBeInstanceOf(FormData);
     const parts = [...(capturedForm as FormData).keys()];
     expect(parts).toEqual(['file']);
+  });
+
+  it('a pull request is addressed by project, repository and number, never by its global id', async () => {
+    const paths: string[] = [];
+    const fetchStub: typeof globalThis.fetch = async (input) => {
+      const url = new URL(typeof input === 'string' ? input : input.toString());
+      paths.push(url.pathname);
+      return new Response(JSON.stringify(pullRequestWire(null)), {
+        status: 200,
+        headers: rateLimitHeaders,
+      });
+    };
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: fetchStub,
+    });
+
+    const pullRequest = await api.getPullRequest({
+      projectId,
+      repositoryId: REPOSITORY_ID,
+      number: PULL_REQUEST_NUMBER,
+    });
+
+    expect(paths).toEqual([
+      `/api/v2/projects/${projectId}/git/repositories/${REPOSITORY_ID}/pullRequests/${PULL_REQUEST_NUMBER}`,
+    ]);
+    expect(pullRequest.id).toBe(90_001);
+    expect(paths[0]).not.toContain(String(pullRequest.id));
+  });
+
+  it('starring a pull request comment sends pullRequestCommentId as the form parameter, an issue comment sends commentId', async () => {
+    const bodies: string[] = [];
+    const fetchStub: typeof globalThis.fetch = async (_input, init) => {
+      bodies.push(String(init?.body));
+      return new Response(null, { status: 204, headers: rateLimitHeaders });
+    };
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: fetchStub,
+    });
+
+    await api.addStar({ pullRequestCommentId: PULL_REQUEST_COMMENT_ID });
+    await api.addStar({ commentId: 1 });
+
+    expect(
+      bodies.map((body) => [...new URLSearchParams(body).entries()])
+    ).toEqual([
+      [['pullRequestCommentId', String(PULL_REQUEST_COMMENT_ID)]],
+      [['commentId', '1']],
+    ]);
+  });
+
+  it("the list page's issue stub and the full issue object normalise to the same two identity fields", async () => {
+    const fetchStub: typeof globalThis.fetch = async (input) => {
+      const url = new URL(typeof input === 'string' ? input : input.toString());
+      const body = url.pathname.endsWith(`/pullRequests/${PULL_REQUEST_NUMBER}`)
+        ? pullRequestWire(baseIssue())
+        : [pullRequestWire({ id: issueId })];
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: rateLimitHeaders,
+      });
+    };
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: fetchStub,
+    });
+
+    const [listed] = await api.listPullRequests(projectId, REPOSITORY_ID, {
+      count: 20,
+    });
+    const fetched = await api.getPullRequest({
+      projectId,
+      repositoryId: REPOSITORY_ID,
+      number: PULL_REQUEST_NUMBER,
+    });
+
+    expect(Object.keys(listed?.issue ?? {})).toEqual(['id', 'issueKey']);
+    expect(Object.keys(fetched.issue ?? {})).toEqual(['id', 'issueKey']);
+    expect(listed?.issue).toEqual({ id: issueId, issueKey: null });
+    expect(fetched.issue).toEqual({ id: issueId, issueKey: 'PROJECT-1' });
   });
 
   describe('429 retry timing', () => {

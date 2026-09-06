@@ -5,9 +5,15 @@ import { ResourceNotFoundError } from '@chat-adapter/shared';
 import type {
   BacklogApi,
   BacklogComment,
+  BacklogGitRepository,
   BacklogIssue,
+  BacklogIssueComment,
+  BacklogNotification,
   BacklogProject,
+  BacklogPullRequest,
+  BacklogPullRequestAttachment,
   BacklogUserRef,
+  PullRequestRef,
 } from './port.js';
 
 /** A fresh, seeded `BacklogApi` for one test. */
@@ -17,6 +23,20 @@ const HOST = 'example.backlog.com';
 const PROJECT_ID = 500;
 const ISSUE_ID = 8001;
 const OTHER_ISSUE_ID = 8002;
+const REPOSITORY_ID = 700;
+const OTHER_REPOSITORY_ID = 701;
+const PULL_REQUEST_NUMBER = 12;
+const PULL_REQUEST_ID = 90001;
+const OTHER_PULL_REQUEST_NUMBER = 13;
+const OTHER_PULL_REQUEST_ID = 90002;
+const PULL_REQUEST_ATTACHMENT_ID = 9101;
+/**
+ * Seven-digit while the issue comments above are 1..4: the two sequences are
+ * separate on a real space (`.claude/rules/backlog-pull-request-facts.md`
+ * "Ids"), so a fixture where a bare comment id identifies one kind would let
+ * a `commentId`/`pullRequestCommentId` mix-up pass unnoticed.
+ */
+const PULL_REQUEST_COMMENT_IDS = [7000001, 7000002, 7000003, 7000004] as const;
 const BOT: BacklogUserRef = {
   id: 999,
   userId: 'chatbot',
@@ -63,7 +83,9 @@ function baseIssue(overrides: Partial<BacklogIssue> = {}): BacklogIssue {
   };
 }
 
-function baseComment(overrides: Partial<BacklogComment> = {}): BacklogComment {
+function baseComment(
+  overrides: Partial<BacklogIssueComment> = {}
+): BacklogIssueComment {
   return {
     id: 1,
     issueId: ISSUE_ID,
@@ -75,6 +97,127 @@ function baseComment(overrides: Partial<BacklogComment> = {}): BacklogComment {
     stars: [],
     ...overrides,
   };
+}
+
+function baseGitRepository(
+  overrides: Partial<BacklogGitRepository> = {}
+): BacklogGitRepository {
+  return {
+    id: REPOSITORY_ID,
+    projectId: PROJECT_ID,
+    name: 'example-repo',
+    description: '',
+    ...overrides,
+  };
+}
+
+function basePullRequest(
+  overrides: Partial<BacklogPullRequest> = {}
+): BacklogPullRequest {
+  return {
+    id: PULL_REQUEST_ID,
+    projectId: PROJECT_ID,
+    repositoryId: REPOSITORY_ID,
+    number: PULL_REQUEST_NUMBER,
+    summary: 'Add the thing',
+    description: 'Body of the PR.',
+    base: 'main',
+    branch: 'feature/thing',
+    status: { id: 1, name: 'Open' },
+    assignee: null,
+    issue: { id: ISSUE_ID, issueKey: 'PROJECT-1' },
+    baseCommit: null,
+    branchCommit: null,
+    mergeCommit: null,
+    closeAt: null,
+    mergeAt: null,
+    createdUser: ALICE,
+    created: new Date('2026-01-01T00:00:00Z'),
+    updated: new Date('2026-01-01T00:00:00Z'),
+    stars: [],
+    ...overrides,
+  };
+}
+
+function basePullRequestComment(
+  overrides: Partial<BacklogComment> = {}
+): BacklogComment {
+  return {
+    id: PULL_REQUEST_COMMENT_IDS[0],
+    content: 'Seeded pull request comment',
+    changeLog: [],
+    createdUser: ALICE,
+    created: new Date('2026-01-01T00:00:00Z'),
+    updated: new Date('2026-01-01T00:00:00Z'),
+    stars: [],
+    ...overrides,
+  };
+}
+
+function basePullRequestAttachment(
+  overrides: Partial<BacklogPullRequestAttachment> = {}
+): BacklogPullRequestAttachment {
+  return {
+    id: PULL_REQUEST_ATTACHMENT_ID,
+    name: 'diagram.png',
+    size: 4096,
+    created: new Date('2026-01-01T00:00:00Z'),
+    ...overrides,
+  };
+}
+
+function pullRequestRef(
+  overrides: Partial<PullRequestRef> = {}
+): PullRequestRef {
+  return {
+    projectId: PROJECT_ID,
+    repositoryId: REPOSITORY_ID,
+    number: PULL_REQUEST_NUMBER,
+    ...overrides,
+  };
+}
+
+function baseNotifications(): BacklogNotification[] {
+  const project = { id: PROJECT_ID, projectKey: 'PROJECT', name: 'Project' };
+  return [
+    {
+      id: 1,
+      alreadyRead: false,
+      project,
+      issue: null,
+      comment: { id: 1 },
+      pullRequest: null,
+      pullRequestComment: null,
+      sender: ALICE,
+      created: new Date('2026-01-01T00:00:00Z'),
+    },
+    {
+      id: 2,
+      alreadyRead: false,
+      project,
+      issue: null,
+      comment: { id: 2 },
+      pullRequest: null,
+      pullRequestComment: null,
+      sender: BOB,
+      created: new Date('2026-01-01T00:01:00Z'),
+    },
+    {
+      id: 3,
+      alreadyRead: false,
+      project,
+      issue: null,
+      comment: null,
+      pullRequest: {
+        id: PULL_REQUEST_ID,
+        number: PULL_REQUEST_NUMBER,
+        repositoryId: REPOSITORY_ID,
+      },
+      pullRequestComment: { id: PULL_REQUEST_COMMENT_IDS[0] },
+      sender: BOB,
+      created: new Date('2026-01-01T00:02:00Z'),
+    },
+  ];
 }
 
 /**
@@ -253,7 +396,7 @@ export function describeBacklogApiConformance(
 
     it('stars carry the presenter as a numeric id, matching the credential owner, and are removable by star id', async () => {
       const api = await factory();
-      await api.addStar(1);
+      await api.addStar({ commentId: 1 });
       const comment = await api.getComment(ISSUE_ID, 1);
       expect(comment.stars.length).toBeGreaterThan(0);
       const star = comment.stars[comment.stars.length - 1];
@@ -316,6 +459,241 @@ export function describeBacklogApiConformance(
       expect(snapshot.read).toBeDefined();
       expect(snapshot.update).toBeDefined();
     });
+
+    it('a repository and a pull request are fetched by their ids, and a missing one is a ResourceNotFoundError', async () => {
+      const api = await factory();
+      await expect(api.listGitRepositories(PROJECT_ID)).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: REPOSITORY_ID, name: 'example-repo' }),
+          expect.objectContaining({ id: OTHER_REPOSITORY_ID }),
+        ])
+      );
+      await expect(
+        api.getGitRepository(PROJECT_ID, REPOSITORY_ID)
+      ).resolves.toMatchObject({ id: REPOSITORY_ID, name: 'example-repo' });
+      await expect(api.getPullRequest(pullRequestRef())).resolves.toMatchObject(
+        { id: PULL_REQUEST_ID, number: PULL_REQUEST_NUMBER }
+      );
+
+      await expect(
+        api.getGitRepository(PROJECT_ID, 999_999)
+      ).rejects.toBeInstanceOf(ResourceNotFoundError);
+      await expect(
+        api.getPullRequest(pullRequestRef({ number: 999_999 }))
+      ).rejects.toBeInstanceOf(ResourceNotFoundError);
+    });
+
+    it('a pull request is addressed by project, repository and number, never by its global id', async () => {
+      const api = await factory();
+      await expect(
+        api.getPullRequest(pullRequestRef({ number: PULL_REQUEST_ID }))
+      ).rejects.toBeInstanceOf(ResourceNotFoundError);
+    });
+
+    it('the pull request list pages with count and offset', async () => {
+      const api = await factory();
+      const firstPage = await api.listPullRequests(PROJECT_ID, REPOSITORY_ID, {
+        count: 1,
+        offset: 0,
+      });
+      const secondPage = await api.listPullRequests(PROJECT_ID, REPOSITORY_ID, {
+        count: 1,
+        offset: 1,
+      });
+      expect(firstPage).toHaveLength(1);
+      expect(secondPage).toHaveLength(1);
+      expect(firstPage[0]?.number).not.toBe(secondPage[0]?.number);
+
+      const wholeRepository = await api.listPullRequests(
+        PROJECT_ID,
+        REPOSITORY_ID,
+        { count: 100 }
+      );
+      expect(
+        wholeRepository.map((p) => p.number).sort((a, b) => a - b)
+      ).toEqual([PULL_REQUEST_NUMBER, OTHER_PULL_REQUEST_NUMBER]);
+    });
+
+    it('a pull request comment has no parent reference and is looked up through its pull request', async () => {
+      const api = await factory();
+      const comments = await api.listPullRequestComments(pullRequestRef(), {
+        count: 100,
+        order: 'asc',
+      });
+      expect(comments.map((c) => c.id)).toEqual([...PULL_REQUEST_COMMENT_IDS]);
+      const first = comments[0];
+      if (first === undefined) {
+        throw new Error('fixture must seed pull request comments');
+      }
+      expect(Object.keys(first)).not.toContain('issueId');
+    });
+
+    it('listing pull request comments with minId and maxId excludes both bounds', async () => {
+      const api = await factory();
+      const bounded = await api.listPullRequestComments(pullRequestRef(), {
+        count: 100,
+        order: 'asc',
+        minId: PULL_REQUEST_COMMENT_IDS[0],
+        maxId: PULL_REQUEST_COMMENT_IDS[2],
+      });
+      expect(bounded.map((c) => c.id)).toEqual([PULL_REQUEST_COMMENT_IDS[1]]);
+    });
+
+    it('count cuts pull request comments from the head of the requested order', async () => {
+      const api = await factory();
+      const oldest = await api.listPullRequestComments(pullRequestRef(), {
+        count: 2,
+        order: 'asc',
+      });
+      expect(oldest.map((c) => c.id)).toEqual([
+        PULL_REQUEST_COMMENT_IDS[0],
+        PULL_REQUEST_COMMENT_IDS[1],
+      ]);
+      const newest = await api.listPullRequestComments(pullRequestRef(), {
+        count: 2,
+        order: 'desc',
+      });
+      expect(newest.map((c) => c.id)).toEqual([
+        PULL_REQUEST_COMMENT_IDS[3],
+        PULL_REQUEST_COMMENT_IDS[2],
+      ]);
+    });
+
+    it('a single pull request comment is fetched through a one-element window', async () => {
+      const api = await factory();
+      const target = PULL_REQUEST_COMMENT_IDS[2];
+      const window = await api.listPullRequestComments(pullRequestRef(), {
+        count: 1,
+        order: 'asc',
+        minId: target - 1,
+        maxId: target + 1,
+      });
+      expect(window.map((c) => c.id)).toEqual([target]);
+    });
+
+    it('adding and editing a pull request comment is reflected in the list', async () => {
+      const api = await factory();
+      const added = await api.addPullRequestComment(pullRequestRef(), {
+        content: 'New pull request comment',
+      });
+      const afterAdd = await api.listPullRequestComments(pullRequestRef(), {
+        count: 100,
+        order: 'asc',
+      });
+      expect(afterAdd.map((c) => c.id)).toContain(added.id);
+
+      const edited = await api.updatePullRequestComment(
+        pullRequestRef(),
+        added.id,
+        'Edited pull request comment'
+      );
+      expect(edited.content).toBe('Edited pull request comment');
+      const afterEdit = await api.listPullRequestComments(pullRequestRef(), {
+        count: 100,
+        order: 'asc',
+      });
+      expect(afterEdit.find((c) => c.id === added.id)?.content).toBe(
+        'Edited pull request comment'
+      );
+    });
+
+    it('addPullRequestComment accepts notifiedUserId and attachmentId', async () => {
+      const api = await factory();
+      await expect(
+        api.addPullRequestComment(pullRequestRef(), {
+          content: 'Notify',
+          notifiedUserId: [ALICE.id],
+          attachmentId: [PULL_REQUEST_ATTACHMENT_ID],
+        })
+      ).resolves.toMatchObject({ content: 'Notify' });
+    });
+
+    it('starring a pull request comment sends pullRequestCommentId, and starring an issue comment still sends commentId', async () => {
+      const api = await factory();
+      await api.addStar({ pullRequestCommentId: PULL_REQUEST_COMMENT_IDS[0] });
+      await api.addStar({ commentId: 1 });
+
+      const starredPullRequestComment = (
+        await api.listPullRequestComments(pullRequestRef(), {
+          count: 100,
+          order: 'asc',
+        })
+      ).find((c) => c.id === PULL_REQUEST_COMMENT_IDS[0]);
+      const starredIssueComment = await api.getComment(ISSUE_ID, 1);
+      expect(starredPullRequestComment?.stars).toHaveLength(1);
+      expect(starredIssueComment.stars).toHaveLength(1);
+
+      const pullRequestStar = starredPullRequestComment?.stars[0];
+      const issueStar = starredIssueComment.stars[0];
+      if (pullRequestStar === undefined || issueStar === undefined) {
+        throw new Error('both stars must have been recorded');
+      }
+      expect(pullRequestStar.id).not.toBe(issueStar.id);
+
+      await api.deleteStar(pullRequestStar.id);
+      await api.deleteStar(issueStar.id);
+      const afterDelete = (
+        await api.listPullRequestComments(pullRequestRef(), {
+          count: 100,
+          order: 'asc',
+        })
+      ).find((c) => c.id === PULL_REQUEST_COMMENT_IDS[0]);
+      expect(afterDelete?.stars).toHaveLength(0);
+      await expect(api.getComment(ISSUE_ID, 1)).resolves.toMatchObject({
+        stars: [],
+      });
+    });
+
+    it('a notification can name a pull request comment instead of an issue comment', async () => {
+      const api = await factory();
+      const all = await api.listNotifications({ count: 100 });
+      const fromPullRequest = all.find((n) => n.pullRequestComment !== null);
+      expect(fromPullRequest).toMatchObject({
+        comment: null,
+        pullRequest: {
+          id: PULL_REQUEST_ID,
+          number: PULL_REQUEST_NUMBER,
+          repositoryId: REPOSITORY_ID,
+        },
+        pullRequestComment: { id: PULL_REQUEST_COMMENT_IDS[0] },
+      });
+    });
+
+    it('a pull request attachment downloads', async () => {
+      const api = await factory();
+      await expect(
+        api.listPullRequestAttachments(pullRequestRef())
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: PULL_REQUEST_ATTACHMENT_ID,
+            name: 'diagram.png',
+          }),
+        ])
+      );
+      const downloaded = await api.downloadPullRequestAttachment(
+        pullRequestRef(),
+        PULL_REQUEST_ATTACHMENT_ID
+      );
+      expect(downloaded.filename).toBe('diagram.png');
+      expect(Buffer.isBuffer(downloaded.data)).toBe(true);
+    });
+
+    it('a pull request list call spends the read bucket, not search', async () => {
+      const api = await factory();
+      await api.listPullRequests(PROJECT_ID, REPOSITORY_ID, { count: 10 });
+      const snapshot = api.rateLimit();
+      // The mirror image of the `GET /issues` row above: the pull-request
+      // list endpoint is documented under no Search entry and was measured
+      // decrementing `read` with `search` untouched
+      // (`.claude/rules/backlog-pull-request-facts.md` "Rate limit"), so an
+      // endpoint-name-shaped "fix" to the classifier must fail here.
+      // `search` is deliberately not asserted absent: the in-memory
+      // implementation reports every bucket unconditionally
+      // (docs/specs/adapter.md §8.3), so that assertion would say something
+      // about the seed rather than about the classification.
+      expect(snapshot.read).toBeDefined();
+    });
   });
 }
 
@@ -338,8 +716,22 @@ export const conformanceFixture = {
   bot: BOT,
   alice: ALICE,
   bob: BOB,
+  repositoryId: REPOSITORY_ID,
+  otherRepositoryId: OTHER_REPOSITORY_ID,
+  pullRequestNumber: PULL_REQUEST_NUMBER,
+  pullRequestId: PULL_REQUEST_ID,
+  otherPullRequestNumber: OTHER_PULL_REQUEST_NUMBER,
+  otherPullRequestId: OTHER_PULL_REQUEST_ID,
+  pullRequestCommentIds: PULL_REQUEST_COMMENT_IDS,
+  pullRequestAttachmentId: PULL_REQUEST_ATTACHMENT_ID,
   baseProject,
   baseIssue,
   baseComment,
   statusChangeLog: STATUS_CHANGE_LOG,
+  baseGitRepository,
+  basePullRequest,
+  basePullRequestComment,
+  basePullRequestAttachment,
+  baseNotifications,
+  pullRequestRef,
 };

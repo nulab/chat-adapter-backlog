@@ -13,6 +13,7 @@ import type {
   BacklogApi,
   BacklogComment,
   BacklogIssue,
+  BacklogIssueComment,
   TextFormattingRule,
 } from './client/port';
 import type { BacklogRawMessage } from './types';
@@ -205,7 +206,7 @@ export function toRawIssue(issue: BacklogIssue): {
  */
 export function buildCommentMessage(
   builders: MessageBuilders,
-  comment: BacklogComment
+  comment: BacklogIssueComment
 ): Message<BacklogRawMessage> {
   const { host, projectId, issueId, botUserId, fetchAttachment, MessageCtor } =
     builders;
@@ -242,7 +243,7 @@ export function buildCommentMessage(
   });
 }
 
-function toRawCommentForRead(comment: BacklogComment): {
+function toRawCommentForRead(comment: BacklogIssueComment): {
   id: number;
   issueId: number;
   content: string | null;

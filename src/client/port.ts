@@ -69,9 +69,15 @@ export interface BacklogChange {
   attachmentInfo: BacklogAttachmentInfo | null;
 }
 
+/**
+ * The comment shape both endpoint families return. A pull-request comment
+ * carries **no parent reference** at all — no `issueId`, no pull-request id
+ * (measured 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`) — so
+ * the parent lives on `BacklogIssueComment` alone and everything a caller can
+ * do with either kind is expressed here.
+ */
 export interface BacklogComment {
   id: number;
-  issueId: number;
   /** `null` for a system-generated comment such as an assignee change. */
   content: string | null;
   changeLog: BacklogChange[];
@@ -79,6 +85,11 @@ export interface BacklogComment {
   created: Date;
   updated: Date;
   stars: BacklogStar[];
+}
+
+/** Issue comments additionally name their parent (docs/specs/adapter.md §8.1). */
+export interface BacklogIssueComment extends BacklogComment {
+  issueId: number;
 }
 
 export interface BacklogIssue {
@@ -94,6 +105,81 @@ export interface BacklogIssue {
   createdUser: BacklogUserRef;
   created: Date;
   updated: Date;
+}
+
+export interface BacklogGitRepository {
+  id: number;
+  projectId: number;
+  name: string;
+  description: string;
+}
+
+/**
+ * A pull request (docs/specs/adapter.md §8.1). Addressed by
+ * `projectId` + `repositoryId` + `number`; the space-wide `id` addresses no
+ * endpoint (`GET …/pullRequests/<global id>` is a 404, measured 2026-09-06)
+ * and is carried only because `POST /stars` wants it as `pullRequestId`.
+ */
+export interface BacklogPullRequest {
+  id: number;
+  projectId: number;
+  repositoryId: number;
+  number: number;
+  summary: string;
+  description: string;
+  base: string;
+  branch: string;
+  /** `1 Open`, `2 Closed`, `3 Merged` (measured 2026-09-06; the docs name only `1 Open`). */
+  status: { id: number; name: string };
+  assignee: BacklogUserRef | null;
+  /**
+   * The linked issue, normalised to its two identity fields. Backlog returns a
+   * full Issue object here on every endpoint — the list page's `{ "id" }`
+   * example is wrong (measured 2026-09-06) — so the wider shape is available
+   * but not relied on.
+   */
+  issue: { id: number; issueKey: string | null } | null;
+  baseCommit: string | null;
+  branchCommit: string | null;
+  mergeCommit: string | null;
+  closeAt: Date | null;
+  mergeAt: Date | null;
+  createdUser: BacklogUserRef;
+  created: Date;
+  updated: Date;
+  stars: BacklogStar[];
+}
+
+/**
+ * The three coordinates every pull-request endpoint is keyed by
+ * (`.claude/rules/backlog-pull-request-facts.md` "Addressing").
+ */
+export interface PullRequestRef {
+  projectId: number;
+  repositoryId: number;
+  number: number;
+}
+
+/**
+ * What `POST /stars` is aimed at. A discriminated union rather than a bare
+ * number because issue and pull-request comment ids come from different
+ * sequences and may overlap (measured 2026-09-06), so a star sent to the
+ * wrong field would silently land on someone else's comment.
+ */
+export type StarTarget =
+  | { commentId: number }
+  | { pullRequestCommentId: number };
+
+/**
+ * One entry of `GET …/pullRequests/:number/attachments`. `created` is carried
+ * because a pull-request comment's `changeLog` names an attachment without an
+ * id, and resolving that name needs "newest match wins" (D-PR10).
+ */
+export interface BacklogPullRequestAttachment {
+  id: number;
+  name: string;
+  size: number;
+  created: Date;
 }
 
 /** A project's text formatting mode (docs/specs/adapter.md §9.1). */
@@ -122,6 +208,15 @@ export interface BacklogNotification {
   project: { id: number; projectKey: string; name: string };
   issue: { id: number; issueKey: string; summary: string } | null;
   comment: { id: number } | null;
+  /**
+   * Set on notifications a pull request caused (reasons 10–13,
+   * [Get Notification](https://developer.nulab.com/docs/backlog/api/2/get-notification/)).
+   * The fields exist on every item; a populated one needs a second user to
+   * mention or assign the bot and is UNMEASURED
+   * (`.claude/rules/backlog-pull-request-facts.md` "Unmeasured").
+   */
+  pullRequest: { id: number; number: number; repositoryId: number } | null;
+  pullRequestComment: { id: number } | null;
   sender: BacklogUserRef;
   created: Date;
 }
@@ -175,9 +270,34 @@ export interface AddCommentInput {
 }
 
 /**
+ * Add Pull Request Comment takes the same three parameters as Add Comment
+ * ([Add Pull Request Comment](https://developer.nulab.com/docs/backlog/api/2/add-pull-request-comment/);
+ * `attachmentId[]` is documented and measured 2026-09-06 although `backlog-js`
+ * omits it from `PostPullRequestCommentsParams`), so the input is the same
+ * shape under its own name rather than two declarations that could drift apart
+ * without either endpoint changing.
+ */
+export type AddPullRequestCommentInput = AddCommentInput;
+
+/**
+ * [Get Pull Request List](https://developer.nulab.com/docs/backlog/api/2/get-pull-request-list/)
+ * pages by `offset` only: it takes no `minId`/`maxId` and no order parameter.
+ */
+export interface ListPullRequestsOptions {
+  count: number;
+  offset?: number;
+  statusId?: number[];
+}
+
+/**
  * The Backlog API port used by the rest of the adapter. Every method throws
  * only the `@chat-adapter/shared` error classes (docs/specs/adapter.md §8.5)
  * and returns only the domain types declared in this file.
+ *
+ * No `deletePullRequestComment` and no `getPullRequestComment` appear below,
+ * and their absence is a fact about Backlog rather than an omission: both
+ * routes answer 400 with error code 6 `Undefined resource` (measured
+ * 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`).
  */
 export interface BacklogApi {
   getIssue(issueId: number): Promise<BacklogIssue>;
@@ -193,16 +313,59 @@ export interface BacklogApi {
   listComments(
     issueId: number,
     options: ListCommentsOptions
-  ): Promise<BacklogComment[]>;
-  getComment(issueId: number, commentId: number): Promise<BacklogComment>;
-  addComment(issueId: number, input: AddCommentInput): Promise<BacklogComment>;
+  ): Promise<BacklogIssueComment[]>;
+  getComment(issueId: number, commentId: number): Promise<BacklogIssueComment>;
+  addComment(
+    issueId: number,
+    input: AddCommentInput
+  ): Promise<BacklogIssueComment>;
   updateComment(
     issueId: number,
     commentId: number,
     content: string
+  ): Promise<BacklogIssueComment>;
+  deleteComment(
+    issueId: number,
+    commentId: number
+  ): Promise<BacklogIssueComment>;
+  listGitRepositories(projectId: number): Promise<BacklogGitRepository[]>;
+  getGitRepository(
+    projectId: number,
+    repositoryId: number
+  ): Promise<BacklogGitRepository>;
+  listPullRequests(
+    projectId: number,
+    repositoryId: number,
+    options: ListPullRequestsOptions
+  ): Promise<BacklogPullRequest[]>;
+  getPullRequest(ref: PullRequestRef): Promise<BacklogPullRequest>;
+  /**
+   * There is no Get Pull Request Comment endpoint: the route answers 400 with
+   * error code 6 `Undefined resource` (measured 2026-09-06). A single comment
+   * is read through this list with a one-element window
+   * (`minId: id - 1, maxId: id + 1, count: 1`).
+   */
+  listPullRequestComments(
+    ref: PullRequestRef,
+    options: ListCommentsOptions
+  ): Promise<BacklogComment[]>;
+  addPullRequestComment(
+    ref: PullRequestRef,
+    input: AddPullRequestCommentInput
   ): Promise<BacklogComment>;
-  deleteComment(issueId: number, commentId: number): Promise<BacklogComment>;
-  addStar(commentId: number): Promise<void>;
+  updatePullRequestComment(
+    ref: PullRequestRef,
+    commentId: number,
+    content: string
+  ): Promise<BacklogComment>;
+  listPullRequestAttachments(
+    ref: PullRequestRef
+  ): Promise<BacklogPullRequestAttachment[]>;
+  downloadPullRequestAttachment(
+    ref: PullRequestRef,
+    attachmentId: number
+  ): Promise<BacklogDownloadedFile>;
+  addStar(target: StarTarget): Promise<void>;
   deleteStar(starId: number): Promise<void>;
   listNotifications(
     options: ListNotificationsOptions

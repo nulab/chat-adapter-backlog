@@ -2,8 +2,12 @@ import { conformanceFixture } from './conformance.js';
 
 import type {
   BacklogComment,
+  BacklogGitRepository,
   BacklogIssue,
+  BacklogIssueComment,
   BacklogNotification,
+  BacklogPullRequest,
+  BacklogPullRequestAttachment,
   BacklogStar,
   BacklogUploadedFile,
 } from './port.js';
@@ -37,7 +41,24 @@ export interface FakeBacklogServer {
   fetch: typeof globalThis.fetch;
   state: {
     issues: BacklogIssue[];
-    comments: BacklogComment[];
+    comments: BacklogIssueComment[];
+    repositories: BacklogGitRepository[];
+    pullRequests: BacklogPullRequest[];
+    /**
+     * Keyed by the two coordinates that identify a pull request within its
+     * project, because a pull-request comment carries no reference back to
+     * one (`.claude/rules/backlog-pull-request-facts.md` "Comments").
+     */
+    pullRequestComments: {
+      repositoryId: number;
+      number: number;
+      comment: BacklogComment;
+    }[];
+    pullRequestAttachments: {
+      repositoryId: number;
+      number: number;
+      attachment: BacklogPullRequestAttachment;
+    }[];
     notifications: BacklogNotification[];
     uploads: BacklogUploadedFile[];
     stars: BacklogStar[];
@@ -48,6 +69,12 @@ const {
   projectId,
   issueId,
   otherIssueId,
+  repositoryId,
+  otherRepositoryId,
+  pullRequestNumber,
+  otherPullRequestId,
+  otherPullRequestNumber,
+  pullRequestCommentIds,
   bot,
   alice,
   bob,
@@ -55,6 +82,11 @@ const {
   baseIssue,
   baseComment,
   statusChangeLog,
+  baseGitRepository,
+  basePullRequest,
+  basePullRequestComment,
+  basePullRequestAttachment,
+  baseNotifications,
 } = conformanceFixture;
 
 function defaultRateLimitHeaders(
@@ -102,20 +134,51 @@ function toWireChangeLog(changeLog: BacklogComment['changeLog']) {
   }));
 }
 
+function toWireStar(star: BacklogStar) {
+  return {
+    ...star,
+    presenter: toWireUser(star.presenter),
+    created: star.created.toISOString(),
+  };
+}
+
 function toWireComment(comment: BacklogComment) {
   return {
     id: comment.id,
-    issueId: comment.issueId,
     content: comment.content,
     changeLog: toWireChangeLog(comment.changeLog),
     createdUser: toWireUser(comment.createdUser),
     created: comment.created.toISOString(),
     updated: comment.updated.toISOString(),
-    stars: comment.stars.map((s) => ({
-      ...s,
-      presenter: toWireUser(s.presenter),
-      created: s.created.toISOString(),
-    })),
+    stars: comment.stars.map(toWireStar),
+  };
+}
+
+function toWireIssueComment(comment: BacklogIssueComment) {
+  return { ...toWireComment(comment), issueId: comment.issueId };
+}
+
+function toWirePullRequest(pullRequest: BacklogPullRequest) {
+  return {
+    ...pullRequest,
+    assignee:
+      pullRequest.assignee === null ? null : toWireUser(pullRequest.assignee),
+    createdUser: toWireUser(pullRequest.createdUser),
+    closeAt: pullRequest.closeAt?.toISOString() ?? null,
+    mergeAt: pullRequest.mergeAt?.toISOString() ?? null,
+    created: pullRequest.created.toISOString(),
+    updated: pullRequest.updated.toISOString(),
+    stars: pullRequest.stars.map(toWireStar),
+  };
+}
+
+function toWirePullRequestAttachment(attachment: BacklogPullRequestAttachment) {
+  return {
+    id: attachment.id,
+    name: attachment.name,
+    size: attachment.size,
+    createdUser: toWireUser(bot),
+    created: attachment.created.toISOString(),
   };
 }
 
@@ -143,6 +206,31 @@ function jsonResponse(
           status,
           headers: responseHeaders,
         });
+  Object.defineProperty(response, 'url', { value: url });
+  return response;
+}
+
+/**
+ * A pull-request attachment download, which is the one response that is not
+ * JSON: it carries the file's real content type and names the file only in
+ * `Content-Disposition` (measured 2026-09-06,
+ * `.claude/rules/backlog-pull-request-facts.md` "Attachments").
+ */
+function fileResponse(
+  url: string,
+  attachment: BacklogPullRequestAttachment,
+  headers: Record<string, string>
+): Response {
+  const responseHeaders = new Headers(headers);
+  responseHeaders.set('Content-Type', 'image/png');
+  responseHeaders.set(
+    'Content-Disposition',
+    `attachment; filename*=UTF-8''${encodeURIComponent(attachment.name)}`
+  );
+  const response = new Response(new Uint8Array(attachment.size), {
+    status: 200,
+    headers: responseHeaders,
+  });
   Object.defineProperty(response, 'url', { value: url });
   return response;
 }
@@ -178,30 +266,40 @@ export function createFakeBacklogServer(
       }),
       baseComment({ id: 4, issueId: otherIssueId }),
     ],
-    notifications: [
+    repositories: [
+      baseGitRepository(),
+      baseGitRepository({ id: otherRepositoryId, name: 'other-repo' }),
+    ],
+    pullRequests: [
+      basePullRequest(),
+      basePullRequest({
+        id: otherPullRequestId,
+        number: otherPullRequestNumber,
+      }),
+    ],
+    pullRequestComments: pullRequestCommentIds.map((id) => ({
+      repositoryId,
+      number: pullRequestNumber,
+      comment: basePullRequestComment({ id }),
+    })),
+    pullRequestAttachments: [
       {
-        id: 1,
-        alreadyRead: false,
-        project: { id: projectId, projectKey: 'PROJECT', name: 'Project' },
-        issue: null,
-        comment: { id: 1 },
-        sender: alice,
-        created: new Date('2026-01-01T00:00:00Z'),
-      },
-      {
-        id: 2,
-        alreadyRead: false,
-        project: { id: projectId, projectKey: 'PROJECT', name: 'Project' },
-        issue: null,
-        comment: { id: 2 },
-        sender: bob,
-        created: new Date('2026-01-01T00:01:00Z'),
+        repositoryId,
+        number: pullRequestNumber,
+        attachment: basePullRequestAttachment(),
       },
     ],
+    notifications: baseNotifications(),
     uploads: [],
     stars: [],
   };
   let nextId = 1000;
+  // Pull-request comments are allocated from their own counter because the
+  // two comment sequences are separate on a real space
+  // (`.claude/rules/backlog-pull-request-facts.md` "Ids"); sharing `nextId`
+  // would hand a new pull-request comment an id in the issue-comment range
+  // and let a test that confuses the two pass.
+  let nextPullRequestCommentId = Math.max(...pullRequestCommentIds) + 1;
 
   const project = baseProject();
   const users = [alice, bob, bot];
@@ -276,6 +374,11 @@ export function createFakeBacklogServer(
     path: string
   ): 'read' | 'update' | 'search' | 'icon' {
     if (method !== 'GET') return 'update';
+    // The Rate limit page puts only the issue and wiki list/count endpoints
+    // in `search`, and `GET …/pullRequests` was measured decrementing `read`
+    // (`.claude/rules/backlog-pull-request-facts.md` "Rate limit"), so no
+    // branch for a listing endpoint belongs here beyond the two below —
+    // however much a pull-request *list* reads like a search.
     if (/^issues\/?(?:$)/.test(path) || path === 'issues/count')
       return 'search';
     return 'read';
@@ -422,14 +525,14 @@ export function createFakeBacklogServer(
           const sorted = [...withinBounds].sort((a, b) =>
             order === 'asc' ? a.id - b.id : b.id - a.id
           );
-          return respond(200, sorted.slice(0, count).map(toWireComment));
+          return respond(200, sorted.slice(0, count).map(toWireIssueComment));
         }
 
         if (segments.length === 3 && method === 'POST') {
           const params = await readParams(init);
           const id = nextId++;
           const now = new Date();
-          const comment: BacklogComment = {
+          const comment: BacklogIssueComment = {
             id,
             issueId: issueIdOrKey,
             content: String(params['content'] ?? ''),
@@ -440,7 +543,7 @@ export function createFakeBacklogServer(
             stars: [],
           };
           state.comments.push(comment);
-          return respond(201, toWireComment(comment));
+          return respond(201, toWireIssueComment(comment));
         }
 
         if (segments.length === 4) {
@@ -452,7 +555,7 @@ export function createFakeBacklogServer(
           if (method === 'GET') {
             if (comment === undefined)
               throw new RouteError(404, 6, 'No such comment');
-            return respond(200, toWireComment(comment));
+            return respond(200, toWireIssueComment(comment));
           }
           if (method === 'PATCH') {
             if (comment === undefined)
@@ -460,13 +563,13 @@ export function createFakeBacklogServer(
             const params = await readParams(init);
             comment.content = String(params['content'] ?? comment.content);
             comment.updated = new Date();
-            return respond(200, toWireComment(comment));
+            return respond(200, toWireIssueComment(comment));
           }
           if (method === 'DELETE') {
             if (comment === undefined)
               throw new RouteError(404, 6, 'No such comment');
             state.comments.splice(state.comments.indexOf(comment), 1);
-            return respond(200, toWireComment(comment));
+            return respond(200, toWireIssueComment(comment));
           }
         }
       }
@@ -491,6 +594,179 @@ export function createFakeBacklogServer(
       return respond(200, issueTypes);
     }
 
+    // /projects/:p/git/repositories[/:r[/pullRequests[/:n[/comments[/:cid]
+    // |/attachments[/:aid]]]]]
+    if (
+      segments[0] === 'projects' &&
+      segments[2] === 'git' &&
+      segments[3] === 'repositories'
+    ) {
+      const projectIdOrKey = Number(segments[1]);
+      if (projectIdOrKey !== projectId)
+        throw new RouteError(404, 6, 'No such project');
+
+      if (segments.length === 4 && method === 'GET') {
+        return respond(
+          200,
+          state.repositories.filter((r) => r.projectId === projectIdOrKey)
+        );
+      }
+
+      if (segments.length >= 5) {
+        const repoIdOrName = Number(segments[4]);
+        const repository = state.repositories.find(
+          (r) => r.id === repoIdOrName
+        );
+        if (repository === undefined)
+          throw new RouteError(404, 6, 'No such repository');
+
+        if (segments.length === 5 && method === 'GET') {
+          return respond(200, repository);
+        }
+
+        if (segments[5] === 'pullRequests') {
+          if (segments.length === 6 && method === 'GET') {
+            const count = Number(url.searchParams.get('count') ?? '20');
+            const offset = Number(url.searchParams.get('offset') ?? '0');
+            const inRepository = state.pullRequests.filter(
+              (pr) => pr.repositoryId === repository.id
+            );
+            return respond(
+              200,
+              inRepository.slice(offset, offset + count).map(toWirePullRequest)
+            );
+          }
+
+          if (segments.length >= 7) {
+            const number = Number(segments[6]);
+            const pullRequest = state.pullRequests.find(
+              (pr) => pr.repositoryId === repository.id && pr.number === number
+            );
+            if (pullRequest === undefined)
+              throw new RouteError(404, 6, 'No such PullRequest');
+
+            if (segments.length === 7 && method === 'GET') {
+              return respond(200, toWirePullRequest(pullRequest));
+            }
+
+            if (segments[7] === 'comments') {
+              const inPullRequest = state.pullRequestComments.filter(
+                (entry) =>
+                  entry.repositoryId === repository.id &&
+                  entry.number === pullRequest.number
+              );
+
+              if (segments.length === 8 && method === 'GET') {
+                const params = url.searchParams;
+                const count = Number(params.get('count') ?? '20');
+                const order = (params.get('order') ?? 'desc') as 'asc' | 'desc';
+                const minId = params.has('minId')
+                  ? Number(params.get('minId'))
+                  : undefined;
+                const maxId = params.has('maxId')
+                  ? Number(params.get('maxId'))
+                  : undefined;
+                const withinBounds = inPullRequest
+                  .map((entry) => entry.comment)
+                  .filter((c) => {
+                    if (minId !== undefined && c.id <= minId) return false;
+                    if (maxId !== undefined && c.id >= maxId) return false;
+                    return true;
+                  });
+                const sorted = [...withinBounds].sort((a, b) =>
+                  order === 'asc' ? a.id - b.id : b.id - a.id
+                );
+                return respond(200, sorted.slice(0, count).map(toWireComment));
+              }
+
+              if (segments.length === 8 && method === 'POST') {
+                const params = await readParams(init);
+                const now = new Date();
+                const comment: BacklogComment = {
+                  id: nextPullRequestCommentId++,
+                  content: String(params['content'] ?? ''),
+                  changeLog: [],
+                  createdUser: bot,
+                  created: now,
+                  updated: now,
+                  stars: [],
+                };
+                state.pullRequestComments.push({
+                  repositoryId: repository.id,
+                  number: pullRequest.number,
+                  comment,
+                });
+                // 200, not the 201 Add Comment answers: Add Pull Request and
+                // Add Pull Request Comment both answer 200 (measured
+                // 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`
+                // "Addressing"). Aligning it with the issue side would make
+                // the fake server disagree with the space it stands in for.
+                return respond(200, toWireComment(comment));
+              }
+
+              if (segments.length === 9) {
+                const commentId = Number(segments[8]);
+                const entry = inPullRequest.find(
+                  (e) => e.comment.id === commentId
+                );
+                if (method === 'PATCH') {
+                  if (entry === undefined)
+                    throw new RouteError(404, 6, 'No such comment');
+                  const params = await readParams(init);
+                  entry.comment.content = String(
+                    params['content'] ?? entry.comment.content
+                  );
+                  entry.comment.updated = new Date();
+                  return respond(200, toWireComment(entry.comment));
+                }
+                // GET and DELETE are 400/6 `Undefined resource`, not 404:
+                // neither route exists on a real space (measured 2026-09-06),
+                // and an undefined route answers 400 there.
+                if (method === 'GET' || method === 'DELETE') {
+                  throw new RouteError(
+                    400,
+                    6,
+                    'Undefined resource. Please check the URL.'
+                  );
+                }
+              }
+            }
+
+            if (segments[7] === 'attachments') {
+              const inPullRequest = state.pullRequestAttachments.filter(
+                (entry) =>
+                  entry.repositoryId === repository.id &&
+                  entry.number === pullRequest.number
+              );
+
+              if (segments.length === 8 && method === 'GET') {
+                return respond(
+                  200,
+                  inPullRequest.map((entry) =>
+                    toWirePullRequestAttachment(entry.attachment)
+                  )
+                );
+              }
+
+              if (segments.length === 9 && method === 'GET') {
+                const attachmentId = Number(segments[8]);
+                const entry = inPullRequest.find(
+                  (e) => e.attachment.id === attachmentId
+                );
+                if (entry === undefined)
+                  throw new RouteError(404, 6, 'No such attachment');
+                return fileResponse(
+                  url.toString(),
+                  entry.attachment,
+                  rateLimitHeaders
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+
     if (segments[0] === 'priorities' && method === 'GET') {
       return respond(200, priorities);
     }
@@ -504,8 +780,12 @@ export function createFakeBacklogServer(
 
     if (segments[0] === 'stars' && method === 'POST') {
       const params = await readParams(init);
-      const commentId = Number(params['commentId']);
-      const comment = state.comments.find((c) => c.id === commentId);
+      const comment =
+        params['pullRequestCommentId'] !== undefined
+          ? state.pullRequestComments.find(
+              (e) => e.comment.id === Number(params['pullRequestCommentId'])
+            )?.comment
+          : state.comments.find((c) => c.id === Number(params['commentId']));
       if (comment === undefined)
         throw new RouteError(404, 6, 'No such comment');
       const star: BacklogStar = {
@@ -530,7 +810,11 @@ export function createFakeBacklogServer(
       const star = state.stars.find((s) => s.id === starId);
       if (star === undefined) throw new RouteError(404, 6, 'No such star');
       state.stars.splice(state.stars.indexOf(star), 1);
-      for (const comment of state.comments) {
+      const starred = [
+        ...state.comments,
+        ...state.pullRequestComments.map((e) => e.comment),
+      ];
+      for (const comment of starred) {
         const index = comment.stars.findIndex((s) => s.id === starId);
         if (index !== -1) comment.stars.splice(index, 1);
       }

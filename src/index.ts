@@ -20,6 +20,12 @@
  * inlined, so nothing is hidden — but they are not exported under names that
  * would shadow the domain types.
  *
+ * The two `BacklogComment`s now differ by more than `Date` versus ISO string:
+ * the port's is the shape the issue *and* the pull-request endpoints share, so
+ * it names no parent, and the issue side's `issueId` lives on the exported
+ * `BacklogIssueComment`. The raw-message `BacklogComment` still carries
+ * `issueId` because every raw message a webhook produces today is issue-side.
+ *
  * Not exported, per §3.1: the `backlog-js` client wrapper, the zod schemas,
  * the plain-text fallback converter and the fixtures. Nothing from
  * `backlog-js` or `zod` appears in an exported type.
@@ -63,6 +69,7 @@ export type {
 
 export type {
   AddCommentInput,
+  AddPullRequestCommentInput,
   BacklogApi,
   BacklogApiErrorDetail,
   BacklogAttachmentInfo,
@@ -70,11 +77,15 @@ export type {
   BacklogComment,
   BacklogCredentials,
   BacklogDownloadedFile,
+  BacklogGitRepository,
   BacklogIssue,
+  BacklogIssueComment,
   BacklogIssueType,
   BacklogNotification,
   BacklogPriority,
   BacklogProject,
+  BacklogPullRequest,
+  BacklogPullRequestAttachment,
   BacklogStar,
   BacklogUploadedFile,
   BacklogUserRef,
@@ -83,10 +94,13 @@ export type {
   ListIssuesOptions,
   ListNotificationsOptions,
   ListOrder,
+  ListPullRequestsOptions,
+  PullRequestRef,
   RateLimitBucket,
   RateLimitSnapshot,
   RateLimitSnapshots,
   RetryOptions,
+  StarTarget,
   TextFormattingRule,
 } from './client/port';
 

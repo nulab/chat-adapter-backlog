@@ -6,7 +6,11 @@ import { createInMemoryBacklogApi } from './client/in-memory';
 import { fetchMessage, fetchMessages, fetchThread } from './reads';
 import { encodeMessageId } from './ids';
 
-import type { BacklogApi, BacklogComment, BacklogIssue } from './client/port';
+import type {
+  BacklogApi,
+  BacklogIssue,
+  BacklogIssueComment,
+} from './client/port';
 import type { MessageBuilders } from './reads';
 import type { FetchDirection, FetchOptions } from 'chat';
 
@@ -37,7 +41,7 @@ function baseIssue(overrides: Partial<BacklogIssue> = {}): BacklogIssue {
 
 const ISSUE_CREATED = new Date('2026-01-01T00:00:00Z');
 
-function makeComments(count: number): BacklogComment[] {
+function makeComments(count: number): BacklogIssueComment[] {
   return Array.from({ length: count }, (_, index) => ({
     id: index + 1,
     issueId: ISSUE_ID,

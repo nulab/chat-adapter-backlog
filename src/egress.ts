@@ -16,8 +16,8 @@ import type { FallbackFormatConverter } from './format/fallback';
 import type {
   AddCommentInput,
   BacklogApi,
-  BacklogComment,
   BacklogIssue,
+  BacklogIssueComment,
   BacklogIssueType,
   BacklogPriority,
   CreateIssueInput,
@@ -417,7 +417,7 @@ export async function uploadFiles(
 function toRawComment(
   projectId: number,
   host: string,
-  comment: BacklogComment
+  comment: BacklogIssueComment
 ): BacklogRawMessage {
   return {
     kind: 'comment',
@@ -572,7 +572,7 @@ export async function addReaction(input: AddReactionInput): Promise<void> {
   if (alreadyStarred) {
     return;
   }
-  await api.addStar(commentId);
+  await api.addStar({ commentId });
 }
 
 export interface RemoveReactionInput {

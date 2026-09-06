@@ -83,7 +83,7 @@ describe.skipIf(!configured).sequential('a real Backlog space', () => {
     // REST-derived message reports as `edited` (docs/specs/adapter.md §7.1).
     expect(edited.updated.getTime()).toBeGreaterThan(edited.created.getTime());
 
-    await api.addStar(added.id);
+    await api.addStar({ commentId: added.id });
     const starred = await api.getComment(issueId, added.id);
     expect(starred.stars.length).toBeGreaterThan(0);
 
