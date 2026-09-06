@@ -131,6 +131,9 @@ function activityOfType(type: number, payload: object): InboundActivity {
   if (activity.type === 4) {
     throw new Error('type 4 is a deletion, not a message');
   }
+  if (activity.type === 14) {
+    throw new Error('type 14 fans out; see bulk.test.ts');
+  }
   return activity;
 }
 

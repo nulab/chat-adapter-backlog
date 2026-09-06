@@ -145,6 +145,70 @@ export const issueUpdatedOrCommentedSchema = baseActivitySchema.extend({
   }),
 });
 
+/**
+ * An id a bulk update serialises as a decimal **string** where every other
+ * activity serialises the same field as a number: `content.link[].id` and
+ * `content.link[].key_id` arrive as `"8001"` over the webhook and as `8001`
+ * from `GET /space/activities` (measured on a development space, 2026-09-06). Both forms have to parse, so the string is converted rather
+ * than the number being rejected — and `identitySchema`'s guarantee is kept
+ * afterwards, because `content.link[].id` is the issue id every thread id and
+ * message id below is built from.
+ */
+const coercedIdentitySchema = z
+  .union([z.string(), z.number()])
+  .transform(Number)
+  .pipe(identitySchema);
+
+/**
+ * One `content.link[]` entry of a bulk update: the issue that was updated and
+ * the comment the update wrote on it.
+ *
+ * `comment` was present on every measured entry, empty comment box included
+ * (`content` `""` rather than `null`), but it is optional here for the same
+ * reason it is optional on types 2 and 3 — an entry that carries no comment
+ * still addresses an issue, and a message id exists for that case
+ * (`part: 'update'`). Requiring it would answer 400 and drop the whole batch,
+ * and Backlog's delivery is at-least-once with no way to ask for the batch
+ * again.
+ */
+const bulkLinkSchema = z.object({
+  id: coercedIdentitySchema,
+  key_id: coercedIdentitySchema.optional(),
+  title: z.string().optional(),
+  comment: commentSchema.optional(),
+});
+
+/** One issue a type-14 bulk update touched (docs/specs/adapter.md §5.2). */
+export type ActivityBulkLink = z.infer<typeof bulkLinkSchema>;
+
+/**
+ * Type 14 — Issue Multi Updated: one delivery for a bulk update made from the
+ * issue list, however many issues it touched, and no type 2 or 3 per issue at
+ * all (measured on a development space, 2026-09-06).
+ *
+ * `content.link[]` is the only place the issues appear — there is no
+ * `content.id` and no per-issue snapshot — so it is the one required field
+ * here. `content.comment` is the text as typed into the bulk comment box and
+ * is **not** a comment object: it has no `id`, and every `link[]` entry
+ * repeats the same text with the id of the comment actually written on that
+ * issue. `changes[]` describes the whole batch, not any one issue.
+ *
+ * `individual_update` is webhook-only (the activity API omits it) and was
+ * `false` on every measured delivery; it is read as data rather than
+ * dispatched on, because no measurement says what a `true` delivery looks
+ * like.
+ */
+export const issueMultiUpdatedSchema = baseActivitySchema.extend({
+  type: z.literal(14),
+  content: z.object({
+    tx_id: z.union([z.string(), z.number()]).optional(),
+    comment: z.object({ content: z.string().nullable() }).nullable().optional(),
+    link: z.array(bulkLinkSchema),
+    individual_update: z.boolean().optional(),
+    changes: z.array(changeSchema).optional(),
+  }),
+});
+
 /** Type 4 — Issue Deleted. */
 export const issueDeletedSchema = baseActivitySchema.extend({
   type: z.literal(4),
@@ -225,17 +289,43 @@ export type IssueUpdatedOrCommentedActivity = z.infer<
   typeof issueUpdatedOrCommentedSchema
 >;
 export type IssueDeletedActivity = z.infer<typeof issueDeletedSchema>;
+export type IssueMultiUpdatedActivity = z.infer<typeof issueMultiUpdatedSchema>;
+
+/**
+ * A type-14 body as it arrives, before {@link issueMultiUpdatedSchema} has
+ * coerced anything — which for this type is not the same shape as
+ * {@link IssueMultiUpdatedActivity}: `content.link[].id` and `key_id` are
+ * decimal **strings** over the webhook and numbers from `GET
+ * /space/activities` (measured on a development space, 2026-09-06), and the
+ * schema's output declares only the number half.
+ *
+ * This is the type `raw.payload` carries, because `raw.payload` is the body
+ * verbatim (docs/specs/adapter.md §5.2 "not a stripped copy"). Declaring the
+ * output there would tell a consumer reading `link[].id` that it holds a
+ * number when a real delivery holds `"8001"`.
+ */
+export type IssueMultiUpdatedBody = z.input<typeof issueMultiUpdatedSchema>;
 export type PullRequestAddedActivity = z.infer<typeof pullRequestAddedSchema>;
 export type PullRequestUpdatedOrCommentedActivity = z.infer<
   typeof pullRequestUpdatedOrCommentedSchema
 >;
 
+/**
+ * The activity types that are about **one** subject, which is every dispatched
+ * type but 14. Type 14 stays out of this union rather than being handled by
+ * `subjectOfActivity` with a fallback: a bulk update is about as many issues
+ * as it lists, so there is no subject to return, and leaving it out is what
+ * makes the compiler reject a caller that reaches for one.
+ */
 export type RecognisedActivity =
   | IssueCreatedActivity
   | IssueUpdatedOrCommentedActivity
   | IssueDeletedActivity
   | PullRequestAddedActivity
   | PullRequestUpdatedOrCommentedActivity;
+
+/** Everything {@link parseActivity} can return: one subject, or a bulk update. */
+export type ParsedActivity = RecognisedActivity | IssueMultiUpdatedActivity;
 
 /**
  * Which issue or pull request an activity is about. This is the single place
@@ -289,8 +379,18 @@ export function repositoryNameOf(
 
 /**
  * The activity types the adapter dispatches (docs/specs/adapter.md §5.1
- * step 8); every other type — including the documented 12, 13, 14 and 17 —
- * is 200 Ignored before a type-specific schema ever runs.
+ * step 8); every other type — including the documented 12, 13 and 17 — is
+ * 200 Ignored before a type-specific schema ever runs.
+ *
+ * 14 is here even though one delivery becomes N messages (D22). The
+ * alternative, ignoring it, loses events that exist: a bulk update writes a
+ * real comment on every issue it touches, `content.link[].comment.id` is that
+ * comment's id, and `fetchMessages` hands the same comment back — so the
+ * push view and the read view would disagree, silently, in the direction of
+ * having missed a status change. A deployment that cannot absorb the fan-out
+ * leaves 14 out of `activityTypeIds[]`, which is a better switch than an
+ * adapter option because it stops the delivery instead of discarding it
+ * (D-PR4).
  *
  * 21 is deliberately absent (D-PR5). It was never observed: merging (from the
  * UI or by pushing the merge to the base branch) and closing both arrive as
@@ -302,7 +402,7 @@ export function repositoryNameOf(
  * `PullRequestMerged`; the two disagree, which is reason enough not to guess
  * what a delivery would mean. Capture a payload before dispatching it.
  */
-export const DISPATCHED_ACTIVITY_TYPES = [1, 2, 3, 4, 18, 19, 20] as const;
+export const DISPATCHED_ACTIVITY_TYPES = [1, 2, 3, 4, 14, 18, 19, 20] as const;
 
 /**
  * Validates the body against the schema for its `type`. Returns `null` on
@@ -312,7 +412,7 @@ export const DISPATCHED_ACTIVITY_TYPES = [1, 2, 3, 4, 18, 19, 20] as const;
 export function parseActivity(
   type: number,
   value: object
-): { activity: RecognisedActivity } | { issuePaths: string[] } {
+): { activity: ParsedActivity } | { issuePaths: string[] } {
   // Each branch parses rather than returning its schema: the schemas have
   // different output types, and a union of them has no callable `safeParse`.
   const result =
@@ -322,11 +422,13 @@ export function parseActivity(
         ? issueUpdatedOrCommentedSchema.safeParse(value)
         : type === 4
           ? issueDeletedSchema.safeParse(value)
-          : type === 18
-            ? pullRequestAddedSchema.safeParse(value)
-            : type === 19 || type === 20
-              ? pullRequestUpdatedOrCommentedSchema.safeParse(value)
-              : null;
+          : type === 14
+            ? issueMultiUpdatedSchema.safeParse(value)
+            : type === 18
+              ? pullRequestAddedSchema.safeParse(value)
+              : type === 19 || type === 20
+                ? pullRequestUpdatedOrCommentedSchema.safeParse(value)
+                : null;
 
   if (result === null) {
     // Unreachable when called after the §5.1 step 8 gate, which already

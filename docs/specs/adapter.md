@@ -271,6 +271,8 @@ Extras are read with a strict schema: a present-but-mistyped extra is a
 ```ts
 type BacklogRawMessage =
   | { kind: "webhook"; host: string; payload: BacklogWebhookPayload; changes: BacklogChange[] }
+  | { kind: "bulkUpdate"; host: string; payload: BacklogBulkUpdatePayload; issueId: number;
+      changes: BacklogChange[] }
   | { kind: "comment"; host: string; projectId: number; subject: BacklogSubjectRef;
       comment: BacklogRawComment; changes: BacklogChange[] }
   | { kind: "issue"; host: string; issue: BacklogRawIssue; changes: [] }
@@ -278,9 +280,16 @@ type BacklogRawMessage =
 ```
 
 `BacklogWebhookPayload` is the union of the recognised issue **and**
-pull-request activities (§5.2); `payload.type` tells them apart. The
-`comment` variant names its `subject` explicitly because a pull-request
-comment carries no parent reference of its own
+pull-request activities (§5.2), the ones that name one subject; `payload.type`
+tells them apart. `BacklogBulkUpdatePayload` is the type-14 body instead — it
+names as many issues as `content.link[]` holds, so `bulkUpdate` carries its
+own `issueId` naming which entry this message is (§5.3, D22); `payload` is the
+whole delivery, unstripped, reachable again from every message the batch
+produced — and it is the schema's **input** type, because a delivery writes
+`content.link[].id` and `key_id` as decimal strings (§5.2) and only the
+adapter's own re-parse turns them into numbers; a consumer reading them off
+`raw.payload` gets `string | number`. The `comment` variant names its `subject` explicitly because a
+pull-request comment carries no parent reference of its own
 (`.claude/rules/backlog-pull-request-facts.md`); `BacklogRawComment` therefore
 has no `issueId`. The two root variants stay flat (`issue`, `pullRequest`)
 rather than one `root` with a nested discriminator, so `raw.issue` is reachable
@@ -386,7 +395,7 @@ secret" from "unknown host" (D2).
 | 5 | If no verifier: `?token=` present and `timingSafeEqual` to the installation's `webhookSecret` after a byte-length check | 401 `Unauthorized` | warn `{reason: "missing_token" \| "token_mismatch"}` |
 | 6 | `JSON.parse(rawBody)` succeeds and yields an object | 400 `Invalid JSON` | warn |
 | 7 | Envelope `{ type: number }` | 400 `Invalid payload` | warn |
-| 8 | `type ∈ {1, 2, 3, 4, 18, 19, 20}` — `DISPATCHED_ACTIVITY_TYPES` in `src/webhook/payload.ts`, with no switch: 4 is always dispatched when it arrives, and 21 never is (D-PR5) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
+| 8 | `type ∈ {1, 2, 3, 4, 14, 18, 19, 20}` — `DISPATCHED_ACTIVITY_TYPES` in `src/webhook/payload.ts`, with no switch: 4 is always dispatched when it arrives, 14 fans out to one message per issue (D22), and 21 never is (D-PR5) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
 | 9 | Type-specific schema (§5.2) | 400 `Invalid payload` | warn with zod issue paths (no values) |
 | 10 | `initialize()` has run | 503 `Adapter not initialized` ⚑ (a 5xx is the only answer that could make Backlog redeliver; whether it does is undocumented) | error |
 | 11 | `createdUser.id !== botUserId` | 200 `OK` (self message, nothing dispatched) | debug `self message skipped` |
@@ -429,7 +438,9 @@ keys** everywhere (`field_text`, `type` inside `changes[]`,
 Required (400 when missing): `type` number; `created` string; `project.id`
 number; `createdUser.id` number; `createdUser.name` string; `content.id`
 number; for types 18–20 additionally `content.number` number and
-`content.repository.id` number. `content.key_id`, `project.projectKey` and
+`content.repository.id` number; for type 14 `content.link[]` **instead of**
+`content.id`, with `content.link[].id` on every entry (a bulk update carries
+no `content.id` and no per-issue snapshot at all). `content.key_id`, `project.projectKey` and
 `content.repository.name` are optional — display data, never identity — but
 the last two are **captured** when present (§7.3: they are the names a
 pull-request URL needs and the REST object lacks).
@@ -451,6 +462,25 @@ message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
 | `createdUser.userId` | `string \| null` optional (Nulab-account users have none) | same | same | same | same |
 | `notifications[]` (top level, not under `content`) | `{ user: { id }, reason? }[]`, read for mention detection (§5.4 rule 6); never required, never a 400 | same | same | same | same |
 
+Type 14 is off that table because its `content` shares no field with the
+others (measured on a development space, 2026-09-06). It is also not decided by
+how many issues the batch covered: **one** issue updated from the issue list
+arrives as a type 14 with a single-entry `link[]`, while the same field changed
+on that issue's own page arrives as a type 2 (measured 2026-09-06). The screen
+the edit was made from is what picks the type, so nothing may read a `link[]`
+of length 1 as "really a type 2":
+
+| Field | Type 14 |
+| --- | --- |
+| `content.link[]` | required, one entry per issue the batch touched: `{ id, key_id?, title?, comment? }` |
+| `content.link[].id`, `.key_id` | the issue id and key — decimal **strings** over the webhook, numbers from `GET /space/activities`; both forms parse |
+| `content.link[].comment` | `{ id: number, content: string \| null } \| null` optional — present on every measured entry, `content: ""` when the comment box was empty, and `id` is a comment that really exists on that issue |
+| `content.comment` | `{ content: string \| null }` optional — the text as typed, with **no `id`**; the ids are on the entries |
+| `content.changes[]` | `{ field, new_value?, type }[]` optional, describing the batch; **no `old_value`** |
+| `content.tx_id` | the transaction, string or number; not read |
+| `content.individual_update` | boolean, webhook-only, `false` on all six measured deliveries; the bulk update screen has no per-issue value entry, so no known operation produces `true`; read as data, never branched on |
+| `notifications[]` (on the envelope, not `content`) | `[]` when the batch changed no assignee; one reason-1 entry **per issue** when it did, the same user repeated. An entry has `id`, `alreadyRead`, `reason`, `resourceAlreadyRead` and `user` and names **no issue** |
+
 ### 5.3 Activity-type mapping
 
 | `type` | Backlog meaning | Message id | `text` | Attachments | Mention (§5.4) |
@@ -460,7 +490,7 @@ message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
 | 2 | Issue Updated, no comment id | `<host>:issue:<issueId>:u:<created>` | `""` | none | as above |
 | 3 | Issue Commented | `<host>:issue:<issueId>:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` | text |
 | 4 | Issue Deleted (D10) | root `<host>:issue:<issueId>:r` | — | — | — → `chat.processMessageDeleted({ adapter, channelId, threadId, messageId, raw, deletedAt: new Date(created) })` |
-| 14 | Issue Multi Updated (bulk) | — | — | — | 200 Ignored: no per-issue comment; measured to carry bulk status changes (2026-08-28) |
+| 14 | Issue Multi Updated (bulk) | one per `content.link[]` entry: `<host>:issue:<link.id>:c<link.comment.id>`, or `…:u:<created>` for an entry with no comment | `link[].comment.content ?? ""` | none (a bulk update names no file) | `changes[field="assigner"].new_value === botUserName` **or** text **or** the delivery's whole `notifications[]` (§5.4 rule 6, undivided — so it marks every message of the batch, D22) → **N** `chat.processMessage` calls, one per entry |
 | 17 | Comment Notification Added | — | — | — | 200 Ignored (D10): emitted by `POST /issues/:id/comments/:commentId/notifications`, which adds recipients to an **existing** comment (picking them while posting emits a plain type 3 instead); `content.comment` is that original comment, so its id has already been dispatched (measured 2026-09-06) |
 | 18 | Pull Request Added | `<host>:pr:<repository.id>:<number>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` if present | text (including the raw `<@U<botUserId>>` form, §5.4) |
 | 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present | `changes[field="assignee"].new_value === botUserName` **or** text |
@@ -490,6 +520,50 @@ Behavioural consequences of measured facts (details and dates in
   `raw.changes`; handlers key on `raw.changes`, never on "has a comment".
   Comment-ness does not mean "no field change": a comment posted together with
   a status change is one type-2 event with both.
+- **A bulk update is N messages, not one** (D22). A "multi update" from the
+  issue list arrives as a single **type 14** whatever it touched, and Backlog
+  emits no type 2 or 3 for the issues in it (measured on a development space,
+  2026-09-06). The comments are nevertheless real: every `content.link[]` entry
+  names an issue and the id of a comment that now exists on it with a
+  changelog, and `fetchMessages` returns that comment like any other. Ingress
+  therefore expands one delivery into one `chat.processMessage` per entry,
+  each into its own thread, each carrying a copy of the batch's `changes[]`.
+  Three shape details differ from every other type and are load-bearing:
+  `content.link[].id` and `key_id` are decimal **strings** over the webhook
+  (numbers from `GET /space/activities`); `changes[]` carries `field`,
+  `new_value` and `type` and **no `old_value`**, so a bulk update says where
+  the issues ended up and not where each of them started; and
+  `content.comment` is the text typed into the bulk comment box with **no
+  `id`** — the ids are on the entries, one comment per issue. A `status`
+  entry's `new_value` is a status **id** written as a string (`"4"`) while an
+  `assigner` entry's is a display name, the same asymmetry §3.5 records for
+  types 2 and 3, which is why the same `assigner` mention rule applies
+  unchanged: the notation is type 2's throughout, and the missing `old_value`
+  is the only difference between the two types' entries (measured 2026-09-06).
+  `individual_update` is webhook-only and was `false` on all six measured
+  deliveries; nothing branches on it.
+- **N is 1 as often as it is 50.** A single issue ticked on the issue list is
+  a type 14 with one `link[]` entry (measured 2026-09-06), and it takes this
+  path like any other batch — one `chat.processMessage` carrying
+  `raw.kind: "bulkUpdate"`, not the `webhook` kind a type 2 produces. What a
+  handler reads out of `raw` must not depend on how many issues the person
+  happened to tick.
+- **The batch's `notifications[]` is not divided** (D22). It is `[]` unless the
+  batch changed the assignee; when it did, it holds one reason-1 entry per
+  issue, the same user repeated (measured 2026-09-06). That is one entry per
+  `link[]` entry, which looks like a pairing — but an entry carries `id`,
+  `alreadyRead`, `reason`, `resourceAlreadyRead` and `user` and names no issue,
+  so the correspondence exists only in the order, which Backlog documents
+  nowhere and a redelivery need not preserve. So no message gets "its"
+  notification and no per-issue field is derived from the array; it reaches
+  every message whole through `raw.payload`, where it means what it is — a
+  fact about the batch. §5.4 rule 6 reads that same whole array for every
+  message, so a batch that assigned the bot marks **every** message of the
+  batch a mention. That is the answer rule 3's `assigner` comparison already
+  gives for the same batch, because a bulk update assigns every issue in it to
+  the same person, so the undivided array costs nothing there — and it is what
+  keeps a bulk update whose recipients Backlog chose structurally from reading
+  as an unaddressed batch.
 - **The `:u:` path is rare.** Every measured field change carried a comment id;
   the `:u:` id exists so an update without one is still a well-formed message
   rather than a 400.
@@ -1279,12 +1353,14 @@ plain text. Documented in README under "Limitations".
 - **Body size**: bounded by `maxWebhookBodyBytes` (description edits can carry
   two full bodies).
 - **Webhook URL hygiene**: README instructs registering
-  `activityTypeIds: [1, 2, 3, 18, 19, 20]` (plus 4 if deletion events are
+  `activityTypeIds: [1, 2, 3, 14, 18, 19, 20]` (plus 4 if deletion events are
   wanted; 21 was not observed and is not registered, D-PR5), never `allEvent`
   (D10), so unrelated project activity never reaches the endpoint. A
   deployment that wants issues only registers issue types only — that
   subscription is the switch, and the adapter has no option duplicating it
-  (D-PR4).
+  (D-PR4). 14 is the one type whose delivery is not one message: a bulk update
+  of N issues dispatches N times (D22), so a deployment whose handler calls the
+  API per message leaves 14 unregistered rather than reaching for a setting.
 
 ## 12. Testing specification
 
@@ -1408,7 +1484,7 @@ for one scratch space is worse than requiring the two to share it.
   six `BACKLOG_*` variables, required/optional); configuration reference (§3.2
   table); platform setup (create bot user, add to project, issue API key,
   register webhook `https://<app>/api/webhooks/backlog?host=<host>&token=<secret>`
-  with `activityTypeIds` 1, 2, 3, 18, 19, 20 (+4), never `allEvent`, and 21 in
+  with `activityTypeIds` 1, 2, 3, 14, 18, 19, 20 (+4), never `allEvent`, and 21 in
   neither list because it was never observed (D-PR5); a project whose pull
   requests should not reach Chat omits 18–20 — that subscription is the only
   switch, the adapter has no option duplicating it (D-PR4); where to find the
@@ -1497,7 +1573,7 @@ for one scratch space is worse than requiring the two to share it.
 | D7 | No host-application hooks; `api(host)` is the only escape hatch | Engagement/subscription state is the `StateAdapter`'s job; drop prediction depends on private core keys. | Engagement callback, inbound observer, dedupe-key helpers. |
 | D8 | Numeric ids everywhere; host inside message and user ids | Issue keys change on project-key rename; the core's dedupe key has no thread component. | Issue keys in thread ids; host-less message ids. |
 | D9 | Mention = the bot in the webhook's `notifications[]` (any `reason`), display name in text (left-bounded, case-sensitive), or assignment to the bot | The webhook's `notifications[]` **is** populated (measured 2026-09-06) and is the only signal for a comment addressed through the notification field, which leaves no `@name` in the text; text and assignment still carry every delivery that has no notification, including an activity-API body replayed as a webhook. Assignee changes arrive by display name. Only explicit addressing lands in that list: an account merely **watching** an issue stayed out of `notifications[]` across a comment and two field-only `PATCH`es, while a non-watching user addressed on the same issue arrived with `reason: 2` (measured 2026-09-06), so no `reason` needs excluding. | Text and assignment only (silently ignores the notification field, the UI's normal way to address someone); filtering to `reason: 2` (drops reason codes not measured here for no gain, since assignment is already covered and watching was measured not to notify at all); case-insensitive match (Japanese names have no case, ASCII names would over-match). |
-| D10 | Types 1, 2, 3 and 18, 19, 20 processed, 4 optional deletion, rest ignored; register `activityTypeIds`, never `allEvent` | Only issue and pull-request activity maps to a thread; 14 has no per-issue comment; 17 carries the **original** comment, so dispatching it would re-deliver a message id already dispatched; 21 was never observed (D-PR5). | `allEvent` (wiki/git/document noise). Dispatching 17: `dedupe:backlog:<message.id>` suppresses the repeat only for `dedupeTtlMs` (§5.5), and a notification added a day later fires the same comment a second time. The accepted cost is a blind spot — a 17 whose `notifications[]` names the bot is the only signal that the bot was mentioned on a comment **after** it was posted, and acting on it needs a message id that distinguishes the notification from the comment it repeats. The pair was measured on a development space, 2026-09-06: a type 3 naming one recipient and, three seconds later, a type 17 naming another carry different activity ids but the same `content.comment.id`, the same text and an identical `content`, so `content.comment.id` cannot separate them and `notifications[]` — a delta, not the comment's recipient list — is the only field that names what the second delivery added (`.claude/rules/backlog-webhook-facts.md`). |
+| D10 | Types 1, 2, 3, 14 and 18, 19, 20 processed, 4 optional deletion, rest ignored; register `activityTypeIds`, never `allEvent` | Only issue and pull-request activity maps to a thread; 14 was ignored here until 2026-09-06 on the ground that it "has no per-issue comment", which measurement disproved — `content.link[].comment.id` is a comment that exists (D22); 17 carries the **original** comment, so dispatching it would re-deliver a message id already dispatched; 21 was never observed (D-PR5). | `allEvent` (wiki/git/document noise). Dispatching 17: `dedupe:backlog:<message.id>` suppresses the repeat only for `dedupeTtlMs` (§5.5), and a notification added a day later fires the same comment a second time. The accepted cost is a blind spot — a 17 whose `notifications[]` names the bot is the only signal that the bot was mentioned on a comment **after** it was posted, and acting on it needs a message id that distinguishes the notification from the comment it repeats. The pair was measured on a development space, 2026-09-06: a type 3 naming one recipient and, three seconds later, a type 17 naming another carry different activity ids but the same `content.comment.id`, the same text and an identical `content`, so `content.comment.id` cannot separate them and `notifications[]` — a delta, not the comment's recipient list — is the only field that names what the second delivery added (`.claude/rules/backlog-webhook-facts.md`). |
 | D11 | Two-step uploads; inbound `fetchData` through the port; `rehydrateAttachment` via API URL | Backlog attachments require auth to download; a URL is the only serialisable handle that survives queue round trips. | Public URLs (do not exist); `fetchMetadata` blobs. |
 | D12 | `:r`/`:u:` cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Backlog can edit an issue body, but `editMessage` semantics ("edit what I posted") do not fit rewriting a human's issue; `:u:` has no fetchable resource. | Mapping `editMessage(:r)` to Update Issue. |
 | D13 | Optional set as in §4.2; `listThreads` uses Backlog's default order | Each implemented member has a one-to-one endpoint; each unsupported one has no counterpart. Sorting or filtering in the adapter would hide the search-bucket cost. | "Open issues first" (an extra filter, surprising to callers). |
@@ -1507,6 +1583,7 @@ for one scratch space is worse than requiring the two to share it.
 | D17 | Measurements live in `.claude/rules/*.md`, referenced here | One place to re-measure; this spec states consequences, not evidence. | Duplicating measurements here. |
 | D18 | `processMessageUpdated` unsupported | Comment edits emit no webhook (measured 2026-09-03; pull-request comment edits likewise, 2026-09-06); there is nothing to deliver. | Polling for edits (search-bucket cost, no cursor finer than a day). |
 | D19 | The space is taken from `?host=` alone; the payload is **not** cross-checked against it | No body field identifies the space, and the one candidate for a consistency check cannot carry it: `project.projectKey` would have to be compared against the configured host's own project, but `projectCache` holds `projectKey` for the process's lifetime (D14), so after a project-key rename a check that rejected would drop **every** event until a `fetchChannelInfo` refreshed it — trading a misconfiguration nobody has made for silent data loss on a supported operation. A check that only warned would also land inside the dispatched factory, after the 200 (§5.1), so it could never become a 401, and the misregistration already leaves a trace there: `ensureProject` fails on a project the host does not have and logs `textFormattingRule lookup failed`. Naming the trap where the URL is registered beats a heuristic that cannot reject and cannot report. | Rejecting on a `projectKey` mismatch (drops everything after a rename); warning on one (a second meaning for the project lookup, no new information); a `spaceId` config field to compare (no payload field to compare it with). |
+| D22 | Type 14 fans out: one delivery becomes one `chat.processMessage` per `content.link[]` entry, always, with no adapter option to turn it off | The comments are real. A bulk update writes a comment per issue with a changelog, `link[].comment.id` is that comment, and `fetchMessages` hands it back — so ignoring 14 makes push and pull disagree in the direction of having missed a status change, silently. The fan-out's cost is real too (one webhook, N threads, and N API calls if a handler makes one per message, out of a per-minute bucket), which is why the way out is leaving 14 out of `activityTypeIds[]`: registration already is the switch (D-PR4), and not subscribing stops the delivery instead of discarding it after arrival. A one-issue batch takes the same path: a single issue updated from the issue list is a type 14 too (measured 2026-09-06), so there is no size at which the fan-out is skipped. The batch's `notifications[]` is carried whole on every message and split between none of them: it holds one reason-1 entry per issue when the batch changed the assignee, but an entry names no issue and repeats the same user, so any per-issue meaning would come from the array's order alone. One delivery carrying several indistinguishable entries is what makes 14 different here; other types carry the array too. | Ignoring 14 (loses events that exist); a `bulkFanout` config flag (duplicates the subscription, and the copy that arrives is still paid for); one summary message into the first issue's thread (invents a message with no id and picks a thread arbitrarily); capping the batch (silently drops the tail of a transaction Backlog reported in full); treating a single-entry `link[]` as a type 2 (a handler would read a different `raw.kind` for the same operation depending on how many issues were ticked); pairing `notifications[i]` with `link[i]` (an ordering guarantee Backlog never gave, wrong the moment a redelivery or a future field reorders either array); dropping `notifications` from `raw.payload` (loses a fact the delivery carried, to prevent a misreading a comment can prevent). |
 | D-PR1 | The channel of a pull-request thread is its **project** | Webhooks carry `project.id`; the formatting rule is per project; `channelIdFromThreadId` stays "first three segments". | The repository as channel (N+1 channels per project, no formatting rule of its own). |
 | D-PR2 | Kind-explicit ids for **both** kinds; one nested `subject: BacklogSubjectRef` shared by thread ids, message ids, raws and the subject layer | Backlog addresses issues and pull requests through different endpoint families with different coordinates and separate comment id sequences; the GitHub adapter's "PR is the unmarked default" is back-compat debt its maintainers annotate as such. | Flat `{ kind, issueId?, repositoryId?, number? }`; keeping issues unmarked. |
 | D-PR3 | `deleteMessage` on a pull-request thread throws `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call | The endpoint does not exist (400/6 `Undefined resource`, measured); `ValidationError` would blame a correct call; silent success is a fabricated result; the member is required. | `ValidationError`; no-op; omitting `deleteMessage`. |

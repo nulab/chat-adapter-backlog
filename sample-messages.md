@@ -500,7 +500,70 @@ dispatched as `processMessageDeleted` on the root message
 
 ## Type 14 — Issue Multi Updated
 
-200 Ignored — no per-issue comment exists
+one delivery, one message per `content.link[]` entry: the thread id comes from `link[].id` (a decimal **string** here) and the message id from `link[].comment.id`, the comment the batch really wrote on that issue. `content.comment` repeats the text with no id, `changes[]` describes the whole batch and carries no `old_value`, and a `status` change is a status **id**.
+
+```json
+{
+  "id": 71828,
+  "project": {
+    "id": 500,
+    "projectKey": "EXAMPLE",
+    "name": "Example project",
+    "archived": false,
+    "displayOrder": 2147483646
+  },
+  "type": 14,
+  "content": {
+    "tx_id": "9876",
+    "comment": {
+      "content": "Moving these to done."
+    },
+    "link": [
+      {
+        "id": "8001",
+        "key_id": "42",
+        "title": "Deploy fails on the staging space",
+        "comment": {
+          "id": 3101,
+          "content": "Moving these to done."
+        }
+      },
+      {
+        "id": "8002",
+        "key_id": "43",
+        "title": "Retry the failed deploy",
+        "comment": {
+          "id": 3102,
+          "content": "Moving these to done."
+        }
+      }
+    ],
+    "individual_update": false,
+    "changes": [
+      {
+        "field": "status",
+        "new_value": "4",
+        "type": "standard"
+      }
+    ]
+  },
+  "notifications": [],
+  "createdUser": {
+    "id": 100,
+    "userId": "alice",
+    "name": "Alice",
+    "roleType": 2,
+    "lang": "ja",
+    "mailAddress": "alice@example.com",
+    "nulabAccount": null
+  },
+  "created": "2026-09-03T04:05:06Z"
+}
+```
+
+## Type 14 — Issue Multi Updated — one issue
+
+a bulk update of a **single** issue is a type 14 too, with a one-entry `link[]`. The screen decides the activity type, not the number of issues: the same field changed on the issue’s own page arrives as a type 2. `notifications` is empty here because the batch changed no assignee; a batch that changed one carries a reason-1 entry per issue, none of which says which issue it belongs to.
 
 ```json
 {
@@ -520,19 +583,20 @@ dispatched as `processMessageDeleted` on the root message
     },
     "link": [
       {
-        "id": 8001,
-        "key_id": 42,
+        "id": "8001",
+        "key_id": "42",
         "title": "Deploy fails on the staging space",
         "comment": {
-          "id": 3003,
+          "id": 3101,
           "content": ""
         }
       }
     ],
+    "individual_update": false,
     "changes": [
       {
         "field": "status",
-        "new_value": "4",
+        "new_value": "3",
         "type": "standard"
       }
     ]

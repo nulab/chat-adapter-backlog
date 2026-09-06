@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   assigneeChanged,
   attachmentAdded,
+  bulkFieldsChanged,
+  bulkStatusChangedOnOneIssue,
   commentNotificationAdded,
   commentWithStatusChange,
   descriptionEdited,
@@ -71,6 +73,7 @@ describe('webhook fixtures', () => {
       statusChanged(),
       commentNotificationAdded(),
       issueMultiUpdated(),
+      bulkStatusChangedOnOneIssue(),
       issueDeleted(),
     ]) {
       expect(payload['notifications']).toEqual([]);
@@ -94,6 +97,27 @@ describe('webhook fixtures', () => {
         resourceAlreadyRead: false,
       },
     ]);
+  });
+
+  it('notifies once per issue on a bulk update that changed the assignee, naming no issue', () => {
+    const payload = bulkFieldsChanged();
+    const content = payload['content'] as Record<string, unknown>;
+    const notifications = payload['notifications'] as Record<string, unknown>[];
+
+    expect(notifications).toHaveLength((content['link'] as unknown[]).length);
+    for (const notification of notifications) {
+      expect(notification['reason']).toBe(1);
+      expect(notification['user']).toMatchObject({ id: FIXTURE.bob.id });
+      // The entries differ from one another in nothing but their own id, so
+      // pairing them with `link[]` would be an assumption about ordering.
+      expect(Object.keys(notification).sort()).toEqual([
+        'alreadyRead',
+        'id',
+        'reason',
+        'resourceAlreadyRead',
+        'user',
+      ]);
+    }
   });
 
   it('identifies the issue by numeric id and never by issue key', () => {
@@ -186,12 +210,66 @@ describe('webhook fixtures', () => {
     );
   });
 
-  it('reports a bulk update as one type-14 activity with no per-issue comment', () => {
+  it('reports a bulk update as one type-14 activity naming its issues in content.link[]', () => {
     const payload = issueMultiUpdated();
     expect(payload['type']).toBe(14);
     const content = payload['content'] as Record<string, unknown>;
     expect(content).toHaveProperty('tx_id');
     expect(content).not.toHaveProperty('id');
+    expect(content['individual_update']).toBe(false);
+    expect(content['link']).toHaveLength(2);
+  });
+
+  it("writes a bulk update's issue ids as strings, as the webhook form does", () => {
+    const content = issueMultiUpdated()['content'] as Record<string, unknown>;
+    const [first] = content['link'] as Record<string, unknown>[];
+    expect(first?.['id']).toBe(String(FIXTURE.issueId));
+    expect(first?.['key_id']).toBe(String(FIXTURE.issueKeyId));
+  });
+
+  it('gives a bulk update a comment per issue even when the comment box was empty', () => {
+    const content = issueMultiUpdated()['content'] as Record<string, unknown>;
+    const links = content['link'] as Record<string, unknown>[];
+    const commentIds = links.map(
+      (link) => (link['comment'] as Record<string, unknown>)['id']
+    );
+    expect(new Set(commentIds).size).toBe(links.length);
+    for (const link of links) {
+      expect((link['comment'] as Record<string, unknown>)['content']).toBe('');
+    }
+    expect(content['comment']).toEqual({ content: '' });
+  });
+
+  it('reports a bulk update of a single issue as a type 14 all the same', () => {
+    const payload = bulkStatusChangedOnOneIssue();
+
+    expect(payload['type']).toBe(14);
+    const content = payload['content'] as Record<string, unknown>;
+    expect(content['link']).toHaveLength(1);
+    expect(content['individual_update']).toBe(false);
+  });
+
+  it("writes a bulk update's priority as an id and its other fields as display names", () => {
+    const content = bulkFieldsChanged()['content'] as Record<string, unknown>;
+
+    // Type 2's notation, unchanged: `priority`, `status` and `resolution` are
+    // the only fields Backlog reports by id.
+    expect(content['changes']).toEqual([
+      { field: 'component', new_value: 'Deployment', type: 'standard' },
+      { field: 'milestone', new_value: '0.5.0', type: 'standard' },
+      { field: 'assigner', new_value: FIXTURE.bob.name, type: 'standard' },
+      { field: 'priority', new_value: '2', type: 'standard' },
+    ]);
+  });
+
+  it("omits old_value from a bulk update's changes[], which reports only the new state", () => {
+    const content = issueMultiUpdated()['content'] as Record<string, unknown>;
+    const [change] = content['changes'] as Record<string, unknown>[];
+    expect(change).toEqual({
+      field: 'status',
+      new_value: '4',
+      type: 'standard',
+    });
   });
 
   it('gives a Nulab-account user a null userId', () => {

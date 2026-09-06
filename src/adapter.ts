@@ -51,6 +51,7 @@ import { downloadAttachmentAt } from './subject/url';
 import type { AttachmentLocation } from './subject/url';
 import type {
   BacklogAdapterConfig,
+  BacklogBulkUpdatePayload,
   BacklogInstallation,
   BacklogRawMessage,
   BacklogSubjectRef,
@@ -59,7 +60,14 @@ import type {
   Resolvable,
   ResolvedInstallation,
 } from './types';
+import {
+  buildBulkUpdateMessage,
+  bulkMessageId,
+  bulkUpdateTargets,
+  parseBulkUpdatePayload,
+} from './webhook/bulk';
 import { buildInboundMessage } from './webhook/inbound';
+import type { IssueMultiUpdatedActivity } from './webhook/payload';
 import {
   DISPATCHED_ACTIVITY_TYPES,
   parseActivity,
@@ -444,6 +452,11 @@ function subjectOfRaw(raw: BacklogRawMessage): {
       return {
         projectId: raw.payload.project.id,
         subject: subjectOfActivity(raw.payload),
+      };
+    case 'bulkUpdate':
+      return {
+        projectId: raw.payload.project.id,
+        subject: { kind: 'issue', issueId: raw.issueId },
       };
     case 'comment':
       return { projectId: raw.projectId, subject: raw.subject };
@@ -1036,6 +1049,21 @@ export class BacklogAdapter implements Adapter<
     }
     const chat = this.chat;
 
+    if (activity.type === 14) {
+      // Answered before `subjectOfActivity` rather than inside it: a bulk
+      // update names one issue per `content.link[]` entry, so there is no
+      // single subject to build a thread id from, and the narrowing this
+      // branch performs is what lets everything below keep assuming there is.
+      return this.dispatchBulkUpdate({
+        activity,
+        payload: parsedBody as BacklogBulkUpdatePayload,
+        host,
+        botUserId: installation.botUserId,
+        chat,
+        options,
+      });
+    }
+
     const subject = subjectOfActivity(activity);
     const threadId = encodeThreadIdStruct({
       host,
@@ -1145,7 +1173,106 @@ export class BacklogAdapter implements Adapter<
     return new Response('OK', { status: 200 });
   }
 
+  /**
+   * Type 14 — one delivery, one message per issue it touched
+   * (docs/specs/adapter.md §5.3, D22).
+   *
+   * The loop dispatches N times into N threads, which is the whole point: a
+   * bulk update of twelve issues is twelve issues whose status changed, and a
+   * handler that reacts per thread has to be told twelve times. It is also the
+   * cost — a handler that calls the API per message spends N calls out of a
+   * per-minute bucket from a single webhook — which is why the README says so
+   * where activity type 14 is registered, and why leaving 14 unregistered is
+   * the documented way out (D-PR4).
+   *
+   * The self-message check is repeated here rather than being hoisted above
+   * this branch: §5.1 step 11 logs the thread id it skipped, and this branch
+   * has no single thread id to log.
+   */
+  private dispatchBulkUpdate(input: {
+    activity: IssueMultiUpdatedActivity;
+    payload: BacklogBulkUpdatePayload;
+    host: string;
+    botUserId: number;
+    chat: ChatInstance;
+    options: WebhookOptions | undefined;
+  }): Response {
+    const { activity, payload, host, botUserId, chat, options } = input;
+
+    if (activity.createdUser.id === botUserId) {
+      this.logger.debug('self message skipped', {
+        host,
+        projectId: activity.project.id,
+        type: 14,
+      });
+      return new Response('OK', { status: 200 });
+    }
+
+    const targets = bulkUpdateTargets(activity);
+    if (targets.length === 0) {
+      return new Response('OK', { status: 200 });
+    }
+
+    // One lookup shared by every factory, rather than `ensureProject` per
+    // factory as the single-subject path does. The factories run concurrently
+    // in separate threads, so on a cold cache each of them would miss and a
+    // batch of fifty issues would spend fifty Get Project calls on one
+    // project. `ensureProject` never rejects (it logs and falls back), so this
+    // promise needs no `.catch` of its own; it is started rather than awaited,
+    // so the response below still does not wait for it.
+    const projectReady = this.ensureProject(host, activity.project.id);
+
+    for (const target of targets) {
+      const subject: BacklogSubjectRef = {
+        kind: 'issue',
+        issueId: target.issueId,
+      };
+      const threadId = encodeThreadIdStruct({
+        host,
+        projectId: activity.project.id,
+        subject,
+      });
+      const raw: BacklogRawMessage = {
+        kind: 'bulkUpdate',
+        host,
+        payload,
+        issueId: target.issueId,
+        changes: [],
+      };
+      const factory = async (): Promise<Message<BacklogRawMessage>> => {
+        await projectReady;
+        return this.parseMessage(raw);
+      };
+      // The same function the message itself is built with, so the id logged
+      // for a failed dispatch is the id the handler would have seen.
+      const messageIdForLog = bulkMessageId(
+        host,
+        subject,
+        target,
+        activity.created
+      );
+
+      // Dispatched per issue and never awaited, exactly as the single-subject
+      // path below; the response returns before any of them completes.
+      void Promise.resolve(
+        chat.processMessage(this, threadId, factory, options)
+      ).catch((cause: unknown) => {
+        this.logger.error('inbound processing failed', {
+          host,
+          threadId,
+          messageId: messageIdForLog,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      });
+    }
+
+    return new Response('OK', { status: 200 });
+  }
+
   parseMessage(raw: BacklogRawMessage): Message<BacklogRawMessage> {
+    if (raw.kind === 'bulkUpdate') {
+      return this.parseBulkUpdateMessage(raw);
+    }
     if (raw.kind !== 'webhook') {
       // P5 (REST comment/issue -> Message) and P3 (webhook) share the
       // `BacklogRawMessage` union, but this phase only ever constructs the
@@ -1197,6 +1324,59 @@ export class BacklogAdapter implements Adapter<
           payload.project.id,
           subjectOfActivity(payload)
         ),
+        payload,
+      },
+      MessageCtor
+    );
+  }
+
+  /**
+   * One issue of a bulk update as a `Message` (docs/specs/adapter.md §5.3).
+   *
+   * `raw.issueId` selects the `content.link[]` entry instead of an index into
+   * it, so a `raw` that outlived its delivery — through the core's
+   * queue/debounce JSON round trip, or a redelivery arriving in another order
+   * — still resolves to the same issue. An id that is no longer in the batch
+   * is a `raw` that was assembled by hand, not a payload defect.
+   */
+  private parseBulkUpdateMessage(
+    raw: Extract<BacklogRawMessage, { kind: 'bulkUpdate' }>
+  ): Message<BacklogRawMessage> {
+    const { host, payload, issueId } = raw;
+    const installation = this.resolveInstallation(host);
+    const channelId = `backlog:${host}:${payload.project.id}`;
+    if (!this.projectCache.has(channelId)) {
+      this.logger.warn('textFormattingRule uncached; assuming markdown', {
+        host,
+        projectId: payload.project.id,
+      });
+    }
+
+    const activity = parseBulkUpdatePayload(payload);
+    if (activity === null) {
+      throw new ValidationError(
+        'backlog',
+        'parseMessage: raw.payload is not a type 14 activity'
+      );
+    }
+
+    const target = bulkUpdateTargets(activity).find(
+      (candidate) => candidate.issueId === issueId
+    );
+    if (target === undefined) {
+      throw new ValidationError(
+        'backlog',
+        `parseMessage: issue ${issueId} is not in this bulk update`
+      );
+    }
+
+    return buildBulkUpdateMessage(
+      activity,
+      target,
+      {
+        host,
+        botUserId: installation.botUserId,
+        botUserName: installation.botUserName,
         payload,
       },
       MessageCtor

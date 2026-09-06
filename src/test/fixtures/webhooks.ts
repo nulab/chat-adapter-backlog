@@ -22,6 +22,13 @@ export const FIXTURE = {
   projectKey: 'EXAMPLE',
   issueId: 8001,
   issueKeyId: 42,
+  // A second issue, so a bulk update has more than one to fan out to.
+  otherIssueId: 8002,
+  otherIssueKeyId: 43,
+  // A third, so a batch can be larger than a pair — the measured
+  // notification-per-issue payload updated three at once.
+  thirdIssueId: 8003,
+  thirdIssueKeyId: 44,
   // The pull-request vocabulary P3's builders address a thread with: a pull
   // request is keyed by repository id + number, never by `pullRequestId` —
   // that space-wide id addresses no endpoint and exists here only because
@@ -365,30 +372,151 @@ export function issueDeleted(
   );
 }
 
+/** One issue of a bulk update, as `content.link[]` names it. */
+export interface FixtureBulkIssue {
+  issueId: number;
+  keyId: number;
+  title: string;
+  commentId: number;
+}
+
+const DEFAULT_BULK_ISSUES: FixtureBulkIssue[] = [
+  {
+    issueId: FIXTURE.issueId,
+    keyId: FIXTURE.issueKeyId,
+    title: 'Deploy fails on the staging space',
+    commentId: 3101,
+  },
+  {
+    issueId: FIXTURE.otherIssueId,
+    keyId: FIXTURE.otherIssueKeyId,
+    title: 'Retry the failed deploy',
+    commentId: 3102,
+  },
+];
+
+/** The default pair plus one, for a batch whose size is the point. */
+const THREE_BULK_ISSUES: FixtureBulkIssue[] = [
+  ...DEFAULT_BULK_ISSUES,
+  {
+    issueId: FIXTURE.thirdIssueId,
+    keyId: FIXTURE.thirdIssueKeyId,
+    title: 'Roll the staging deploy back',
+    commentId: 3103,
+  },
+];
+
 /**
- * Type 14 — Issue Multi Updated. A bulk status change never arrives as a
- * type 2 per issue, so there is no per-issue comment to build a message from.
+ * Type 14 — Issue Multi Updated: one delivery for a bulk update made from the
+ * issue list, however many issues it covered — **one included**.
+ *
+ * Four details are measured (on a development space, 2026-09-06) and are the
+ * reason this builder does not go through
+ * {@link changeEntries} or reuse the numeric ids the other builders emit:
+ *
+ * - `content.link[].id` and `key_id` are decimal **strings** here, while every
+ *   other activity writes the same fields as numbers.
+ * - `changes[]` entries carry `field`, `new_value` and `type` and **no**
+ *   `old_value` — a bulk update reports where the issues ended up, not where
+ *   each of them started.
+ * - `link[].comment` exists even when the comment box was left empty, with
+ *   `content: ""`, and its `id` is a comment that really was written on that
+ *   issue.
+ * - `notifications[]` carries one reason-1 entry **per issue** when the batch
+ *   changed the assignee, and none of them says which issue it belongs to.
+ *   One delivery holding several indistinguishable entries is peculiar to 14.
+ *
+ * `content.comment` repeats the typed text with no `id` of its own, and
+ * `individual_update` was `false` on all six measured deliveries — the bulk
+ * update screen has no way to give two issues different values, so no known
+ * operation produces a `true`.
  */
 export function issueMultiUpdated(
-  options: ActivityOptions = {}
+  options: ActivityOptions & {
+    issues?: FixtureBulkIssue[];
+    text?: string;
+    changes?: FixtureChange[];
+    individualUpdate?: boolean;
+  } = {}
 ): Record<string, unknown> {
+  const text = options.text ?? '';
+  const issues = options.issues ?? DEFAULT_BULK_ISSUES;
   return envelope(
     14,
     {
       tx_id: '9876',
-      comment: { content: '' },
-      link: [
-        {
-          id: FIXTURE.issueId,
-          key_id: FIXTURE.issueKeyId,
-          title: 'Deploy fails on the staging space',
-          comment: { id: 3003, content: '' },
-        },
-      ],
-      changes: [{ field: 'status', new_value: '4', type: 'standard' }],
+      comment: { content: text },
+      link: issues.map((issue) => ({
+        id: String(issue.issueId),
+        key_id: String(issue.keyId),
+        title: issue.title,
+        comment: { id: issue.commentId, content: text },
+      })),
+      individual_update: options.individualUpdate ?? false,
+      changes: (options.changes ?? [{ field: 'status', new_value: '4' }]).map(
+        (change) => ({
+          field: change.field,
+          new_value: change.new_value ?? '',
+          type: 'standard',
+        })
+      ),
     },
     options
   );
+}
+
+/**
+ * A bulk update of several fields at once, as the issue list makes one: four
+ * `changes[]` entries in two value systems and one assignee notification per
+ * issue (measured on a development space, 2026-09-06).
+ *
+ * The notation is type 2's, not a bulk-specific one — `priority` is a
+ * **id** written as a string while `component` (the category), `milestone`
+ * and `assigner` are display names — and the only thing that makes it a
+ * bulk update's `changes[]` is the absent `old_value`.
+ */
+export function bulkFieldsChanged(
+  options: ActivityOptions & {
+    issues?: FixtureBulkIssue[];
+    assignee?: FixtureUser;
+  } = {}
+): Record<string, unknown> {
+  const assignee = options.assignee ?? FIXTURE.bob;
+  const issues = options.issues ?? THREE_BULK_ISSUES;
+  return issueMultiUpdated({
+    ...options,
+    issues,
+    changes: [
+      { field: 'component', new_value: 'Deployment' },
+      { field: 'milestone', new_value: '0.5.0' },
+      { field: 'assigner', new_value: assignee.name },
+      { field: 'priority', new_value: '2' },
+    ],
+    // One reason-1 entry per issue, the same user repeated: Backlog emits the
+    // notification per issue, and the entries name no issue, so they are
+    // indistinguishable from one another.
+    notifications: issues.map(() => ({ user: assignee, reason: 1 })),
+  });
+}
+
+/**
+ * A bulk update of a **single** issue — still a type 14, and still with an
+ * empty `notifications[]` when no assignee changed (measured on a development
+ * space, 2026-09-06).
+ *
+ * What separates a type 2 from a type 14 is the screen the update was made
+ * from, not how many issues it covered: one issue ticked on the issue list
+ * arrives here, while the same field changed on the issue's own page arrives
+ * as a type 2.
+ */
+export function bulkStatusChangedOnOneIssue(
+  options: ActivityOptions & { statusId?: string } = {}
+): Record<string, unknown> {
+  return issueMultiUpdated({
+    ...options,
+    issues: [DEFAULT_BULK_ISSUES[0]!],
+    changes: [{ field: 'status', new_value: options.statusId ?? '3' }],
+  });
 }
 
 /** Type 17 — Comment Notification Added. Repeats an existing comment. */

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assigneeChanged,
   attachmentAdded,
+  bulkStatusChangedOnOneIssue,
   commentNotificationAdded,
   commentWithStatusChange,
   descriptionEdited,
@@ -42,6 +43,7 @@ describe('published sample payloads', () => {
       '## Type 2 — Issue Updated — no comment id',
       '## Type 4 — Issue Deleted',
       '## Type 14 — Issue Multi Updated',
+      '## Type 14 — Issue Multi Updated — one issue',
       '## Type 17 — Comment Notification Added',
     ]) {
       expect(samples).toContain(heading);
@@ -59,7 +61,8 @@ describe('published sample payloads', () => {
       commentWithStatusChange(),
       issueUpdatedWithoutComment(),
       issueDeleted(),
-      issueMultiUpdated(),
+      issueMultiUpdated({ text: 'Moving these to done.' }),
+      bulkStatusChangedOnOneIssue(),
       commentNotificationAdded(),
     ]) {
       expect(samples).toContain(JSON.stringify(payload, null, 2));
