@@ -998,6 +998,22 @@ resources. It records synthetic rate-limit headers so `rateLimit()` is testable.
   `Retry-After`; when `X-RateLimit-Reset` is missing, wait `maxWaitMs`.
 - No other status is retried; the adapter is idempotency-agnostic and a
   repeated `POST` would duplicate a comment.
+- Each of the two outcomes emits exactly one `warn` (§10) — nothing else about
+  rate limiting is logged, because a per-request `remaining` line would be one
+  entry per API call against a 150-per-minute bucket:
+  - about to wait: `rate limited; waiting for the bucket to reset` with
+    `{ bucket, remaining?, resetAt?, waitMs, attempt }`;
+  - about to throw: `rate limited; not retrying` with the same fields.
+  `remaining` and `resetAt` are omitted when the response carried no usable
+  `X-RateLimit-Remaining` / `X-RateLimit-Reset`; `attempt` is the 1-based
+  number of the request that hit the limit. The port takes the `Logger` as an
+  accessor resolved per request, because `initialize` replaces the adapter's
+  logger while `api(host)` caches the port built before it.
+- A wait of up to `maxWaitMs` blocks the calling promise, so a consumer whose
+  runtime caps execution time (a serverless function's timeout) must raise that
+  cap above `maxWaitMs` or lower `maxWaitMs` and handle `AdapterRateLimitError`
+  itself; otherwise the runtime kills the call mid-wait and the work is lost
+  silently. Documented in the README (§13).
 
 ### 8.5 Error mapping (D6)
 
@@ -1145,12 +1161,12 @@ plain text. Documented in README under "Limitations".
 - Levels: `debug` for per-request flow (self-message skip, success);
   `info` for ignored activity types and "not found, giving up" outcomes;
   `warn` for rejected webhooks, degraded formatting, cache misses that fell
-  back; `error` for processing failures after 200 was returned (the only
+  back, and the two rate-limit outcomes of §8.4; `error` for processing failures after 200 was returned (the only
   carrier of that failure) and for a webhook received before `initialize`.
 - Structured fields only: `host`, `projectId`, `repositoryId`, `type`,
   `commentId`, `messageId`, `threadId`, `target`, `reason`, `bucket`,
-  `remaining`, `resetAt`, and `error` (a caught error's `message`, never the
-  object). A subject is identified by `threadId` or `messageId`, which carry
+  `remaining`, `resetAt`, `waitMs`, `attempt`, and `error` (a caught error's
+  `message`, never the object). A subject is identified by `threadId` or `messageId`, which carry
   its kind, so no field names an issue or pull request on its own. Never the
   raw body, comment text, tokens, API keys, `Authorization` values or the full
   request URL (it carries `?token=`).
@@ -1250,8 +1266,10 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   `markAsRead` (first page, third page, cap reached, already read, `:r`).
 - **client**: §8.6 conformance over both implementations; bucket classifier
   for every port method; header capture on success and on error; retry timing
-  with fake timers; every row of §8.5; `cause` shape; no `ZodError`; resolver
-  errors → `AuthenticationError`; query string stripped from `cause.url`.
+  with fake timers; one `warn` per rate-limit wait and per refusal to wait,
+  none on an unlimited request, and the logger resolved per request; every row
+  of §8.5; `cause` shape; no `ZodError`; resolver errors →
+  `AuthenticationError`; query string stripped from `cause.url`.
 - **wiring**: real `Chat` + memory state: mention → `onNewMention` →
   `thread.post` → comment; redelivery within TTL deduped; subscribed follow-up
   → `onSubscribedMessage`; bot's own comment not delivered; assignment to the
@@ -1330,8 +1348,11 @@ for one scratch space is worse than requiring the two to share it.
   or `pullRequestCommentId`); read receipts; history paging (§7.1);
   `message.subject.type` being `"issue"` or `"pull_request"` (D-PR8); raw API
   and errors (§3.6, §8.5), with `api(host).listPullRequests` named as the route
-  to a repository's pull requests; testing with `createInMemoryBacklogApi`;
-  license.
+  to a repository's pull requests, and the 429 retry stated as a wait of up to
+  `rateLimit.maxWaitMs` that blocks the call — so a serverless deployment must
+  allow more execution time than `maxWaitMs` or lower it and handle
+  `AdapterRateLimitError` itself, with the two `warn` lines named as how the
+  wait becomes visible; testing with `createInMemoryBacklogApi`; license.
 - **`sample-messages.md`** in the package root with anonymised payloads for
   every §5.3 row, issue **and** pull request — 18, 19 (comment, status,
   assignee, summary), 20 (plain and with an attachment) and the ignored 21 and

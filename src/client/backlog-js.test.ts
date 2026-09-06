@@ -3,6 +3,7 @@ import {
   AuthenticationError,
   ResourceNotFoundError,
 } from '@chat-adapter/shared';
+import { createMockLogger } from '@chat-adapter/tests';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBacklogJsApi } from './backlog-js.js';
@@ -479,6 +480,170 @@ describe('createBacklogJsApi', () => {
         AdapterRateLimitError
       );
       expect(attempt).toBe(1);
+    });
+  });
+
+  describe('429 logging (§8.4, §10)', () => {
+    // Pinned to a whole second so `waitMs` is exactly the header's distance
+    // from now; `X-RateLimit-Reset` has one-second granularity, and a clock
+    // sitting mid-second would make the asserted numbers drift by the
+    // remainder.
+    const now = Math.floor(Date.parse('2026-09-06T00:00:00.000Z') / 1000);
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(now * 1000);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function tooManyRequests(resetSeconds: number): Response {
+      return new Response(
+        JSON.stringify({
+          errors: [{ message: 'Too many requests', code: 13, moreInfo: '' }],
+        }),
+        {
+          status: 429,
+          headers: {
+            'X-RateLimit-Limit': '15',
+            'X-RateLimit-Remaining': '0',
+            'X-RateLimit-Reset': String(resetSeconds),
+          },
+        }
+      );
+    }
+
+    it('a wait is announced once, with the bucket, remaining, reset and wait it is about to block for', async () => {
+      const logger = createMockLogger();
+      let attempt = 0;
+      const fetchStub: typeof globalThis.fetch = async () => {
+        attempt += 1;
+        return attempt === 1
+          ? tooManyRequests(now + 2)
+          : new Response(JSON.stringify(baseIssue()), {
+              status: 200,
+              headers: rateLimitHeaders,
+            });
+      };
+      const api = createBacklogJsApi({
+        host,
+        credentials: { apiKey: () => 'test-api-key' },
+        fetch: fetchStub,
+        logger: () => logger,
+      });
+
+      const resultPromise = api.getIssue(issueId);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await resultPromise;
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'rate limited; waiting for the bucket to reset',
+        {
+          bucket: 'read',
+          remaining: 0,
+          resetAt: new Date((now + 2) * 1000).toISOString(),
+          waitMs: 2_000,
+          attempt: 1,
+        }
+      );
+    });
+
+    it('a refusal to wait is announced once, and names the update bucket a comment spends', async () => {
+      const logger = createMockLogger();
+      const fetchStub: typeof globalThis.fetch = async () =>
+        tooManyRequests(now + 300);
+      const api = createBacklogJsApi({
+        host,
+        credentials: { apiKey: () => 'test-api-key' },
+        fetch: fetchStub,
+        logger: () => logger,
+      });
+
+      await expect(
+        api.addComment(issueId, { content: 'hello' })
+      ).rejects.toBeInstanceOf(AdapterRateLimitError);
+
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith('rate limited; not retrying', {
+        bucket: 'update',
+        remaining: 0,
+        resetAt: new Date((now + 300) * 1000).toISOString(),
+        waitMs: 300_000,
+        attempt: 1,
+      });
+    });
+
+    it('a 429 without rate-limit headers still logs, reporting the full maxWaitMs it would have to block for', async () => {
+      const logger = createMockLogger();
+      const fetchStub: typeof globalThis.fetch = async () =>
+        new Response(
+          JSON.stringify({
+            errors: [{ message: 'Too many requests', code: 13, moreInfo: '' }],
+          }),
+          { status: 429 }
+        );
+      const api = createBacklogJsApi({
+        host,
+        credentials: { apiKey: () => 'test-api-key' },
+        fetch: fetchStub,
+        retry: { maxRetries: 0 },
+        logger: () => logger,
+      });
+
+      await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(
+        AdapterRateLimitError
+      );
+
+      expect(logger.warn).toHaveBeenCalledWith('rate limited; not retrying', {
+        bucket: 'read',
+        waitMs: 60_000,
+        attempt: 1,
+      });
+    });
+
+    it('the logger is resolved per request, so a caller that swaps its own logger is followed', async () => {
+      const first = createMockLogger();
+      const second = createMockLogger();
+      let current = first;
+      const fetchStub: typeof globalThis.fetch = async () =>
+        tooManyRequests(now + 300);
+      const api = createBacklogJsApi({
+        host,
+        credentials: { apiKey: () => 'test-api-key' },
+        fetch: fetchStub,
+        logger: () => current,
+      });
+
+      await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(
+        AdapterRateLimitError
+      );
+      current = second;
+      await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(
+        AdapterRateLimitError
+      );
+
+      expect(first.warn).toHaveBeenCalledTimes(1);
+      expect(second.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('a request that is not rate limited logs nothing', async () => {
+      const logger = createMockLogger();
+      const server = createFakeBacklogServer();
+      const api = createBacklogJsApi({
+        host,
+        credentials: { apiKey: () => 'test-api-key' },
+        fetch: server.fetch,
+        logger: () => logger,
+      });
+
+      await api.getIssue(issueId);
+
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.info).not.toHaveBeenCalled();
+      expect(logger.debug).not.toHaveBeenCalled();
     });
   });
 });
