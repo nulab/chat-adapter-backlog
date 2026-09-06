@@ -63,7 +63,7 @@ describe('webhook fixtures', () => {
     expect(FIXTURE.repositoryName).toBe('example-repo');
   });
 
-  it('carries an empty notifications array on every activity type', () => {
+  it('carries an empty notifications array on every activity type until one is asked for', () => {
     for (const payload of [
       issueCreated(),
       issueCommented(),
@@ -75,6 +75,25 @@ describe('webhook fixtures', () => {
     ]) {
       expect(payload['notifications']).toEqual([]);
     }
+  });
+
+  it('names the notified user and the reason when a builder is given notifications', () => {
+    const payload = issueCommented({
+      notifications: [{ user: FIXTURE.bot, reason: 2 }],
+    });
+
+    expect(payload['notifications']).toEqual([
+      {
+        id: 4100,
+        alreadyRead: false,
+        reason: 2,
+        user: expect.objectContaining({
+          id: FIXTURE.bot.id,
+          name: FIXTURE.bot.name,
+        }),
+        resourceAlreadyRead: false,
+      },
+    ]);
   });
 
   it('identifies the issue by numeric id and never by issue key', () => {

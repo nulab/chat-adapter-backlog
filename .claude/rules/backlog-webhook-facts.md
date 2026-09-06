@@ -14,7 +14,7 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
 ## Payload envelope
 
 - The body is one Activity object: `{ id, project{ id, projectKey, name, ... },
-  type, content, notifications: [], createdUser, created }`, the same shape
+  type, content, notifications[], createdUser, created }`, the same shape
   `GET /space/activities` returns ("the webhook type is the same as the Backlog
   API response for Get recent updates",
   https://support.nulab.com/hc/en-us/articles/8840133998489). Measured
@@ -39,11 +39,23 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
   persisted identifiers on `content.id` and `project.id`, never on `key_id` or
   `${projectKey}-${key_id}`: renaming a project key rewrites every issue key
   under it, ids never change.
-- `notifications` is always `[]` (emptied 2022-02-09 per the Get Recent Updates
-  page; `backlog-js` types it `notifications: []`). Measured 2026-08-20 and
-  2026-09-03: `[]` on types 2, 3 and 17, and `content.comment.notifications`
-  is absent too, including for comments posted through the UI mention picker
-  and for API comments sent with `notifiedUserId[]`.
+- Top-level `notifications` **is populated on a webhook delivery** and names
+  every user the activity notified: `[{ id, alreadyRead, reason,
+  resourceAlreadyRead, user{ id, name, roleType, lang, ... } }]` (measured
+  2026-09-06). `reason` follows Get Notification's codes
+  (`backlog-api-facts.md`): a comment addressed to someone through the UI
+  notification field or by a `<@U…>` in its text arrives as `reason: 2`, a
+  `PATCH` that changes the assignee as `reason: 1`. `content.comment.
+  notifications` is still absent.
+- The **same activity fetched from `GET /space/activities` or `GET /projects/
+  :id/activities` carries `notifications: []`** (measured 2026-08-20,
+  2026-09-03 and 2026-09-06), which is also what the Get Recent Updates page
+  and `backlog-js`'s `notifications: []` typing describe. So the two bodies
+  are *not* interchangeable in this one field, and the webhook is the only
+  place the notification list can be read at all. An activity-API body
+  replayed as a webhook is still valid — it just says nothing about who was
+  notified, which is why mention detection keeps its textual and assignment
+  rules (docs/specs/adapter.md §5.4).
 - Top-level `created` on the webhook and on the same activity fetched later via
   the API are identical strings (measured 2026-08-31). Top-level `id` is the
   activity id, not the issue or comment id.
@@ -98,8 +110,12 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
   (measured 2026-09-03). Text placed by editing reaches nobody via webhooks.
 - Add Comment Notification (`POST /issues/:id/comments/:commentId/
   notifications`) → type 17 with `content.comment` = the target comment (`id`,
-  and `content` as of the call); `notifications` still `[]` (measured
-  2026-09-03). The docs give no `content` shape for type 17.
+  and `content` as of the call). Top-level `notifications` is populated like
+  any other delivery, with `reason: 2`, and names **only the recipients that
+  call added** — a comment that had already notified someone else produced a
+  type 17 naming the added user alone (measured 2026-09-06; this supersedes a
+  2026-09-03 note that recorded `[]` here). The docs give no `content` shape
+  for type 17.
 - Bulk operations from the issue list ("multi update") → one type 14
   `{ tx_id, comment{content}, link[{id,key_id,title,comment{id,content}}],
   changes[{field,new_value,type}] }`, not one type 2 per issue (measured
@@ -117,9 +133,10 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
   webhook `content.comment.content` carry the **rewritten** text. Code must not
   expect `<@U…>` in inbound text; the measured form wins until re-measured.
 - A hand-typed `@Display Name` and a real mention are byte-identical in the
-  stored text (measured 2026-09-04). The only difference is the notification,
-  which the payload does not carry. Text-based detection can therefore only
-  establish "possibly mentioned".
+  stored text (measured 2026-09-04). The difference is the notification, which
+  a **webhook** payload does carry (see § Payload envelope) and an
+  activity-API body does not; text alone can therefore only establish
+  "possibly mentioned".
 - Unresolvable forms stay literal and notify nobody: `<@U0>` (ids must match
   `[1-9]\d*`), lowercase `<@u123>`, `<@project >` (whitespace inside the tag).
   A nonexistent team id resolves to the literal text `Team-<id>` (measured
@@ -129,9 +146,35 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
   2026-09-04). `notifiedUserId[]` and text mentions are independent: either
   alone produces a notification, and `notifiedUserId[]` alone leaves no `@name`
   in the text.
-- The only ways to learn who was notified are `GET /issues/:id/comments/
-  :commentId/notifications` or matching the bot's display name in the text. A
-  fixture with a populated `notifications` array tests code that never runs.
+- Who was notified is readable three ways, and only the first is available
+  without a second request: the webhook's own top-level `notifications[]`,
+  `GET /issues/:id/comments/:commentId/notifications`, or matching the bot's
+  display name in the text. A comment whose recipients were picked in the UI
+  notification field leaves **no `@name` in the stored text at all** (measured
+  2026-09-06), so text matching alone misses the UI's normal way of addressing
+  somebody.
+- **Watching an issue does not put the watcher in `notifications[]`.** An
+  account watching an issue it was neither assigned to nor named in was
+  absent from all three deliveries it should have seen if watching notified:
+  a plain comment, a priority-only `PATCH` and a description-only `PATCH`
+  arrived with `notifications: []`. The control on the same issue — the same
+  kind of comment addressing a user who was *not* watching — carried that
+  user with `reason: 2` (measured 2026-09-06). So far `notifications[]`
+  reports explicit addressing only: every act measured here that put a user
+  in it was one somebody performed on that user.
+- Watching is a separate mechanism from notifications end to end: the watcher
+  got no entry in its own `GET /notifications` either, only
+  `resourceAlreadyRead` and `lastContentUpdated` moving on its
+  `GET /users/:id/watchings` record, and `POST /watchings` produced no
+  delivery on a hook registered for types 1, 2, 3, 4, 14 and 17 (measured
+  2026-09-06). No other type was subscribed, so that is an absence across the
+  issue types, not across all 49.
+- `reason` codes observed on a delivery, all of them explicit acts: **1**
+  assigned on an issue, **2** a comment's notification field or a `<@U…>` in
+  its text, **10** assigned on a pull request, **11** a pull-request
+  comment's notification field or text mention (measured 2026-09-06). The
+  full code table is in `backlog-api-facts.md`; these are the ones a
+  delivery has actually carried here.
 
 ## Delivery semantics
 

@@ -412,7 +412,7 @@ The body is one Activity object as returned by
 Backlog publishes no dedicated webhook-payload page, and measured payloads
 match the activity shape field for field (measured 2026-08-28,
 `.claude/rules/backlog-webhook-facts.md`). The schema is **tolerant of unknown
-keys** everywhere (`field_text`, `type` inside `changes[]`, `notifications`,
+keys** everywhere (`field_text`, `type` inside `changes[]`,
 `shared_files`, `status`, `priority` … are all seen in real payloads) and
 `raw.payload` is the parsed body as received, not a stripped copy.
 
@@ -424,6 +424,11 @@ number; for types 18–20 additionally `content.number` number and
 the last two are **captured** when present (§7.3: they are the names a
 pull-request URL needs and the REST object lacks).
 
+The top-level `notifications[]` is read but can never make a body invalid: an
+absent array and an array in a shape not measured here both mean "this
+delivery says nothing about who was notified", and neither is worth losing a
+message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
+
 | Field | Type 1 | Type 2/3 | Type 4 | Type 18 | Type 19/20 |
 | --- | --- | --- | --- | --- | --- |
 | `content.summary`, `content.description` | read (`description` nullable) | ignored | — | read | ignored |
@@ -434,6 +439,7 @@ pull-request URL needs and the REST object lacks).
 | `content.number`, `content.repository.{id,name}` | — | — | — | required / required + optional | same |
 | `content.issue` | — | — | — | `{ id, key_id, issue_key?, summary, description } \| null`, the linked issue; display data (D-PR6) | same |
 | `createdUser.userId` | `string \| null` optional (Nulab-account users have none) | same | same | same | same |
+| `notifications[]` (top level, not under `content`) | `{ user: { id }, reason? }[]`, read for mention detection (§5.4 rule 6); never required, never a 400 | same | same | same | same |
 
 ### 5.3 Activity-type mapping
 
@@ -453,6 +459,10 @@ pull-request URL needs and the REST object lacks).
 | 21 | Pull Request Deleted (docs) / Merged (`backlog-js`) | — | — | — | 200 Ignored (D-PR5): not observed — merge and close arrive as 19 status changes and no delete operation exists in the UI or the API (measured 2026-09-06) |
 | 12, 13 | Git Pushed, Git Repository Created | — | — | — | 200 Ignored: no thread meaning |
 | other | wiki, document, … | — | — | — | 200 Ignored |
+
+Every dispatched row's Mention column reads the top-level `notifications[]`
+as well (§5.4 rule 6); it is left out of the cells above because it applies
+to all of them equally, while what the column names differs per type.
 
 The thread id of a pull-request activity is built from `project.id`,
 `content.repository.id` and `content.number` — never from `content.id` (the
@@ -510,9 +520,13 @@ Behavioural consequences of measured facts (details and dates in
 
 Backlog stores mentions as `<@U<id>>` / `<@T<id>>` / `<@project>`
 ([Tips](https://developer.nulab.com/docs/backlog/tips/)) but every payload and
-API response returns the **resolved** text `@<display name>`; the payload's
-`notifications` array is always empty (Get Recent Updates page; measured
-2026-08-20 and 2026-09-04). Detection is therefore textual plus assignment:
+API response returns the **resolved** text `@<display name>`. A webhook body
+additionally names the users the activity notified, in the top-level
+`notifications[]` (measured on a development space, 2026-09-06); the same
+activity fetched from `GET /space/activities` carries `[]` there, so the
+webhook is the **only** source of that information. Detection is therefore
+notification-based, plus textual and assignment for the deliveries that carry
+no notification:
 
 1. `mentionPattern(botUserName)` = `new RegExp("(?<![\\w@])@" + escape(botUserName) + "(?![\\w-])")`,
    case-sensitive, no flags. `@Chatbot2`, `foo@Chatbot`, `@@Chatbot` and a
@@ -533,6 +547,30 @@ API response returns the **resolved** text `@<display name>`; the payload's
    `@<display name>` (measured 2026-09-06). Type-18 `text` is therefore also
    matched against `<@U<botUserId>>`, and `mentionPattern` alone is not
    sufficient for it.
+6. Any top-level `notifications[]` entry with `user.id === botUserId`,
+   **whatever its `reason`**. This is the only rule that reads a decision
+   Backlog made rather than inferring one, and it is the only rule that fires
+   for the two cases the others miss: a comment whose recipients were chosen
+   in the notification field, which leaves no `@name` in the stored text at
+   all, and the multi-field pull-request `PATCH` measured to omit its
+   `assignee` change entry while still notifying the new assignee (rule 4).
+
+`reason` is deliberately not filtered on. An assignment (`reason` 1 on an
+issue, 10 on a pull request) is already a mention through rules 2–4, so
+restricting rule 6 to `reason: 2` would change no assignment outcome — it
+could only drop a directed notification whose code has not been measured
+here, and would add a second place that has to track Backlog's reason table
+(`.claude/rules/backlog-api-facts.md` lists 1–6, 9–13 and gaps at 7, 8, 16).
+The obvious candidate for a false positive — a **watch** subscription
+notifying the bot nobody addressed — does not exist: an issue watched by an
+account that was neither assigned to it nor named in it delivered a comment
+and two field-only `PATCH`es with `notifications: []`, while a non-watching
+user addressed on the same issue arrived with `reason: 2` (measured
+2026-09-06, §15 question 17, settled). What remains is a Backlog behaviour
+nobody has seen yet putting the bot there unaddressed; that would read as a
+mention, which is the same class of false positive rule 1 already accepts for
+a hand-typed `@Chatbot`, and it errs toward the bot answering rather than
+staying silent.
 
 `message.isMention` is pre-set from these; the core additionally runs its own
 `@<userName>` regex (case-insensitive) which, because `userName` defaults to
@@ -1445,7 +1483,7 @@ for one scratch space is worse than requiring the two to share it.
 | D6 | Error class from `errors[].code` first, status second; detail as `cause` | The error-response page maps meaning to codes, not statuses; `cause` keeps `moreInfo` for operators without leaking `backlog-js` types. | Status-only mapping; re-exporting `backlog-js` errors. |
 | D7 | No host-application hooks; `api(host)` is the only escape hatch | Engagement/subscription state is the `StateAdapter`'s job; drop prediction depends on private core keys. | Engagement callback, inbound observer, dedupe-key helpers. |
 | D8 | Numeric ids everywhere; host inside message and user ids | Issue keys change on project-key rename; the core's dedupe key has no thread component. | Issue keys in thread ids; host-less message ids. |
-| D9 | Mention = display name in text (left-bounded, case-sensitive) or assignment to the bot | Payloads carry only resolved names and an empty `notifications`; assignee changes arrive by display name. | `notifications`-based detection (never fires in production); case-insensitive match (Japanese names have no case, ASCII names would over-match). |
+| D9 | Mention = the bot in the webhook's `notifications[]` (any `reason`), display name in text (left-bounded, case-sensitive), or assignment to the bot | The webhook's `notifications[]` **is** populated (measured 2026-09-06) and is the only signal for a comment addressed through the notification field, which leaves no `@name` in the text; text and assignment still carry every delivery that has no notification, including an activity-API body replayed as a webhook. Assignee changes arrive by display name. Only explicit addressing lands in that list: an account merely **watching** an issue stayed out of `notifications[]` across a comment and two field-only `PATCH`es, while a non-watching user addressed on the same issue arrived with `reason: 2` (measured 2026-09-06), so no `reason` needs excluding. | Text and assignment only (silently ignores the notification field, the UI's normal way to address someone); filtering to `reason: 2` (drops reason codes not measured here for no gain, since assignment is already covered and watching was measured not to notify at all); case-insensitive match (Japanese names have no case, ASCII names would over-match). |
 | D10 | Types 1, 2, 3 and 18, 19, 20 processed, 4 optional deletion, rest ignored; register `activityTypeIds`, never `allEvent` | Only issue and pull-request activity maps to a thread; 14 has no per-issue comment; 17 repeats content; 21 was never observed (D-PR5). | `allEvent` (wiki/git/document noise). |
 | D11 | Two-step uploads; inbound `fetchData` through the port; `rehydrateAttachment` via API URL | Backlog attachments require auth to download; a URL is the only serialisable handle that survives queue round trips. | Public URLs (do not exist); `fetchMetadata` blobs. |
 | D12 | `:r`/`:u:` cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Backlog can edit an issue body, but `editMessage` semantics ("edit what I posted") do not fit rewriting a human's issue; `:u:` has no fetchable resource. | Mapping `editMessage(:r)` to Update Issue. |
@@ -1529,3 +1567,22 @@ for one scratch space is worse than requiring the two to share it.
     would have wanted stays unused. The `Unmeasured` entry in
     `.claude/rules/backlog-pull-request-facts.md` stands until somebody
     captures a body (docs/plans/pull-request-support.md §4 P3, §5 M1).
+17. ~~**D9 rule 6 accepts any `reason`** — confirm, or name the reason codes
+    to exclude.~~ **Settled**: any `reason` stands, and the candidate false
+    positive has been measured away. A second account watching an issue it
+    was neither assigned to nor named in appears in **no** `notifications[]`:
+    a plain comment, a priority-only `PATCH` and a description-only `PATCH`
+    on that issue all arrived with `notifications: []`, while the control —
+    the same kind of comment on the same issue, addressing a user who was not
+    watching it — carried that user with `reason: 2` (measured on a
+    development space, 2026-09-06). Watching is a separate mechanism end to
+    end: it creates no entry in the watcher's own `GET /notifications`
+    either, and `POST /watchings` produced no delivery on a hook registered
+    for types 1, 2, 3, 4, 14 and 17 — the issue types; no other type was
+    subscribed. So `notifications[]` names only users somebody addressed, as
+    far as the acts measured here, and every `reason` observed on a delivery
+    is an explicit act — 1 and 10 an assignment (issue, pull request), 2 and
+    11 a comment's notification field or a mention in its text. `<@project>`
+    is not a counter-example: it addresses every project member deliberately,
+    so a bot that is a project member is being spoken to by the same
+    definition rule 1 already uses for a hand-typed `@Chatbot`.

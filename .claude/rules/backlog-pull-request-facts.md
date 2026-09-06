@@ -93,9 +93,10 @@ so the webhook is the free source of the name the REST object lacks.
   (measured: one uploaded on create, one via a comment, both listed).
 - `notifications[]` on a REST comment **is populated** (`{ id, alreadyRead,
   reason, user, resourceAlreadyRead }`, reason 11 for a comment mention,
-  10 for assignment, 12 for creation) — unlike issue webhook payloads, where
-  it is always `[]`. A `<@U…>` in a comment notifies without
-  `notifiedUserId[]`, as for issues.
+  10 for assignment, 12 for creation), in the same shape a webhook delivery
+  carries at the top level (`backlog-webhook-facts.md` § Payload envelope,
+  measured 2026-09-06); the activity API is the form that reports `[]`. A
+  `<@U…>` in a comment notifies without `notifiedUserId[]`, as for issues.
 - `content` of a changelog comment is `""` in both REST and the activity
   (issues: `null` in the webhook, `""` in the API).
 - `GET …/comments/:commentId` and `DELETE …/comments/:commentId` **do not

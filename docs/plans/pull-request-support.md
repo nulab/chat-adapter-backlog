@@ -198,7 +198,8 @@ type BacklogRawMessage =
   — the kind segment in every message id is load-bearing, not cosmetic.
 - A pull-request comment's `changeLog` names an attachment but carries no id
   (§3.6, D-PR10), and the REST comment carries a populated `notifications[]`
-  where issue webhooks never do.
+  where the activity API reports `[]` (a webhook delivery carries the list
+  too, measured later on 2026-09-06).
 - Creating a pull request with `notifiedUserId[]` adds a system comment no
   activity announces, so `fetchMessages` and the webhook stream disagree by
   one entry; documented, not fixed.
