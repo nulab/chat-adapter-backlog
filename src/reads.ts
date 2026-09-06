@@ -521,7 +521,9 @@ function listedIssueRoot(
  * and deliberately not its pull requests (D-PR7): a pull-request list is per
  * repository, a coordinate a channel id does not carry, and
  * `api(host).listPullRequests(projectId, repositoryId, …)` is the route to
- * one.
+ * one — a `read`-bucket call, not a `search` one (measured 2026-09-06,
+ * `.claude/rules/backlog-pull-request-facts.md` "Rate limit"), so merging the
+ * two lists here would also mix two budgets behind one cursor.
  *
  * Deliberately does not sort or filter the port's response either: Get Issue
  * List draws on the **search** bucket (a documented example 150/min, far

@@ -209,13 +209,41 @@ Keep such suites small and sequential. Backlog's Update bucket allows on the
 order of 150 requests per user per minute, and a chatty live suite will hit
 HTTP 429 — see [Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/).
 
-The adapter's own live suite stays within roughly ten update-bucket calls:
-Get Project, Get Issue, then add, edit, star, unstar and delete one comment,
-and upload one small attachment and attach it before deleting that comment
-too. It creates no issues and touches no notifications, and it asserts that
-`adapter.rateLimit(host)` reports populated `read` and `update` buckets
+The adapter's own live suite has two sections, and each one skips itself.
+
+The **issue section** runs when `BACKLOG_HOST`, `BACKLOG_API_KEY` and
+`BACKLOG_LIVE_ISSUE_ID` are all set, and stays within roughly ten update-bucket
+calls: Get Project, Get Issue, then add, edit, star, unstar and delete one
+comment, and upload one small attachment and attach it before deleting that
+comment too. It creates no issues and touches no notifications, and it asserts
+that `adapter.rateLimit(host)` reports populated `read` and `update` buckets
 afterwards. Point `BACKLOG_LIVE_ISSUE_ID` at a scratch issue: the suite
 comments on it.
+
+The **pull-request section** runs when `BACKLOG_LIVE_PULL_REQUEST` is set on
+top of those three, and stays within eight update-bucket calls: Get Git
+Repository, Get Pull Request, then add, edit, star and unstar one comment, then
+upload one small attachment and attach it to a second comment, and one comment
+as a rate-limit probe. It also asserts what the adapter refuses —
+`deleteMessage` on a pull-request thread throws `AdapterError` with code
+`UNSUPPORTED_OPERATION` without sending anything, which an empty
+`adapter.rateLimit(host)` proves — and that listing pull requests spends the
+`read` bucket and leaves `search` untouched, the opposite of `GET /issues`.
+
+**Nothing that section creates is cleaned up**, because there is nothing to
+clean it up with: Backlog has no endpoint that deletes a pull request or one of
+its comments, and `DELETE …/pullRequests/:number/comments/:commentId` answers
+400 with error code 6 `Undefined resource`
+(`.claude/rules/backlog-pull-request-facts.md`, measured 2026-09-06). Every
+comment the section adds stays on the pull request for good, so point
+`BACKLOG_LIVE_PULL_REQUEST` at a scratch pull request, never a real one.
+
+The variable is `<repositoryId>:<number>` — the two coordinates the thread-id
+grammar writes as `pr:<repositoryId>:<number>`. Backlog keys every
+pull-request endpoint by a third one, the project, and no endpoint derives it
+from a repository id, so the section reads it from `BACKLOG_LIVE_ISSUE_ID`'s
+issue. **The scratch pull request must therefore live in the same project as
+the scratch issue.**
 
 ## Backlog credentials
 
@@ -247,6 +275,7 @@ You need a Backlog space and a personal API key.
    | `BACKLOG_BOT_USER_NAME` | yes                     | The bot's display name as Backlog renders it. Mentions arrive as resolved text, so this is what the mention pattern matches.         |
    | `BACKLOG_WEBHOOK_SECRET`| unless a verifier is set| Secret carried in the webhook URL's `token` parameter. Backlog signs nothing, so this is the only sender-side check available.       |
    | `BACKLOG_LIVE_ISSUE_ID` | live suite only         | Numeric id of a scratch issue the opt-in live suite comments on.                                                                     |
+   | `BACKLOG_LIVE_PULL_REQUEST` | live suite only     | `<repositoryId>:<number>` of a scratch pull request in the same project as `BACKLOG_LIVE_ISSUE_ID`. The suite comments on it and cannot clean up: Backlog has no delete. |
 
    Generate the webhook secret with `openssl rand -hex 32` and treat it as a
    credential: it is the entire authenticity check on the ingress path, because
