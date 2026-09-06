@@ -14,6 +14,7 @@ import {
   pullRequestCommented,
   pullRequestCommentWithAttachment,
   pullRequestDescriptionEdited,
+  pullRequestMultiFieldUpdated,
   pullRequestStatusChanged,
   pullRequestUpdated,
   RESOLVED_MENTION,
@@ -461,7 +462,7 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
 
   it('opening a pull request whose body carries no assignee key at all is not a mention', () => {
     // The activity form of type 18 has no `assignee` key (measured
-    // 2026-09-07), so a replayed activity reaches the mapping without one;
+    // 2026-09-06), so a replayed activity reaches the mapping without one;
     // the key is deleted by hand because the builders model the webhook form.
     const payload = pullRequestAdded();
     delete (payload['content'] as Record<string, unknown>)['assignee'];
@@ -604,19 +605,39 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
     expect(fields.isMention).toBe(false);
   });
 
-  it('an assignment Backlog leaves out of a multi-field update is missed, which is accepted', () => {
-    // The one shape §5.4 rule 4 documents as under-reported: a `PATCH` that
-    // set the assignee alongside another field was once measured to report
-    // only the other field. Reading `content.assignee` to cover it would make
-    // every edit of a bot-assigned pull request a mention, which reproduces
-    // and this does not, so the miss stands and is pinned here rather than
-    // left to be rediscovered.
+  it('a multi-field update that changed no assignee and notified nobody is not a mention', () => {
     const fields = buildInboundMessageFields(
-      activityOfType(19, pullRequestUpdated({ assignee: FIXTURE.bot })),
+      activityOfType(
+        19,
+        pullRequestMultiFieldUpdated({ assignee: FIXTURE.bot })
+      ),
       pullRequestInput()
     );
 
+    expect(fields.changes.map((change) => change.field)).toEqual([
+      'summary',
+      'description',
+      'issue',
+    ]);
     expect(fields.isMention).toBe(false);
+  });
+
+  it('a multi-field update naming no assignee change is a mention when the delivery notified the bot', () => {
+    const fields = buildInboundMessageFields(
+      activityOfType(
+        19,
+        pullRequestMultiFieldUpdated({
+          assignee: FIXTURE.bot,
+          notifications: [{ user: FIXTURE.bot, reason: 10 }],
+        })
+      ),
+      pullRequestInput()
+    );
+
+    expect(fields.changes.some((change) => change.field === 'assignee')).toBe(
+      false
+    );
+    expect(fields.isMention).toBe(true);
   });
 
   it('a comment on a pull request the bot is assigned to is not a mention', () => {
@@ -656,7 +677,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
 
   it('an update is decided by its changes entry alone, whatever assignee a body carries', () => {
     // An issue webhook does carry the standing `content.assignee` on type 2
-    // (measured 2026-09-07), but the issue fixtures model the key set the
+    // (measured 2026-09-06), but the issue fixtures model the key set the
     // adapter's issue tests were written against, so it is added by hand: an
     // issue and a pull request must answer the same operation the same way.
     const payload = descriptionEdited();

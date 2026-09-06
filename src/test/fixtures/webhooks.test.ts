@@ -288,39 +288,51 @@ describe('webhook fixtures', () => {
 });
 
 /**
- * The pull-request builders stand in for the **webhook** form measured on
- * 2026-09-07 (`.claude/rules/backlog-pull-request-facts.md` "What each
- * pull-request operation emits"), which is the activity API form plus
- * `assignee`, `base`, `branch` and `diff` on all three types alike.
+ * The pull-request builders stand in for the **webhook** form measured on a
+ * development space, 2026-09-06 (`.claude/rules/backlog-pull-request-facts.md`
+ * "What each pull-request operation emits"), which is the activity API form
+ * plus `assignee`, `base`, `branch` and `diff` on all three types alike.
  */
 describe('pull-request webhook fixtures', () => {
-  it('carries one content key set on all three types, with the repository name on every one', () => {
+  it('carries the activity key set plus the four webhook-only keys on all three types, with the repository name on every one', () => {
+    const activityFormKeys = [
+      'changes',
+      'comment',
+      'description',
+      'id',
+      'issue',
+      'number',
+      'repository',
+      'summary',
+    ];
+    const webhookOnlyKeys = ['assignee', 'base', 'branch', 'diff'];
+
     for (const payload of [
       pullRequestAdded(),
       pullRequestUpdated(),
       pullRequestCommented(),
     ]) {
       const content = payload['content'] as Record<string, unknown>;
-      expect(Object.keys(content).sort()).toEqual([
-        'assignee',
-        'base',
-        'branch',
-        'changes',
-        'comment',
-        'description',
-        'diff',
-        'id',
-        'issue',
-        'number',
-        'repository',
-        'summary',
-      ]);
+      expect(Object.keys(content).sort()).toEqual(
+        [...activityFormKeys, ...webhookOnlyKeys].sort()
+      );
       expect(content['repository']).toMatchObject({
         id: FIXTURE.repositoryId,
         name: FIXTURE.repositoryName,
       });
-      expect(content['base']).toBe('main');
-      expect(typeof content['branch']).toBe('string');
+    }
+  });
+
+  it('names a target branch and a source branch that are not the same branch', () => {
+    for (const payload of [
+      pullRequestAdded(),
+      pullRequestUpdated(),
+      pullRequestCommented(),
+    ]) {
+      const content = payload['content'] as Record<string, unknown>;
+      expect(content['base']).toEqual(expect.any(String));
+      expect(content['branch']).toEqual(expect.any(String));
+      expect(content['base']).not.toBe(content['branch']);
     }
   });
 

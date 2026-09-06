@@ -66,7 +66,7 @@ export interface InboundMessageFields {
  * the widest shape that carries them. Written structurally rather than as a
  * union of the schemas' types so a field one schema does not declare — the
  * standing `assignee` a webhook puts on issue types 2 and 3, which the issue
- * schemas do not name because nothing reads it (measured 2026-09-07) — costs
+ * schemas do not name because nothing reads it (measured 2026-09-06) — costs
  * a `undefined` here instead of a second builder.
  */
 interface OptionalContent {
@@ -151,11 +151,12 @@ export interface MentionEvidence {
    *
    * Types 2, 3, 19 and 20 all carry the same key as the **standing**
    * assignee, repeated on every delivery whether or not the assignment
-   * changed (measured 2026-09-07 on both kinds), so it is not read there: a
+   * changed (measured 2026-09-06 on both kinds), so it is not read there: a
    * multi-field `PATCH` on a bot-assigned pull request carries the bot in
    * `content.assignee` and notified nobody. An assignment on those types
-   * reports itself in `changes[]` instead, which the rule below reads, so the
-   * two kinds answer the same operation the same way.
+   * reports itself in `changes[]` instead, and one `changes[]` leaves out is
+   * caught by the `notifications[]` rule, so the two kinds answer the same
+   * operation the same way without reading a standing state as an event.
    */
   assigneeId: number | undefined;
   changes: BacklogChange[];
