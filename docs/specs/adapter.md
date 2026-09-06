@@ -561,11 +561,16 @@ restricting rule 6 to `reason: 2` would change no assignment outcome — it
 could only drop a directed notification whose code has not been measured
 here, and would add a second place that has to track Backlog's reason table
 (`.claude/rules/backlog-api-facts.md` lists 1–6, 9–13 and gaps at 7, 8, 16).
-The known cost is the mirror image: any future Backlog behaviour that
-notifies the bot **without** a human addressing it — a watch subscription
-being the obvious candidate, unmeasured — would read as a mention. That is
-the same class of false positive rule 1 already accepts for a hand-typed
-`@Chatbot`, and it errs toward the bot answering rather than staying silent.
+The obvious candidate for a false positive — a **watch** subscription
+notifying the bot nobody addressed — does not exist: an issue watched by an
+account that was neither assigned to it nor named in it delivered a comment
+and two field-only `PATCH`es with `notifications: []`, while a non-watching
+user addressed on the same issue arrived with `reason: 2` (measured
+2026-09-06, §15 question 17, settled). What remains is a Backlog behaviour
+nobody has seen yet putting the bot there unaddressed; that would read as a
+mention, which is the same class of false positive rule 1 already accepts for
+a hand-typed `@Chatbot`, and it errs toward the bot answering rather than
+staying silent.
 
 `message.isMention` is pre-set from these; the core additionally runs its own
 `@<userName>` regex (case-insensitive) which, because `userName` defaults to
@@ -1478,7 +1483,7 @@ for one scratch space is worse than requiring the two to share it.
 | D6 | Error class from `errors[].code` first, status second; detail as `cause` | The error-response page maps meaning to codes, not statuses; `cause` keeps `moreInfo` for operators without leaking `backlog-js` types. | Status-only mapping; re-exporting `backlog-js` errors. |
 | D7 | No host-application hooks; `api(host)` is the only escape hatch | Engagement/subscription state is the `StateAdapter`'s job; drop prediction depends on private core keys. | Engagement callback, inbound observer, dedupe-key helpers. |
 | D8 | Numeric ids everywhere; host inside message and user ids | Issue keys change on project-key rename; the core's dedupe key has no thread component. | Issue keys in thread ids; host-less message ids. |
-| D9 ⚑ | Mention = the bot in the webhook's `notifications[]` (any `reason`), display name in text (left-bounded, case-sensitive), or assignment to the bot | The webhook's `notifications[]` **is** populated (measured 2026-09-06) and is the only signal for a comment addressed through the notification field, which leaves no `@name` in the text; text and assignment still carry every delivery that has no notification, including an activity-API body replayed as a webhook. Assignee changes arrive by display name. | Text and assignment only (silently ignores the notification field, the UI's normal way to address someone); filtering to `reason: 2` (drops unmeasured reason codes for no gain, since assignment is already covered); case-insensitive match (Japanese names have no case, ASCII names would over-match). |
+| D9 | Mention = the bot in the webhook's `notifications[]` (any `reason`), display name in text (left-bounded, case-sensitive), or assignment to the bot | The webhook's `notifications[]` **is** populated (measured 2026-09-06) and is the only signal for a comment addressed through the notification field, which leaves no `@name` in the text; text and assignment still carry every delivery that has no notification, including an activity-API body replayed as a webhook. Assignee changes arrive by display name. Only explicit addressing lands in that list: an account merely **watching** an issue stayed out of `notifications[]` across a comment and two field-only `PATCH`es, while a non-watching user addressed on the same issue arrived with `reason: 2` (measured 2026-09-06), so no `reason` needs excluding. | Text and assignment only (silently ignores the notification field, the UI's normal way to address someone); filtering to `reason: 2` (drops reason codes not measured here for no gain, since assignment is already covered and watching was measured not to notify at all); case-insensitive match (Japanese names have no case, ASCII names would over-match). |
 | D10 | Types 1, 2, 3 and 18, 19, 20 processed, 4 optional deletion, rest ignored; register `activityTypeIds`, never `allEvent` | Only issue and pull-request activity maps to a thread; 14 has no per-issue comment; 17 repeats content; 21 was never observed (D-PR5). | `allEvent` (wiki/git/document noise). |
 | D11 | Two-step uploads; inbound `fetchData` through the port; `rehydrateAttachment` via API URL | Backlog attachments require auth to download; a URL is the only serialisable handle that survives queue round trips. | Public URLs (do not exist); `fetchMetadata` blobs. |
 | D12 | `:r`/`:u:` cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Backlog can edit an issue body, but `editMessage` semantics ("edit what I posted") do not fit rewriting a human's issue; `:u:` has no fetchable resource. | Mapping `editMessage(:r)` to Update Issue. |
@@ -1562,12 +1567,21 @@ for one scratch space is worse than requiring the two to share it.
     would have wanted stays unused. The `Unmeasured` entry in
     `.claude/rules/backlog-pull-request-facts.md` stands until somebody
     captures a body (docs/plans/pull-request-support.md §4 P3, §5 M1).
-17. **D9 rule 6 accepts any `reason`** — confirm, or name the reason codes to
-    exclude. What is measured: a comment addressed through the notification
-    field arrives with `reason: 2`, an assignee change with `reason: 1`, and
-    both name the recipient in the webhook's top-level `notifications[]`
-    (2026-09-06). What is not: whether Backlog ever puts a user there for
-    something nobody addressed to them — a watch subscription being the
-    candidate. If it does, that delivery reads as a mention. Measuring it
-    needs a second account watching an issue it is neither assigned to nor
-    named in, and one update to that issue.
+17. ~~**D9 rule 6 accepts any `reason`** — confirm, or name the reason codes
+    to exclude.~~ **Settled**: any `reason` stands, and the candidate false
+    positive has been measured away. A second account watching an issue it
+    was neither assigned to nor named in appears in **no** `notifications[]`:
+    a plain comment, a priority-only `PATCH` and a description-only `PATCH`
+    on that issue all arrived with `notifications: []`, while the control —
+    the same kind of comment on the same issue, addressing a user who was not
+    watching it — carried that user with `reason: 2` (measured on a
+    development space, 2026-09-06). Watching is a separate mechanism end to
+    end: it creates no entry in the watcher's own `GET /notifications`
+    either, and `POST /watchings` fires no webhook at all. So
+    `notifications[]` names only users somebody addressed, and every
+    `reason` observed on a delivery is an explicit act — 1 and 10 an
+    assignment (issue, pull request), 2 and 11 a comment's notification field
+    or a mention in its text. `<@project>` is not a counter-example: it
+    addresses every project member deliberately, so a bot that is a project
+    member is being spoken to by the same definition rule 1 already uses for
+    a hand-typed `@Chatbot`.

@@ -149,6 +149,25 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
   notification field leaves **no `@name` in the stored text at all** (measured
   2026-09-06), so text matching alone misses the UI's normal way of addressing
   somebody.
+- **Watching an issue does not put the watcher in `notifications[]`.** An
+  account watching an issue it was neither assigned to nor named in was
+  absent from all three deliveries it should have seen if watching notified:
+  a plain comment, a priority-only `PATCH` and a description-only `PATCH`
+  arrived with `notifications: []`. The control on the same issue — the same
+  kind of comment addressing a user who was *not* watching — carried that
+  user with `reason: 2` (measured 2026-09-06). `notifications[]` therefore
+  reports explicit addressing only.
+- Watching is a separate mechanism from notifications end to end: the watcher
+  got no entry in its own `GET /notifications` either, only
+  `resourceAlreadyRead` and `lastContentUpdated` moving on its
+  `GET /users/:id/watchings` record, and `POST /watchings` fires no webhook
+  of any type (measured 2026-09-06, against types 1, 2, 3, 4, 14 and 17).
+- `reason` codes observed on a delivery, all of them explicit acts: **1**
+  assigned on an issue, **2** a comment's notification field or a `<@U…>` in
+  its text, **10** assigned on a pull request, **11** a pull-request
+  comment's notification field or text mention (measured 2026-09-06). The
+  full code table is in `backlog-api-facts.md`; these are the ones a
+  delivery has actually carried here.
 
 ## Delivery semantics
 

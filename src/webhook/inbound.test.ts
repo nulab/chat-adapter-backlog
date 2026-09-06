@@ -779,6 +779,18 @@ describe('mention detection from notifications[] (§5.4 rule 6)', () => {
     expect(fields.isMention).toBe(true);
   });
 
+  it('a bot that only watches the issue is not mentioned: the delivery names nobody', () => {
+    const comment = commented(
+      issueCommented({ text: 'no @ here', notifications: [] })
+    );
+    const fieldOnlyUpdate = updated(descriptionEdited({ notifications: [] }));
+
+    expect(buildInboundMessageFields(comment, input()).isMention).toBe(false);
+    expect(buildInboundMessageFields(fieldOnlyUpdate, input()).isMention).toBe(
+      false
+    );
+  });
+
   it('an activity body replayed from the activity API carries no notifications and falls back to the text', () => {
     const withoutText = commented(issueCommented({ text: 'no @ here' }));
     const withText = commented(
