@@ -416,7 +416,11 @@ per §9.2 so a message is delivered rather than lost.
 The body is one Activity object as returned by
 [Get Recent Updates](https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/);
 Backlog publishes no dedicated webhook-payload page, and measured payloads
-match the activity shape field for field (measured 2026-08-28,
+match the activity shape in the envelope but **not** field for field: a
+webhook body additionally carries the issue's snapshot (`assignee`, `status`,
+`priority`, …), spells one key `externalFileLinks` where the activity form says
+`external_file_links`, and omits the activity form's `field_text` inside
+`changes[]` (measured 2026-09-06,
 `.claude/rules/backlog-webhook-facts.md`). The schema is **tolerant of unknown
 keys** everywhere (`field_text`, `type` inside `changes[]`,
 `shared_files`, `status`, `priority` … are all seen in real payloads) and
@@ -438,7 +442,7 @@ message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
 | Field | Type 1 | Type 2/3 | Type 4 | Type 18 | Type 19/20 |
 | --- | --- | --- | --- | --- | --- |
 | `content.summary`, `content.description` | read (`description` nullable) | ignored | — | read | ignored |
-| `content.assignee` | `{ id, name } \| null`, optional | ignored (assignee changes arrive in `changes`) | — | not carried by the activity form (measured 2026-09-06); read if a webhook ever carries it | ignored |
+| `content.assignee` | `{ id, name, … } \| null`; always sent on a webhook, `null` when unassigned (measured 2026-09-06), optional in the schema because the activity form omits it | sent, same shape; ignored (assignee changes arrive in `changes`) | — | not carried by the activity form (measured 2026-09-06); read if a webhook ever carries it | ignored |
 | `content.comment` | absent | `{ id: number, content: string \| null } \| null` | — | `null` | `{ id, content } \| null` |
 | `content.changes[]` | absent | `{ field: string, new_value?: string \| number \| null, old_value?: … }[]` optional | — | `[]` | same shape as 2/3 |
 | `content.attachments[]` | `{ id, name, size }[]` optional | same | — | optional (not measured on the activity form) | optional |
@@ -502,10 +506,13 @@ Behavioural consequences of measured facts (details and dates in
   `https://<host>/api/v2/projects/<projectId>/git/repositories/<repositoryId>/pullRequests/<number>/attachments/<id>`
   on a pull request (§6.6), and `fetchData()` downloading via the port. MIME
   type is unknown until download.
-- **Type-1 `content` from the activity API lacks `assignee`** while the webhook
-  carries it (measured 2026-08-28). The schema keeps it optional so replaying
-  an activity body works; assignment-based mention then relies on the webhook
-  form only.
+- **The issue snapshot is webhook-only.** `assignee`, `status`, `priority` and
+  the rest of the issue's post-event state are on every type 1, 2, 3 and 17
+  delivery — `assignee` always present and `null`, not absent, when nobody is
+  assigned (measured 2026-09-06) — and on none of the bodies `GET
+  /space/activities` returns (measured 2026-08-28). The schema keeps them
+  optional so replaying an activity body works; assignment-based mention then
+  relies on the webhook form only.
 - **Pull-request activities** (`.claude/rules/backlog-pull-request-facts.md`,
   measured 2026-09-06 on the activity API form; the webhook form is
   unmeasured): merging — by the UI or by pushing the merge to the base branch

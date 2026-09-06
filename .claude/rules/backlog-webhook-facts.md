@@ -86,6 +86,17 @@ every type:
   the types that carry it at all, 2, 3 and 17 — `diff`. Code that reads the
   issue's current state off the payload works on a delivery and silently reads
   `undefined` on a replayed activity.
+
+  Every snapshot key is present on **every** issue-side delivery, and an empty
+  field arrives as `null` rather than as a missing key: 41 deliveries (13 type
+  1, 16 type 2, 10 type 3, 2 type 17) captured on a development space,
+  2026-09-06, and none of them omits one. So `"assignee" in content`
+  distinguishes a webhook body from an activity body and nothing else — test
+  `content.assignee != null` for "somebody is assigned". The values are the
+  issue's state **after** the event, not before it: on an assignee change the
+  snapshot's `assignee` already equals that delivery's
+  `changes[field="assigner"]` `new_value`. It is a full user object
+  (`id`, `userId`, `name`, `roleType`, `lang`), not an `{ id, name }` pair.
 - Key convention differs on one field: webhook `externalFileLinks`, activity
   `external_file_links`.
 - `changes[]` entries on the activity form carry an extra `field_text`, the
@@ -98,11 +109,16 @@ answer who was notified even when the original delivery could.
 ## What each issue operation emits
 
 - Issue created → type 1, `content: { id, key_id, summary, description }` plus
-  `assignee` in the webhook when set. Type 1 activities returned by
-  `GET /space/activities` and `GET /projects/:id/activities` lack `assignee`
-  (100 most recent type-1 activities on a production space, measured
-  2026-08-28). The creation-time assignee is not recoverable from any API;
-  `GET /issues/:id` returns the current one.
+  the issue snapshot every webhook body carries, `assignee` among them — see
+  "Webhook versus Get Recent Updates" for the list and for the rule that an
+  empty field is `null` rather than absent. Type 1 is the one issue type with
+  no `comment`, `changes` or `diff` key.
+  The snapshot is what makes the **creation-time** assignee readable at all: a
+  type-1 activity replayed from `GET /space/activities` or
+  `GET /projects/:id/activities` has no `assignee` (100 most recent type-1
+  activities on a production space, measured 2026-08-28), and `GET /issues/:id`
+  answers with the current assignee, which a later reassignment has moved. Take
+  it off the delivery or not at all.
 - Plain comment → type 3 with `content.comment: { id, content }` and
   `content.changes: []`.
 - Status change, alone or together with a comment → type 2 with **both**
@@ -323,7 +339,7 @@ label a user sees, and only three fields carry an id:
 
 | type | name | `content` shape |
 | --- | --- | --- |
-| 1 | Issue Created | `{ id, key_id, summary, description }`; webhook adds `assignee` (measured) |
+| 1 | Issue Created | `{ id, key_id, summary, description }`; no `comment`, `changes` or `diff` |
 | 2 | Issue Updated | `{ id, key_id, summary, description, comment{id,content}, changes[], attachments[], shared_files[], external_file_links[] }` |
 | 3 | Issue Commented | same as 2; `comment.content` holds the text |
 | 4 | Issue Deleted | `{ id, key_id }` |
@@ -332,4 +348,7 @@ label a user sees, and only three fields carry an id:
 
 Names: https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/
 (filter range `type(1-49)`; ids 27–33 undocumented). Shapes: `backlog-js`
-0.20.1 `Entity.Activity`.
+0.20.1 `Entity.Activity` — which is the **activity** shape. A webhook body for
+1, 2, 3 or 17 additionally carries the issue snapshot (`assignee`, `status`,
+`priority`, …) and spells the links key `externalFileLinks`; see "Webhook
+versus Get Recent Updates".
