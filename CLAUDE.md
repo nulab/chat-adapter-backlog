@@ -454,15 +454,18 @@ Activity](https://developer.nulab.com/docs/backlog/api/2/get-activity/)) that
 matter here: **1** Issue Created, **2** Issue Updated, **3** Issue Commented,
 **4** Issue Deleted, **14** Issue Multi Updated, **18** Pull Request Added,
 **19** Pull Request Updated, **20** Comment Added on Pull Request. **14** is
-the only one whose single delivery stands for several issues: a bulk update
+the only one whose single delivery can stand for several issues: a bulk update
 from the issue list emits one type 14 naming every issue in `content.link[]`
 and no type 2 or 3 for any of them, so ingress fans it out into one message
-per entry (D22). **17** Comment Notification Added is acknowledged, not
-dispatched. Two routes to addressing somebody on a comment were measured, and
-only one of them emits it: picking recipients while posting the comment
-produces a plain type 3, while adding recipients to an **already existing**
-comment via `POST /issues/:id/comments/:commentId/notifications` produces a
-type 17 that repeats that comment's own id and text
+per entry (D22). The screen decides that type, not the count — one issue
+updated from the issue list is a type 14 with a one-entry `link[]`, while the
+same field changed on the issue's own page is a type 2. **17** Comment
+Notification Added is acknowledged, not dispatched. Two routes to addressing
+somebody on a comment were measured, and only one of them emits it: picking
+recipients while posting the comment produces a plain type 3, while adding
+recipients to an **already existing** comment via
+`POST /issues/:id/comments/:commentId/notifications` produces a type 17 that
+repeats that comment's own id and text
 (`.claude/rules/backlog-webhook-facts.md`). What else may emit it is not
 established here. It is not the "project notifications" of the package
 description. **21** is documented as "Pull Request Deleted" and typed by

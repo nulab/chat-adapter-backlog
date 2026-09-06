@@ -20,6 +20,8 @@ import { createInMemoryBacklogApi } from './client/in-memory';
 import { conformanceFixture } from './client/conformance';
 import { encodeMessageId } from './ids';
 import {
+  bulkFieldsChanged,
+  bulkStatusChangedOnOneIssue,
   FIXTURE,
   gitPushed,
   issueCommented,
@@ -851,6 +853,40 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
       `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`,
       `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.otherIssueId}`,
     ]);
+  });
+
+  it('a bulk update of three issues dispatches three times, one thread each', async () => {
+    const { adapter, chat } = await webhookAdapter();
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(bulkFieldsChanged())
+    );
+
+    expect(response.status).toBe(200);
+    expect(chat.processMessage).toHaveBeenCalledTimes(3);
+    expect(threadIdsProcessedBy(chat)).toEqual([
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`,
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.otherIssueId}`,
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.thirdIssueId}`,
+    ]);
+  });
+
+  it('a bulk update of one issue is dispatched once and still as a bulk update', async () => {
+    const { adapter, chat } = await webhookAdapter();
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(bulkStatusChangedOnOneIssue())
+    );
+
+    expect(response.status).toBe(200);
+    expect(chat.processMessage).toHaveBeenCalledTimes(1);
+    const [message] = await Promise.all(
+      messageFactoriesOf(chat).map((factory) => factory())
+    );
+    // A single-issue batch reaches a handler as `bulkUpdate`, not as the
+    // `webhook` kind a type 2 produces: what a handler reads from `raw` may
+    // not depend on how many issues the person happened to tick.
+    expect(message?.raw?.kind).toBe('bulkUpdate');
   });
 
   it('a bulk update made by the bot itself dispatches nothing', async () => {

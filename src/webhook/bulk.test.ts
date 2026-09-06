@@ -1,7 +1,12 @@
 import { Message as MessageCtor } from 'chat';
 import { describe, expect, it } from 'vitest';
 
-import { FIXTURE, issueMultiUpdated } from '../test/fixtures/webhooks';
+import {
+  bulkFieldsChanged,
+  bulkStatusChangedOnOneIssue,
+  FIXTURE,
+  issueMultiUpdated,
+} from '../test/fixtures/webhooks';
 import { buildBulkUpdateMessage, bulkUpdateTargets } from './bulk';
 import { parseActivity } from './payload';
 
@@ -130,6 +135,48 @@ describe('buildBulkUpdateMessage', () => {
     const raw = message?.raw as { issueId: number; payload: object };
     expect(raw.issueId).toBe(FIXTURE.issueId);
     expect(raw.payload).toEqual(payload);
+  });
+
+  it('fans a batch of three issues out into one message per issue', () => {
+    const messages = messagesOf(bulkFieldsChanged());
+
+    expect(messages.map((message) => message.threadId)).toEqual([
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`,
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.otherIssueId}`,
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.thirdIssueId}`,
+    ]);
+  });
+
+  it('makes one message out of a bulk update that touched a single issue', () => {
+    // Ticking one issue on the issue list is a type 14 like any other batch —
+    // the screen decides the activity type, not the number of issues — so the
+    // fan-out is the path a one-issue update takes too.
+    const messages = messagesOf(bulkStatusChangedOnOneIssue());
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.id).toBe(
+      `${FIXTURE.host}:issue:${FIXTURE.issueId}:c3101`
+    );
+    expect(messages[0]?.raw?.changes).toEqual([
+      { field: 'status', newValue: '3', oldValue: null },
+    ]);
+  });
+
+  it('leaves the batch notifications whole on every message, dividing them between no issues', () => {
+    const payload = bulkFieldsChanged();
+
+    const messages = messagesOf(payload);
+
+    for (const message of messages) {
+      const raw = message.raw as { payload: Record<string, unknown> };
+      expect(raw.payload['notifications']).toEqual(payload['notifications']);
+    }
+  });
+
+  it('mentions the bot on every issue of a batch that assigned it to the bot', () => {
+    const messages = messagesOf(bulkFieldsChanged({ assignee: FIXTURE.bot }));
+
+    expect(messages.every((message) => message.isMention)).toBe(true);
   });
 
   it('mentions the bot when the bulk comment names it', () => {

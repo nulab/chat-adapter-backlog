@@ -150,7 +150,10 @@ core's `@<id>` pattern would be wrong for every space but one.
    issues in bulk from the issue list, Backlog sends a *single* webhook for the
    whole batch and no per-issue event at all — so without 14 a bulk status
    change reaches no handler, while the comment it wrote on each issue is still
-   there for `thread.messages()` to find. With 14 registered, the adapter
+   there for `thread.messages()` to find. That holds even for a batch of
+   **one**: an update made from the issue list is a type 14 whether it ticked
+   one issue or fifty, so leaving 14 unregistered loses single-issue updates
+   too, as long as they were made from that screen. With 14 registered, the adapter
    unpacks that delivery into one message per issue, each in its own thread. A
    batch of fifty issues is fifty handler runs from one request, and if your
    handler calls the Backlog API each time, fifty calls against a per-minute

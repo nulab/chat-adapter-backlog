@@ -147,6 +147,17 @@ function bulkMessageId(
  * the comment it writes carries none (measured 2026-09-06). Nothing is
  * fetched to find out, so this needs no `SubjectClient` — which is also why
  * the caller does not have to build one per issue in the batch.
+ *
+ * The delivery's `notifications[]` is **not** divided between the messages and
+ * nothing per-issue is derived from it. A batch that changed the assignee
+ * carries one reason-1 entry per issue (measured 2026-09-07), so the array
+ * looks like it pairs with `link[]` positionally — but an entry holds only
+ * `id`, `alreadyRead`, `reason`, `resourceAlreadyRead` and `user`, names no
+ * issue, and repeats the same user unchanged, so a pairing would be an
+ * ordering assumption Backlog documents nowhere and a redelivery could break
+ * silently. The whole array stays reachable on every message through
+ * `raw.payload`, where it means what it is: something about the batch
+ * (docs/specs/adapter.md §5.3, D22).
  */
 export function buildBulkUpdateMessage(
   activity: IssueMultiUpdatedActivity,

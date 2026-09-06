@@ -460,7 +460,12 @@ message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
 | `notifications[]` (top level, not under `content`) | `{ user: { id }, reason? }[]`, read for mention detection (§5.4 rule 6); never required, never a 400 | same | same | same | same |
 
 Type 14 is off that table because its `content` shares no field with the
-others (measured on a development space, 2026-09-06):
+others (measured on a development space, 2026-09-06). It is also not decided by
+how many issues the batch covered: **one** issue updated from the issue list
+arrives as a type 14 with a single-entry `link[]`, while the same field changed
+on that issue's own page arrives as a type 2 (measured 2026-09-07). The screen
+the edit was made from is what picks the type, so nothing may read a `link[]`
+of length 1 as "really a type 2":
 
 | Field | Type 14 |
 | --- | --- |
@@ -470,7 +475,8 @@ others (measured on a development space, 2026-09-06):
 | `content.comment` | `{ content: string \| null }` optional — the text as typed, with **no `id`**; the ids are on the entries |
 | `content.changes[]` | `{ field, new_value?, type }[]` optional, describing the batch; **no `old_value`** |
 | `content.tx_id` | the transaction, string or number; not read |
-| `content.individual_update` | boolean, webhook-only, `false` on every measured delivery; read as data, never branched on |
+| `content.individual_update` | boolean, webhook-only, `false` on all six measured deliveries; the bulk update screen has no per-issue value entry, so no known operation produces `true`; read as data, never branched on |
+| `notifications[]` (on the envelope, not `content`) | `[]` when the batch changed no assignee; one reason-1 entry **per issue** when it did, the same user repeated. An entry has `id`, `alreadyRead`, `reason`, `resourceAlreadyRead` and `user` and names **no issue** |
 
 ### 5.3 Activity-type mapping
 
@@ -529,8 +535,31 @@ Behavioural consequences of measured facts (details and dates in
   entry's `new_value` is a status **id** written as a string (`"4"`) while an
   `assigner` entry's is a display name, the same asymmetry §3.5 records for
   types 2 and 3, which is why the same `assigner` mention rule applies
-  unchanged. `individual_update` is webhook-only and was `false` on every
-  measured delivery; nothing branches on it.
+  unchanged: the notation is type 2's throughout, and the missing `old_value`
+  is the only difference between the two types' entries (measured 2026-09-07).
+  `individual_update` is webhook-only and was `false` on all six measured
+  deliveries; nothing branches on it.
+- **N is 1 as often as it is 50.** A single issue ticked on the issue list is
+  a type 14 with one `link[]` entry (measured 2026-09-07), and it takes this
+  path like any other batch — one `chat.processMessage` carrying
+  `raw.kind: "bulkUpdate"`, not the `webhook` kind a type 2 produces. What a
+  handler reads out of `raw` must not depend on how many issues the person
+  happened to tick.
+- **The batch's `notifications[]` is not divided** (D22). It is `[]` unless the
+  batch changed the assignee; when it did, it holds one reason-1 entry per
+  issue, the same user repeated (measured 2026-09-07). That is one entry per
+  `link[]` entry, which looks like a pairing — but an entry carries `id`,
+  `alreadyRead`, `reason`, `resourceAlreadyRead` and `user` and names no issue,
+  so the correspondence exists only in the order, which Backlog documents
+  nowhere and a redelivery need not preserve. So no message gets "its"
+  notification and no per-issue field is derived from the array; it reaches
+  every message whole through `raw.payload`, where it means what it is — a
+  fact about the batch. A rule in
+  §5.4 that read `notifications[]` for mention detection would therefore mark
+  **every** message of a batch that assigned the bot as a mention. That is the
+  same answer rule 3's `assigner` comparison already gives for the same batch,
+  because a bulk update assigns every issue in it to the same person, so the
+  undivided array costs nothing there.
 - **The `:u:` path is rare.** Every measured field change carried a comment id;
   the `:u:` id exists so an update without one is still a well-formed message
   rather than a 400.
@@ -1550,7 +1579,7 @@ for one scratch space is worse than requiring the two to share it.
 | D17 | Measurements live in `.claude/rules/*.md`, referenced here | One place to re-measure; this spec states consequences, not evidence. | Duplicating measurements here. |
 | D18 | `processMessageUpdated` unsupported | Comment edits emit no webhook (measured 2026-09-03; pull-request comment edits likewise, 2026-09-06); there is nothing to deliver. | Polling for edits (search-bucket cost, no cursor finer than a day). |
 | D19 | The space is taken from `?host=` alone; the payload is **not** cross-checked against it | No body field identifies the space, and the one candidate for a consistency check cannot carry it: `project.projectKey` would have to be compared against the configured host's own project, but `projectCache` holds `projectKey` for the process's lifetime (D14), so after a project-key rename a check that rejected would drop **every** event until a `fetchChannelInfo` refreshed it — trading a misconfiguration nobody has made for silent data loss on a supported operation. A check that only warned would also land inside the dispatched factory, after the 200 (§5.1), so it could never become a 401, and the misregistration already leaves a trace there: `ensureProject` fails on a project the host does not have and logs `textFormattingRule lookup failed`. Naming the trap where the URL is registered beats a heuristic that cannot reject and cannot report. | Rejecting on a `projectKey` mismatch (drops everything after a rename); warning on one (a second meaning for the project lookup, no new information); a `spaceId` config field to compare (no payload field to compare it with). |
-| D22 | Type 14 fans out: one delivery becomes one `chat.processMessage` per `content.link[]` entry, always, with no adapter option to turn it off | The comments are real. A bulk update writes a comment per issue with a changelog, `link[].comment.id` is that comment, and `fetchMessages` hands it back — so ignoring 14 makes push and pull disagree in the direction of having missed a status change, silently. The fan-out's cost is real too (one webhook, N threads, and N API calls if a handler makes one per message, out of a per-minute bucket), which is why the way out is leaving 14 out of `activityTypeIds[]`: registration already is the switch (D-PR4), and not subscribing stops the delivery instead of discarding it after arrival. | Ignoring 14 (loses events that exist); a `bulkFanout` config flag (duplicates the subscription, and the copy that arrives is still paid for); one summary message into the first issue's thread (invents a message with no id and picks a thread arbitrarily); capping the batch (silently drops the tail of a transaction Backlog reported in full). |
+| D22 | Type 14 fans out: one delivery becomes one `chat.processMessage` per `content.link[]` entry, always, with no adapter option to turn it off | The comments are real. A bulk update writes a comment per issue with a changelog, `link[].comment.id` is that comment, and `fetchMessages` hands it back — so ignoring 14 makes push and pull disagree in the direction of having missed a status change, silently. The fan-out's cost is real too (one webhook, N threads, and N API calls if a handler makes one per message, out of a per-minute bucket), which is why the way out is leaving 14 out of `activityTypeIds[]`: registration already is the switch (D-PR4), and not subscribing stops the delivery instead of discarding it after arrival. A one-issue batch takes the same path: a single issue updated from the issue list is a type 14 too (measured 2026-09-07), so there is no size at which the fan-out is skipped. The batch's `notifications[]` is carried whole on every message and split between none of them: it holds one reason-1 entry per issue when the batch changed the assignee, but an entry names no issue and repeats the same user, so any per-issue meaning would come from the array's order alone. One delivery carrying several indistinguishable entries is what makes 14 different here; other types carry the array too. | Ignoring 14 (loses events that exist); a `bulkFanout` config flag (duplicates the subscription, and the copy that arrives is still paid for); one summary message into the first issue's thread (invents a message with no id and picks a thread arbitrarily); capping the batch (silently drops the tail of a transaction Backlog reported in full); treating a single-entry `link[]` as a type 2 (a handler would read a different `raw.kind` for the same operation depending on how many issues were ticked); pairing `notifications[i]` with `link[i]` (an ordering guarantee Backlog never gave, wrong the moment a redelivery or a future field reorders either array); dropping `notifications` from `raw.payload` (loses a fact the delivery carried, to prevent a misreading a comment can prevent). |
 | D-PR1 | The channel of a pull-request thread is its **project** | Webhooks carry `project.id`; the formatting rule is per project; `channelIdFromThreadId` stays "first three segments". | The repository as channel (N+1 channels per project, no formatting rule of its own). |
 | D-PR2 | Kind-explicit ids for **both** kinds; one nested `subject: BacklogSubjectRef` shared by thread ids, message ids, raws and the subject layer | Backlog addresses issues and pull requests through different endpoint families with different coordinates and separate comment id sequences; the GitHub adapter's "PR is the unmarked default" is back-compat debt its maintainers annotate as such. | Flat `{ kind, issueId?, repositoryId?, number? }`; keeping issues unmarked. |
 | D-PR3 | `deleteMessage` on a pull-request thread throws `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call | The endpoint does not exist (400/6 `Undefined resource`, measured); `ValidationError` would blame a correct call; silent success is a fabricated result; the member is required. | `ValidationError`; no-op; omitting `deleteMessage`. |

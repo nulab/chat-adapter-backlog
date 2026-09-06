@@ -10,9 +10,9 @@
  * `sample-messages.test.ts` fails when the committed file no longer matches.
  */
 import {
-  assigneeChanged, attachmentAdded, commentNotificationAdded, commentWithStatusChange,
-  descriptionEdited, FIXTURE, gitPushed, issueCommented, issueCreated, issueDeleted,
-  issueMultiUpdated, issueUpdatedWithoutComment, pullRequestAdded,
+  assigneeChanged, attachmentAdded, bulkStatusChangedOnOneIssue, commentNotificationAdded,
+  commentWithStatusChange, descriptionEdited, FIXTURE, gitPushed, issueCommented, issueCreated,
+  issueDeleted, issueMultiUpdated, issueUpdatedWithoutComment, pullRequestAdded,
   pullRequestAssigneeChanged, pullRequestCommented, pullRequestCommentWithAttachment,
   pullRequestDeleted, pullRequestStatusChanged, pullRequestUpdated, RAW_MENTION,
   statusChanged,
@@ -30,6 +30,7 @@ const rows: [string, string, string, unknown][] = [
   ['2', 'Issue Updated — no comment id', '`<host>:issue:<issueId>:u:<created>`, the rare update-without-comment path', issueUpdatedWithoutComment()],
   ['4', 'Issue Deleted', 'dispatched as `processMessageDeleted` on the root message', issueDeleted()],
   ['14', 'Issue Multi Updated', 'one delivery, one message per `content.link[]` entry: the thread id comes from `link[].id` (a decimal **string** here) and the message id from `link[].comment.id`, the comment the batch really wrote on that issue. `content.comment` repeats the text with no id, `changes[]` describes the whole batch and carries no `old_value`, and a `status` change is a status **id**.', issueMultiUpdated({ text: 'Moving these to done.' })],
+  ['14', 'Issue Multi Updated — one issue', 'a bulk update of a **single** issue is a type 14 too, with a one-entry `link[]`. The screen decides the activity type, not the number of issues: the same field changed on the issue’s own page arrives as a type 2. `notifications` is empty here because the batch changed no assignee; a batch that changed one carries a reason-1 entry per issue, none of which says which issue it belongs to.', bulkStatusChangedOnOneIssue()],
   ['17', 'Comment Notification Added', '200 Ignored — `POST /issues/:id/comments/:commentId/notifications` added recipients to a comment that already exists, so `content.comment` is that **original** comment — no new comment exists and nothing changed — and the message id repeats one already dispatched. Choosing recipients while posting a comment emits a plain type 3 instead.', commentNotificationAdded()],
   ['18', 'Pull Request Added', '`<host>:pr:<repositoryId>:<number>:r` — the thread id comes from `content.repository.id` and `content.number`, never from `content.id`, which addresses no endpoint. The `summary` keeps mention notation raw while a description or comment carries it rewritten.', pullRequestAdded({ summary: `Retry the deploy step ${RAW_MENTION}` })],
   ['20', 'Comment Added on Pull Request', '`…:c<commentId>` — pull-request comment ids come from a different sequence than issue comment ids', pullRequestCommented()],

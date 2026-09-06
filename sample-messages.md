@@ -561,6 +561,60 @@ one delivery, one message per `content.link[]` entry: the thread id comes from `
 }
 ```
 
+## Type 14 — Issue Multi Updated — one issue
+
+a bulk update of a **single** issue is a type 14 too, with a one-entry `link[]`. The screen decides the activity type, not the number of issues: the same field changed on the issue’s own page arrives as a type 2. `notifications` is empty here because the batch changed no assignee; a batch that changed one carries a reason-1 entry per issue, none of which says which issue it belongs to.
+
+```json
+{
+  "id": 71828,
+  "project": {
+    "id": 500,
+    "projectKey": "EXAMPLE",
+    "name": "Example project",
+    "archived": false,
+    "displayOrder": 2147483646
+  },
+  "type": 14,
+  "content": {
+    "tx_id": "9876",
+    "comment": {
+      "content": ""
+    },
+    "link": [
+      {
+        "id": "8001",
+        "key_id": "42",
+        "title": "Deploy fails on the staging space",
+        "comment": {
+          "id": 3101,
+          "content": ""
+        }
+      }
+    ],
+    "individual_update": false,
+    "changes": [
+      {
+        "field": "status",
+        "new_value": "3",
+        "type": "standard"
+      }
+    ]
+  },
+  "notifications": [],
+  "createdUser": {
+    "id": 100,
+    "userId": "alice",
+    "name": "Alice",
+    "roleType": 2,
+    "lang": "ja",
+    "mailAddress": "alice@example.com",
+    "nulabAccount": null
+  },
+  "created": "2026-09-03T04:05:06Z"
+}
+```
+
 ## Type 17 — Comment Notification Added
 
 200 Ignored — `POST /issues/:id/comments/:commentId/notifications` added recipients to a comment that already exists, so `content.comment` is that **original** comment — no new comment exists and nothing changed — and the message id repeats one already dispatched. Choosing recipients while posting a comment emits a plain type 3 instead.
