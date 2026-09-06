@@ -59,24 +59,71 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
 - Top-level `created` on the webhook and on the same activity fetched later via
   the API are identical strings (measured 2026-08-31). Top-level `id` is the
   activity id, not the issue or comment id.
-- `changes[]` entries carry `field`, `new_value`, `old_value` plus extra keys
-  `field_text` (localized label) and `type` (`"standard"`); `old_value` is `""`
-  when the previous assignee was empty (measured 2026-09-03). Parse `changes[]`
-  with a schema that tolerates unknown keys.
+- `changes[]` entries on a **webhook** carry `field`, `new_value`, `old_value`
+  and `type` (`"standard"`) and nothing else; `old_value` is present on an
+  assignee change and is `""` when the previous assignee was empty (measured
+  2026-09-03, re-measured 2026-09-06). The activity-API form of the same entry
+  adds `field_text`, the localized display label — see "Webhook versus Get
+  Recent Updates". Parse `changes[]` with a schema that tolerates unknown keys.
 - `changes[].new_value` in activity JSON uses the same value system as the
   webhook: status as an id string (`{"field":"status","new_value":"4",
   "old_value":"3"}`), assignee as a display name. The REST comment `changeLog`
   is different (camelCase `newValue`/`originalValue`, status as a display
   name). Never rebuild one from the other (measured 2026-08-28).
 
+## Webhook versus Get Recent Updates
+
+The support page's "the webhook type is the same as the Backlog API response
+for Get recent updates" holds for the envelope, not field for field. The same
+activity was captured both ways on types 2, 3, 14 and 17 (measured on a
+development space, 2026-09-06); the type-1 activity form was not read that
+day, and what is known about it comes from an earlier reading (measured
+2026-08-28, below). Three differences appeared, the same on every type that
+carries the key in question:
+
+- The webhook's `content` carries an **issue snapshot** the activity form
+  omits entirely: `assignee`, `status`, `priority`, `issueType`, `resolution`,
+  `category`, `versions`, `milestone`, `startDate`, `dueDate`,
+  `estimatedHours`, `actualHours`, `parentIssueId`, `customFields` and — on
+  the types that carry it at all, 2, 3 and 17 — `diff`. Code that reads the
+  issue's current state off the payload works on a delivery and silently reads
+  `undefined` on a replayed activity. On type 1 the absence from the activity
+  form is the separate 2026-08-28 reading, not this one — see "What each issue
+  operation emits".
+
+  Every snapshot key is present on **every** issue-side delivery, and an empty
+  field arrives as `null` rather than as a missing key: 41 deliveries (13 type
+  1, 16 type 2, 10 type 3, 2 type 17) captured on a development space,
+  2026-09-06, and none of them omits one. So `"assignee" in content`
+  distinguishes a webhook body from an activity body and nothing else — test
+  `content.assignee != null` for "somebody is assigned". The values are the
+  issue's state **after** the event, not before it: on an assignee change the
+  snapshot's `assignee` already equals that delivery's
+  `changes[field="assigner"]` `new_value`. It is a full user object
+  (`id`, `userId`, `name`, `roleType`, `lang`), not an `{ id, name }` pair.
+- Key convention differs on one field: webhook `externalFileLinks`, activity
+  `external_file_links`.
+- `changes[]` entries on the activity form carry an extra `field_text`, the
+  localized display label; the webhook form does not. This one has nothing to
+  say about type 1, which carries no `changes[]` at all.
+
+`notifications` differs as well and in the more consequential direction: the
+activity form is always `[]`, so an activity replayed from the API cannot
+answer who was notified even when the original delivery could.
+
 ## What each issue operation emits
 
 - Issue created → type 1, `content: { id, key_id, summary, description }` plus
-  `assignee` in the webhook when set. Type 1 activities returned by
-  `GET /space/activities` and `GET /projects/:id/activities` lack `assignee`
-  (100 most recent type-1 activities on a production space, measured
-  2026-08-28). The creation-time assignee is not recoverable from any API;
-  `GET /issues/:id` returns the current one.
+  the issue snapshot every webhook body carries, `assignee` among them — see
+  "Webhook versus Get Recent Updates" for the list and for the rule that an
+  empty field is `null` rather than absent. Type 1 is the one issue type with
+  no `comment`, `changes` or `diff` key.
+  The snapshot is what makes the **creation-time** assignee readable at all: a
+  type-1 activity replayed from `GET /space/activities` or
+  `GET /projects/:id/activities` has no `assignee` (100 most recent type-1
+  activities on a production space, measured 2026-08-28), and `GET /issues/:id`
+  answers with the current assignee, which a later reassignment has moved. Take
+  it off the delivery or not at all.
 - Plain comment → type 3 with `content.comment: { id, content }` and
   `content.changes: []`.
 - Status change, alone or together with a comment → type 2 with **both**
@@ -108,14 +155,43 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
 - Comment edit (`PATCH /issues/:id/comments/:commentId`) fires **no** webhook
   and creates **no** activity, however many times the same comment is edited
   (measured 2026-09-03). Text placed by editing reaches nobody via webhooks.
-- Add Comment Notification (`POST /issues/:id/comments/:commentId/
-  notifications`) → type 17 with `content.comment` = the target comment (`id`,
-  and `content` as of the call). Top-level `notifications` is populated like
-  any other delivery, with `reason: 2`, and names **only the recipients that
-  call added** — a comment that had already notified someone else produced a
-  type 17 naming the added user alone (measured 2026-09-06; this supersedes a
-  2026-09-03 note that recorded `[]` here). The docs give no `content` shape
-  for type 17.
+- Choosing recipients in the comment form's notification picker emits **no**
+  type 17. One type 3 arrives and the chosen recipients are in its top-level
+  `notifications[]` with `reason: 2` (measured on a development space,
+  2026-09-06).
+- Of the two routes measured, the one that does emit type 17 is Add Comment
+  Notification (`POST /issues/:id/comments/:commentId/notifications`), which
+  adds recipients to a comment that already exists; only that comment's own
+  author may call it (Add Comment Notification docs). No other emitter was
+  looked for. Measured on a development space, 2026-09-06 — the docs give no
+  `content` shape:
+  - `content` has the **same key set as types 2 and 3**, issue snapshot
+    included; there is no `content.link` key.
+  - `content.comment` is the **original** comment, id and text unchanged. No
+    new comment is created, so the same comment id arrives on the type 3 and
+    again on every subsequent type 17.
+  - `content.changes` is `[]`.
+  - `notifications[]` is populated like any other delivery and holds **only
+    the recipients this call added**, with `reason: 2`. Users already
+    notified on that comment do not reappear, so the array is a delta, not
+    the comment's notification list. (This supersedes a 2026-09-03 note that
+    recorded `[]` here.)
+    `GET /issues/:id/comments/:commentId/notifications` is cumulative and
+    returns every recipient, so REST and the deliveries answer different
+    questions.
+  - `createdUser` is the user who added the notification, which is the comment
+    author — not the person being notified.
+  - Measured as a **pair**: a comment posted naming recipient A, then
+    recipient B added to it three seconds later. Two activities arrive with
+    different activity `id`s, three seconds apart, and everything else
+    identical — same `content.comment.id`, same `content.comment.content`,
+    the same 24 `content` keys with the same values. The type 3's
+    `notifications[]` holds A alone and the type 17's holds B alone.
+  - Only `type`, the activity `id`, `created` (the three seconds between them)
+    and `notifications[]` tell the two apart.
+    A handler that dedupes on `content.comment.id` alone therefore drops the
+    type 17 as a repeat of the type 3 and loses the later recipient entirely
+    (docs/specs/adapter.md D10 accepts that cost deliberately).
 - Bulk operations from the issue list ("multi update") → one type 14
   `{ tx_id, comment{content}, link[{id,key_id,title,comment{id,content}}],
   changes[{field,new_value,type}] }`, not one type 2 per issue (measured
@@ -123,6 +199,51 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
   change made this way never arrives as type 2.
 - Issue deleted → type 4 with `content: { id, key_id }`. Types 5–13, 15–16 and
   18–49 are wiki, file, git, pull-request, member and document events.
+
+## Type 2 `changes[]` field names and value notation
+
+One `PATCH /issues/:id` per field, on a development space, 2026-09-06. The
+`field` name is an internal name matching neither the API parameter nor the
+label a user sees, and only three fields carry an id:
+
+| API parameter | `field` | `new_value` | `type` |
+| --- | --- | --- | --- |
+| `priorityId` | `priority` | id string (`"2"`) | `standard` |
+| `statusId` | `status` | id string (`"2"`) | `standard` |
+| `resolutionId` | `resolution` | id string (`"0"`) | `standard` |
+| `categoryId[]` | **`component`** | display name | `standard` |
+| `milestoneId[]` | `milestone` | display name; several joined with `", "`, in an order that was not the display order on the one sample taken — the ordering rule is not established | `standard` |
+| `versionId[]` | `version` | display name | `standard` |
+| `dueDate` | **`limitDate`** | a bare date, `"2026-12-31"` — no time part, no `Z` | `standard` |
+| `issueTypeId` | `issueType` | display name | `standard` |
+| `summary` | `summary` | the whole new summary | `standard` |
+| `assigneeId` | **`assigner`** | display name | `standard` |
+| `customField_<id>` | **the attribute's own name** | the value | **`custom`** |
+
+- `old_value` is present on every one of them, and is `""` when the field had
+  no previous value.
+- Only priority, status and resolution arrive as ids. Everything else is a
+  display name, a full text or a date, so `new_value` is not resolvable
+  against the API without knowing which field it belongs to.
+- Three `field` names are neither the API parameter nor the display label:
+  `component`, `limitDate`, `assigner`. Never derive a `field` name from an
+  API parameter name.
+- A custom attribute is the only entry with `type: "custom"`, and its `field`
+  is the attribute's name — so `field` is not drawn from a closed vocabulary
+  and `type` is what separates the two kinds. On a custom attribute the
+  activity-API form's extra `field_text` is not a localized label but the
+  **unresolved** i18n key — `lbl.changelog.` followed by the attribute name
+  (observed; the cause is Backlog's and is not established here).
+- `startDate`, `estimatedHours` and `actualHours` are **unmeasured**: on the
+  project used, a `PATCH` carrying only one of them was refused with
+  `code 7 "No comment content."`, and one sent together with a comment
+  produced a type 3 with `changes: []` and left the field `null`. The
+  notation they would use is therefore unknown; do not assume it from the
+  rows above.
+- Type 14 (multi update) carries `changes[]` under the same field names and
+  the same notation, with no `old_value` — see the type 14 entry above.
+- The REST comment `changeLog` returns priority and status as **display
+  names** where the webhook returns ids; see "Payload envelope".
 
 ## Mentions
 
@@ -225,13 +346,16 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
 
 | type | name | `content` shape |
 | --- | --- | --- |
-| 1 | Issue Created | `{ id, key_id, summary, description }`; webhook adds `assignee` (measured) |
+| 1 | Issue Created | `{ id, key_id, summary, description }`; no `comment`, `changes` or `diff` |
 | 2 | Issue Updated | `{ id, key_id, summary, description, comment{id,content}, changes[], attachments[], shared_files[], external_file_links[] }` |
 | 3 | Issue Commented | same as 2; `comment.content` holds the text |
 | 4 | Issue Deleted | `{ id, key_id }` |
 | 14 | Issue Multi Updated | `{ tx_id, comment{content}, link[], changes[] }` |
-| 17 | Comment Notification Added | `content.comment` of the target comment (measured 2026-09-03; undocumented) |
+| 17 | Comment Notification Added | same key set as 2/3, no `link`; `comment` is the target comment unchanged and `changes` is `[]` (measured 2026-09-06; undocumented) |
 
 Names: https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/
 (filter range `type(1-49)`; ids 27–33 undocumented). Shapes: `backlog-js`
-0.20.1 `Entity.Activity`.
+0.20.1 `Entity.Activity` — which is the **activity** shape. A webhook body for
+1, 2, 3 or 17 additionally carries the issue snapshot (`assignee`, `status`,
+`priority`, …) and spells the links key `externalFileLinks`; see "Webhook
+versus Get Recent Updates".

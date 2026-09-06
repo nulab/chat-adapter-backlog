@@ -7,11 +7,16 @@ disagree; regenerate it rather than editing it by hand.
 
 The body is one Activity object as returned by
 [Get Recent Updates](https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/).
-Backlog publishes no dedicated webhook-payload page, and measured payloads match
-the activity shape field for field. Vocabulary throughout: host
-`example.backlog.com`, bot `Chatbot` (id 999), users `Alice` (100) and `Bob`
-(101), project 500, issue 8001, repository 700 (`example-repo`), pull request
-12.
+Backlog publishes no dedicated webhook-payload page, and measured payloads
+match the activity shape in the envelope but **not** field for field: a webhook
+body additionally carries the issue snapshot (`assignee`, `status`, `priority`,
+…), spells one key `externalFileLinks` where the activity form says
+`external_file_links`, and omits the activity form’s `field_text` inside
+`changes[]` (measured on a development space, 2026-09-06).
+
+Vocabulary throughout: host `example.backlog.com`, bot `Chatbot` (id 999),
+users `Alice` (100) and `Bob` (101), project 500, issue 8001, repository 700
+(`example-repo`), pull request 12.
 
 Three properties of these payloads decide how a handler must read them:
 
@@ -169,7 +174,7 @@ the text carries no `@` at all; `notifications[]` is the only record that the co
 
 ## Type 2 — Issue Updated — status only
 
-`…:c<commentId>` with empty text; the change is in `changes[]`
+`…:c<commentId>` with empty text; the change is in `changes[]`. `status` is one of the three issue fields — with `priority` and `resolution` — whose `new_value` is an id string; every other field arrives as a display name, a full text or a bare date (`.claude/rules/backlog-webhook-facts.md`)
 
 ```json
 {
@@ -548,7 +553,7 @@ dispatched as `processMessageDeleted` on the root message
 
 ## Type 17 — Comment Notification Added
 
-200 Ignored — repeats an existing comment
+200 Ignored — `POST /issues/:id/comments/:commentId/notifications` added recipients to a comment that already exists, so `content.comment` is that **original** comment — no new comment exists and nothing changed — and the message id repeats one already dispatched. Choosing recipients while posting a comment emits a plain type 3 instead.
 
 ```json
 {

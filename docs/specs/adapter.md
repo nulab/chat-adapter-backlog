@@ -290,11 +290,17 @@ types carry `Date` (`src/index.ts`).
 `changes` is normalised to `{ field: string; newValue: string | null; oldValue: string | null }`.
 Value systems are **not** unified: webhook `status` changes carry ids and
 assignee changes carry display names; REST `changeLog` carries display names
-for both (measured 2026-08-28). The assignee field is named **`assigner`** on
-issues and **`assignee`** on pull requests, and a pull request's `summary`
-change carries resolved mention text in the activity but raw `<@U…>` in REST
-(measured 2026-09-06). Consumers read `raw.kind` and the subject kind before
-interpreting.
+for both (measured 2026-08-28). On the issue side only `priority`, `status`
+and `resolution` carry ids at all; every other field arrives as a display
+name, a full text or a bare date, and three `field` names match neither the
+API parameter nor the label a user sees (`component`, `limitDate`,
+`assigner`). The measured table is in
+`.claude/rules/backlog-webhook-facts.md`; a consumer that resolves a
+`newValue` against the API must first know which field produced it. The
+assignee field is named **`assigner`** on issues and **`assignee`** on pull
+requests, and a pull request's `summary` change carries resolved mention text
+in the activity but raw `<@U…>` in REST (measured 2026-09-06). Consumers read
+`raw.kind` and the subject kind before interpreting.
 
 ### 3.6 Errors thrown
 
@@ -410,7 +416,11 @@ per §9.2 so a message is delivered rather than lost.
 The body is one Activity object as returned by
 [Get Recent Updates](https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/);
 Backlog publishes no dedicated webhook-payload page, and measured payloads
-match the activity shape field for field (measured 2026-08-28,
+match the activity shape in the envelope but **not** field for field: a
+webhook body additionally carries the issue's snapshot (`assignee`, `status`,
+`priority`, …), spells one key `externalFileLinks` where the activity form says
+`external_file_links`, and omits the activity form's `field_text` inside
+`changes[]` (measured 2026-09-06,
 `.claude/rules/backlog-webhook-facts.md`). The schema is **tolerant of unknown
 keys** everywhere (`field_text`, `type` inside `changes[]`,
 `shared_files`, `status`, `priority` … are all seen in real payloads) and
@@ -432,7 +442,7 @@ message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
 | Field | Type 1 | Type 2/3 | Type 4 | Type 18 | Type 19/20 |
 | --- | --- | --- | --- | --- | --- |
 | `content.summary`, `content.description` | read (`description` nullable) | ignored | — | read | ignored |
-| `content.assignee` | `{ id, name } \| null`, optional | ignored (assignee changes arrive in `changes`) | — | not carried by the activity form (measured 2026-09-06); read if a webhook ever carries it | ignored |
+| `content.assignee` | `{ id, name, … } \| null`; always sent on a webhook, `null` when unassigned (measured 2026-09-06), optional in the schema because the activity form omits it | sent, same shape; ignored (assignee changes arrive in `changes`) | — | not carried by the activity form (measured 2026-09-06); read if a webhook ever carries it | ignored |
 | `content.comment` | absent | `{ id: number, content: string \| null } \| null` | — | `null` | `{ id, content } \| null` |
 | `content.changes[]` | absent | `{ field: string, new_value?: string \| number \| null, old_value?: … }[]` optional | — | `[]` | same shape as 2/3 |
 | `content.attachments[]` | `{ id, name, size }[]` optional | same | — | optional (not measured on the activity form) | optional |
@@ -451,7 +461,7 @@ message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
 | 3 | Issue Commented | `<host>:issue:<issueId>:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` | text |
 | 4 | Issue Deleted (D10) | root `<host>:issue:<issueId>:r` | — | — | — → `chat.processMessageDeleted({ adapter, channelId, threadId, messageId, raw, deletedAt: new Date(created) })` |
 | 14 | Issue Multi Updated (bulk) | — | — | — | 200 Ignored: no per-issue comment; measured to carry bulk status changes (2026-08-28) |
-| 17 | Comment Notification Added | — | — | — | 200 Ignored: repeats an existing comment; produced when notifications are added after the fact (measured 2026-09-03) |
+| 17 | Comment Notification Added | — | — | — | 200 Ignored (D10): emitted by `POST /issues/:id/comments/:commentId/notifications`, which adds recipients to an **existing** comment (picking them while posting emits a plain type 3 instead); `content.comment` is that original comment, so its id has already been dispatched (measured 2026-09-06) |
 | 18 | Pull Request Added | `<host>:pr:<repository.id>:<number>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` if present | text (including the raw `<@U<botUserId>>` form, §5.4) |
 | 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present | `changes[field="assignee"].new_value === botUserName` **or** text |
 | 19 | Pull Request Updated, no comment id | `…:u:<created>` | `""` | none | as above |
@@ -496,10 +506,13 @@ Behavioural consequences of measured facts (details and dates in
   `https://<host>/api/v2/projects/<projectId>/git/repositories/<repositoryId>/pullRequests/<number>/attachments/<id>`
   on a pull request (§6.6), and `fetchData()` downloading via the port. MIME
   type is unknown until download.
-- **Type-1 `content` from the activity API lacks `assignee`** while the webhook
-  carries it (measured 2026-08-28). The schema keeps it optional so replaying
-  an activity body works; assignment-based mention then relies on the webhook
-  form only.
+- **The issue snapshot is webhook-only.** `assignee`, `status`, `priority` and
+  the rest of the issue's post-event state are on every type 1, 2, 3 and 17
+  delivery — `assignee` always present and `null`, not absent, when nobody is
+  assigned (measured 2026-09-06) — and on none of the bodies `GET
+  /space/activities` returns (measured 2026-08-28). The schema keeps them
+  optional so replaying an activity body works; assignment-based mention then
+  relies on the webhook form only.
 - **Pull-request activities** (`.claude/rules/backlog-pull-request-facts.md`,
   measured 2026-09-06 on the activity API form; the webhook form is
   unmeasured): merging — by the UI or by pushing the merge to the base branch
@@ -1484,7 +1497,7 @@ for one scratch space is worse than requiring the two to share it.
 | D7 | No host-application hooks; `api(host)` is the only escape hatch | Engagement/subscription state is the `StateAdapter`'s job; drop prediction depends on private core keys. | Engagement callback, inbound observer, dedupe-key helpers. |
 | D8 | Numeric ids everywhere; host inside message and user ids | Issue keys change on project-key rename; the core's dedupe key has no thread component. | Issue keys in thread ids; host-less message ids. |
 | D9 | Mention = the bot in the webhook's `notifications[]` (any `reason`), display name in text (left-bounded, case-sensitive), or assignment to the bot | The webhook's `notifications[]` **is** populated (measured 2026-09-06) and is the only signal for a comment addressed through the notification field, which leaves no `@name` in the text; text and assignment still carry every delivery that has no notification, including an activity-API body replayed as a webhook. Assignee changes arrive by display name. Only explicit addressing lands in that list: an account merely **watching** an issue stayed out of `notifications[]` across a comment and two field-only `PATCH`es, while a non-watching user addressed on the same issue arrived with `reason: 2` (measured 2026-09-06), so no `reason` needs excluding. | Text and assignment only (silently ignores the notification field, the UI's normal way to address someone); filtering to `reason: 2` (drops reason codes not measured here for no gain, since assignment is already covered and watching was measured not to notify at all); case-insensitive match (Japanese names have no case, ASCII names would over-match). |
-| D10 | Types 1, 2, 3 and 18, 19, 20 processed, 4 optional deletion, rest ignored; register `activityTypeIds`, never `allEvent` | Only issue and pull-request activity maps to a thread; 14 has no per-issue comment; 17 repeats content; 21 was never observed (D-PR5). | `allEvent` (wiki/git/document noise). |
+| D10 | Types 1, 2, 3 and 18, 19, 20 processed, 4 optional deletion, rest ignored; register `activityTypeIds`, never `allEvent` | Only issue and pull-request activity maps to a thread; 14 has no per-issue comment; 17 carries the **original** comment, so dispatching it would re-deliver a message id already dispatched; 21 was never observed (D-PR5). | `allEvent` (wiki/git/document noise). Dispatching 17: `dedupe:backlog:<message.id>` suppresses the repeat only for `dedupeTtlMs` (§5.5), and a notification added a day later fires the same comment a second time. The accepted cost is a blind spot — a 17 whose `notifications[]` names the bot is the only signal that the bot was mentioned on a comment **after** it was posted, and acting on it needs a message id that distinguishes the notification from the comment it repeats. The pair was measured on a development space, 2026-09-06: a type 3 naming one recipient and, three seconds later, a type 17 naming another carry different activity ids but the same `content.comment.id`, the same text and an identical `content`, so `content.comment.id` cannot separate them and `notifications[]` — a delta, not the comment's recipient list — is the only field that names what the second delivery added (`.claude/rules/backlog-webhook-facts.md`). |
 | D11 | Two-step uploads; inbound `fetchData` through the port; `rehydrateAttachment` via API URL | Backlog attachments require auth to download; a URL is the only serialisable handle that survives queue round trips. | Public URLs (do not exist); `fetchMetadata` blobs. |
 | D12 | `:r`/`:u:` cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Backlog can edit an issue body, but `editMessage` semantics ("edit what I posted") do not fit rewriting a human's issue; `:u:` has no fetchable resource. | Mapping `editMessage(:r)` to Update Issue. |
 | D13 | Optional set as in §4.2; `listThreads` uses Backlog's default order | Each implemented member has a one-to-one endpoint; each unsupported one has no counterpart. Sorting or filtering in the adapter would hide the search-bucket cost. | "Open issues first" (an extra filter, surprising to callers). |

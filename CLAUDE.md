@@ -453,9 +453,16 @@ persisted cursor and a backoff.
 Activity](https://developer.nulab.com/docs/backlog/api/2/get-activity/)) that
 matter here: **1** Issue Created, **2** Issue Updated, **3** Issue Commented,
 **4** Issue Deleted, **18** Pull Request Added, **19** Pull Request Updated,
-**20** Comment Added on Pull Request. **17** Comment Notification Added is the
-"project notifications" in the package description and is acknowledged, not
-dispatched. **21** is documented as "Pull Request Deleted" and typed by
+**20** Comment Added on Pull Request. **17** Comment Notification Added is
+acknowledged, not dispatched. Two routes to addressing somebody on a comment
+were measured, and only one of them emits it: picking recipients while
+posting the comment produces a plain type 3, while adding recipients to an
+**already existing** comment via
+`POST /issues/:id/comments/:commentId/notifications` produces a type 17 that
+repeats that comment's own id and text
+(`.claude/rules/backlog-webhook-facts.md`). What else may emit it is not
+established here. It is not the "project notifications" of the package
+description. **21** is documented as "Pull Request Deleted" and typed by
 `backlog-js` as `PullRequestMerged`; it was not observed — merge and close
 both arrive as type 19 status changes, and no delete operation exists in the
 UI or the API (`.claude/rules/backlog-pull-request-facts.md`), so it is
