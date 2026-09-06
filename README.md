@@ -387,10 +387,37 @@ the **webhook** only; the same activity fetched from the activities API reports
 none. The reason code is not filtered: anything Backlog notified the bot about
 counts as a mention.
 
-One asymmetry is worth knowing: a pull request's **summary keeps mention
-notation raw**. `<@U999>` is stored literally there, while a description or a
-comment is rewritten to `@<display name>` on save — so a new pull request's text
-is matched against both forms.
+Through `chat`, the effective check is looser than that: the core runs its own
+`@<userName>` regex **case-insensitively** and ORs the result in, so `@chatbot`
+reaches your handler with `isMention` true even though this adapter answered
+false. The core can only add mentions, never remove one, and it compares
+`userName` — the first installation's name — so on every other space the
+case-sensitive rule above is the whole story.
+
+Two asymmetries are worth knowing.
+
+A pull request's **summary keeps mention notation raw**: `<@U999>` stays
+literal there — in storage, in the API and in the webhook body — while a
+description or a comment is rewritten to `@<display name>` on save. A new pull
+request's text is matched against both forms, so **read `message.isMention`
+rather than re-matching the text yourself**; a handler looking for `@Chatbot`
+finds nothing in a summary that says `<@U999>`.
+
+Being the **standing assignee** is not a mention. Assignment is: opening a pull
+request assigned to the bot, or changing an issue's or a pull request's assignee
+to it, all count. But once the bot is the assignee, later comments, edits and
+merges on that subject are ordinary messages — otherwise every review comment
+would address the bot. The payload does carry the current assignee on every
+event, and this adapter deliberately does not read it as an assignment; only
+the change record is one.
+
+That leaves no gap where the change record under-reports. A single `PATCH` that
+changed the assignee together with another field was once measured to report the
+other fields and not the assignee — but it still notified the new assignee, and
+the notification list is read first. So an update naming no assignee change is a
+mention when Backlog notified the bot about it and an ordinary message when it
+did not, which is also the right answer for a plain edit of a subject the bot
+already owns.
 
 To mention someone outbound, use the helpers — writing `<@U…>` notifies the
 user even without `notifiedUserId`:

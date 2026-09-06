@@ -22,6 +22,7 @@ import {
   pullRequestCommented,
   pullRequestCommentWithAttachment,
   pullRequestDeleted,
+  pullRequestDescriptionEdited,
   pullRequestStatusChanged,
   pullRequestUpdated,
   RAW_MENTION,
@@ -287,44 +288,96 @@ describe('webhook fixtures', () => {
 });
 
 /**
- * The pull-request builders stand in for the **activity API** form measured on
- * 2026-09-06 (`.claude/rules/backlog-pull-request-facts.md` "What each
- * pull-request operation emits"); the webhook form of 18–20 is unmeasured, so
- * these assertions pin what is known and nothing more.
+ * The pull-request builders stand in for the **webhook** form measured on a
+ * development space, 2026-09-06 (`.claude/rules/backlog-pull-request-facts.md`
+ * "What each pull-request operation emits"), which is the activity API form
+ * plus `assignee`, `base`, `branch` and `diff` on all three types alike.
  */
 describe('pull-request webhook fixtures', () => {
-  it('carries one content key set on all three types, with the repository name on every one', () => {
+  it('carries the activity key set plus the four webhook-only keys on all three types, with the repository name on every one', () => {
+    const activityFormKeys = [
+      'changes',
+      'comment',
+      'description',
+      'id',
+      'issue',
+      'number',
+      'repository',
+      'summary',
+    ];
+    const webhookOnlyKeys = ['assignee', 'base', 'branch', 'diff'];
+
     for (const payload of [
       pullRequestAdded(),
       pullRequestUpdated(),
       pullRequestCommented(),
     ]) {
       const content = payload['content'] as Record<string, unknown>;
-      expect(Object.keys(content).sort()).toEqual([
-        'changes',
-        'comment',
-        'description',
-        'id',
-        'issue',
-        'number',
-        'repository',
-        'summary',
-      ]);
+      expect(Object.keys(content).sort()).toEqual(
+        [...activityFormKeys, ...webhookOnlyKeys].sort()
+      );
       expect(content['repository']).toMatchObject({
         id: FIXTURE.repositoryId,
         name: FIXTURE.repositoryName,
       });
-      expect(payload['notifications']).toEqual([]);
     }
   });
 
-  it('omits the assignee and the attachments from a created pull request', () => {
+  it('names a target branch and a source branch that are not the same branch', () => {
+    for (const payload of [
+      pullRequestAdded(),
+      pullRequestUpdated(),
+      pullRequestCommented(),
+    ]) {
+      const content = payload['content'] as Record<string, unknown>;
+      expect(content['base']).toEqual(expect.any(String));
+      expect(content['branch']).toEqual(expect.any(String));
+      expect(content['base']).not.toBe(content['branch']);
+    }
+  });
+
+  it('leaves the diff null on every delivery but a description edit', () => {
+    for (const payload of [
+      pullRequestAdded(),
+      pullRequestUpdated(),
+      pullRequestCommented(),
+      pullRequestStatusChanged(),
+      pullRequestAssigneeChanged(),
+    ]) {
+      expect(
+        (payload['content'] as Record<string, unknown>)['diff']
+      ).toBeNull();
+    }
+
+    const edited = pullRequestDescriptionEdited()['content'] as Record<
+      string,
+      unknown
+    >;
+    expect(edited['diff']).toContain('1c1');
+    expect((edited['changes'] as Record<string, unknown>[])[0]?.['field']).toBe(
+      'description'
+    );
+  });
+
+  it('leaves a created pull request unassigned and without attachments by default', () => {
     const content = pullRequestAdded()['content'] as Record<string, unknown>;
-    expect(content).not.toHaveProperty('assignee');
+    expect(content['assignee']).toBeNull();
     expect(content).not.toHaveProperty('attachments');
     expect(content['comment']).toBeNull();
     expect(content['changes']).toEqual([]);
     expect(pullRequestAdded()['type']).toBe(18);
+  });
+
+  it('names the assignee whenever one is given, on a creation and on an update alike', () => {
+    for (const payload of [
+      pullRequestAdded({ assignee: FIXTURE.bot }),
+      pullRequestUpdated({ assignee: FIXTURE.bot }),
+      pullRequestCommented({ assignee: FIXTURE.bot }),
+    ]) {
+      expect(
+        (payload['content'] as Record<string, unknown>)['assignee']
+      ).toMatchObject({ id: FIXTURE.bot.id, name: FIXTURE.bot.name });
+    }
   });
 
   it('addresses the pull request by number and repository, and carries the star-only global id apart from them', () => {

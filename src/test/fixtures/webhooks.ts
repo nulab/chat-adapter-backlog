@@ -66,8 +66,9 @@ export interface FixtureAttachment {
 
 /**
  * One top-level `notifications[]` entry. `reason` follows Get Notification's
- * codes: 1 Assigned to Issue, 2 Issue Commented
- * (`.claude/rules/backlog-api-facts.md`).
+ * codes: 1 Assigned to Issue, 2 Issue Commented, 10 Assigned to Pull Request,
+ * 11 Comment Added on Pull Request (`.claude/rules/backlog-api-facts.md`).
+ * The adapter reads the user, never the reason (§5.4 rule 6).
  */
 export interface FixtureNotification {
   user: FixtureUser;
@@ -558,6 +559,22 @@ interface PullRequestOptions extends ActivityOptions {
   repositoryName?: string;
   number?: number;
   pullRequestId?: number;
+  /**
+   * The subject's **current** assignee, which the webhook form carries on 18,
+   * 19 and 20 alike while the activity form carries it on none of them
+   * (measured 2026-09-06). `null` — an unassigned pull request — is the
+   * default because these builders model the webhook form, which is the only
+   * form the adapter ever receives.
+   */
+  assignee?: FixtureUser | null;
+  /**
+   * The diff(1)-style body a description edit puts on its type 19, and `null`
+   * on every other delivery (measured 2026-09-06). Only
+   * `pullRequestDescriptionEdited` sets it, so the pairing of the key with the
+   * `description` change is a property of the fixtures rather than of each
+   * caller.
+   */
+  diff?: string | null;
 }
 
 function repositoryOf(options: PullRequestOptions): Record<string, unknown> {
@@ -569,10 +586,13 @@ function repositoryOf(options: PullRequestOptions): Record<string, unknown> {
 }
 
 /**
- * The one `content` key set types 18, 19 and 20 share (measured 2026-09-06 on
- * the activity API form, `.claude/rules/backlog-pull-request-facts.md`): no
- * `assignee`, no `attachments`, no `status`, `base` or `branch`, and
- * `repository.name` on every one.
+ * The `content` key set types 18, 19 and 20 share in the form the adapter
+ * receives (`.claude/rules/backlog-pull-request-facts.md`): the activity
+ * form's keys — no `attachments`, no `status`, `repository.name` on every one
+ * — plus the four the **webhook** adds, `assignee`, `base`, `branch` and
+ * `diff` (measured 2026-09-06 by diffing five deliveries against the same
+ * activities). `base` and `branch` are constants here because nothing reads
+ * them and no measured delivery omitted them.
  */
 function pullRequestContent(
   options: PullRequestOptions & {
@@ -583,11 +603,29 @@ function pullRequestContent(
     issue?: Record<string, unknown> | null;
   }
 ): Record<string, unknown> {
+  const assignee = options.assignee ?? null;
   return {
     id: options.pullRequestId ?? FIXTURE.pullRequestId,
     number: options.number ?? FIXTURE.pullRequestNumber,
     summary: options.summary ?? 'Retry the deploy step on a 5xx',
     description: options.description ?? 'Fixes the flaky staging deploy.',
+    base: 'main',
+    branch: 'fix/deploy-retry',
+    diff: options.diff ?? null,
+    assignee:
+      assignee === null
+        ? null
+        : {
+            id: assignee.id,
+            userId: assignee.userId ?? null,
+            name: assignee.name,
+            // Not the `roleType` the same user carries under
+            // `notifications[].user`, which was 2 for the same account
+            // (measured 2026-09-06). Nothing reads either; the fixture keeps
+            // them different so nothing starts to.
+            roleType: 94,
+            lang: 'ja',
+          },
     comment: options.comment ?? null,
     changes: changeEntries(options.changes ?? []),
     issue: options.issue ?? null,
@@ -598,9 +636,11 @@ function pullRequestContent(
 /**
  * Type 18 — Pull Request Added.
  *
- * The assignee and the attachments a create call takes are **not in the
- * activity at all**, so no option adds them; `linkedIssue` populates
- * `content.issue`, which is display data and never routing (D-PR6).
+ * The attachments a create call takes are **not in the activity at all**, so
+ * no option adds them; the `assignee` it takes is, on the webhook form
+ * (measured 2026-09-06), which is what makes opening a pull request for the
+ * bot a mention. `linkedIssue` populates `content.issue`, which is display
+ * data and never routing (D-PR6).
  */
 export function pullRequestAdded(
   options: PullRequestOptions & {
@@ -615,18 +655,26 @@ export function pullRequestAdded(
       ...options,
       comment: null,
       changes: [],
-      issue: options.linkedIssue
-        ? {
-            id: options.issueId ?? FIXTURE.issueId,
-            key_id: FIXTURE.issueKeyId,
-            issue_key: `${FIXTURE.projectKey}-${FIXTURE.issueKeyId}`,
-            summary: 'Deploy fails on the staging space',
-            description: 'Reproduces on every push to main.',
-          }
-        : null,
+      issue: linkedIssueOf(options),
     }),
     options
   );
+}
+
+/** `content.issue` — the linked issue, or `null` when none is linked. */
+function linkedIssueOf(
+  options: PullRequestOptions & { linkedIssue?: boolean }
+): Record<string, unknown> | null {
+  if (options.linkedIssue !== true) {
+    return null;
+  }
+  return {
+    id: options.issueId ?? FIXTURE.issueId,
+    key_id: FIXTURE.issueKeyId,
+    issue_key: `${FIXTURE.projectKey}-${FIXTURE.issueKeyId}`,
+    summary: 'Deploy fails on the staging space',
+    description: 'Reproduces on every push to main.',
+  };
 }
 
 /** Type 20 — Comment Added on Pull Request. A plain comment carries no changes. */
@@ -659,6 +707,9 @@ export function pullRequestUpdated(
   options: PullRequestOptions & {
     commentId?: number;
     text?: string | null;
+    summary?: string;
+    description?: string | null;
+    linkedIssue?: boolean;
     changes?: FixtureChange[];
   } = {}
 ): Record<string, unknown> {
@@ -677,9 +728,69 @@ export function pullRequestUpdated(
           new_value: 'Retry the deploy step on a 5xx',
         },
       ],
+      issue: linkedIssueOf(options),
     }),
     options
   );
+}
+
+/**
+ * The multi-field `PATCH` measured on a pull request the bot was **already**
+ * assigned to: `summary`, `description` and `issue` in one `changes[]`, the
+ * unchanged assignee still in `content.assignee`, and an empty
+ * `notifications[]` — Backlog notified nobody (measured 2026-09-06). This is
+ * the shape §5.4 rule 4 turns on, so it is a builder rather than three
+ * `changes` entries written out at a call site.
+ */
+export function pullRequestMultiFieldUpdated(
+  options: PullRequestOptions & { commentId?: number } = {}
+): Record<string, unknown> {
+  const newSummary = 'Retry the deploy step on a 5xx and link the issue';
+  const newBody = 'Retries the deploy step on a 5xx.';
+  const oldBody = 'Fixes the flaky staging deploy.';
+  return pullRequestUpdated({
+    ...options,
+    summary: newSummary,
+    description: newBody,
+    diff: `1c1\n<${newBody}---\n>${oldBody}`,
+    linkedIssue: true,
+    changes: [
+      {
+        field: 'summary',
+        new_value: newSummary,
+        old_value: 'Retry the deploy step on a 5xx',
+      },
+      { field: 'description', new_value: newBody, old_value: oldBody },
+      {
+        field: 'issue',
+        new_value: `${FIXTURE.projectKey}-${FIXTURE.issueKeyId}`,
+        old_value: '',
+      },
+    ],
+  });
+}
+
+/**
+ * A description edit, the one delivery measured to carry a non-null
+ * `content.diff` (measured 2026-09-06): a diff(1)-style body of the edit, alongside the
+ * `description` change that carries both full bodies. Every other pull-request
+ * delivery has `diff: null`, which is what the other builders emit.
+ */
+export function pullRequestDescriptionEdited(
+  options: PullRequestOptions & {
+    newBody?: string;
+    oldBody?: string;
+  } = {}
+): Record<string, unknown> {
+  const newBody = options.newBody ?? 'Retries the deploy step on a 5xx.';
+  const oldBody = options.oldBody ?? 'Fixes the flaky staging deploy.';
+  return pullRequestUpdated({
+    ...options,
+    description: newBody,
+    diff: `1c1\n<${newBody}---\n>${oldBody}`,
+    text: '',
+    changes: [{ field: 'description', new_value: newBody, old_value: oldBody }],
+  });
 }
 
 /**
@@ -707,9 +818,13 @@ export function pullRequestStatusChanged(
 }
 
 /**
- * An assignee change reports the new assignee by **display name** under the
- * field name `assignee` — the issue side calls the same thing `assigner`
- * (measured 2026-09-06).
+ * An assignee change reports both assignees by **display name** under the
+ * field name `assignee` — the issue side calls the same thing `assigner`.
+ * `previousName` defaults to `""`, the `old_value` of the assignment measured
+ * on the activity form, where nobody had been assigned before. The webhook
+ * capture measured the other two shapes: a reassignment carries the old
+ * display name there, and an unassignment is `assigneeName: ""` with the old
+ * name kept (all measured 2026-09-06).
  */
 export function pullRequestAssigneeChanged(
   options: PullRequestOptions & {

@@ -238,19 +238,20 @@ const linkedIssueSchema = z
   .nullable();
 
 /**
- * `content` of a pull-request activity, shared by types 18, 19 and 20 —
- * one key set, measured on 17 activities of all three types (2026-09-06,
+ * `content` of a pull-request activity, shared by types 18, 19 and 20 — one
+ * key set per form, measured on both forms (2026-09-06,
  * `.claude/rules/backlog-pull-request-facts.md` "What each pull-request
- * operation emits").
+ * operation emits"). The **webhook** form is the activity form plus
+ * `assignee`, `base`, `branch` and `diff`, on all three types alike; the two
+ * forms were diffed on five activities matched by activity id, and the keys
+ * they share hold equal values.
  *
- * That measurement is of the **activity API** form; the webhook form of
- * 18–20 is UNMEASURED (the same rules file, "Unmeasured"). Only the three
- * fields that address a pull request — `id`, `number` and `repository.id` —
- * are therefore required: a webhook body carrying more than the activity
- * form still parses, while one that cannot be addressed is the 400 it should
- * be. `assignee` and `attachments` are named although the activity form
- * carries neither, so a webhook that adds them (as the type-1 webhook adds
- * `assignee`) is read rather than stripped.
+ * Only the three fields that address a pull request — `id`, `number` and
+ * `repository.id` — are required, so an activity-form body (a replay, a
+ * future form dropping a key) still parses while one that cannot be
+ * addressed is the 400 it should be. `attachments` is named although neither
+ * form was measured to carry it, so a body that adds it is read rather than
+ * stripped.
  */
 const pullRequestContentSchema = z.object({
   id: identitySchema,
@@ -261,10 +262,29 @@ const pullRequestContentSchema = z.object({
   comment: commentSchema.optional(),
   changes: z.array(changeSchema).optional(),
   issue: linkedIssueSchema.optional(),
+  /**
+   * The subject's **current** assignee (`{ id, userId, name, roleType, lang }`
+   * measured; only the two fields the adapter reads are named). Read as an
+   * assignment on type 18 alone — see `src/webhook/inbound.ts`.
+   */
   assignee: z
     .object({ id: z.number(), name: z.string() })
     .nullable()
     .optional(),
+  /**
+   * The pull request's target and source branch names, on every webhook type.
+   * Nullable although no measured delivery omitted either: a body Backlog
+   * widens is not worth a 400 over a key nothing reads.
+   */
+  base: z.string().nullable().optional(),
+  branch: z.string().nullable().optional(),
+  /**
+   * A diff(1)-style body of the description edit that produced this activity,
+   * `null` on every other delivery — measured on a type 19 that changed the
+   * description, and `null` on 18, on 20 and on a 19 that did not. Backlog
+   * documents the key nowhere.
+   */
+  diff: z.string().nullable().optional(),
   attachments: z.array(attachmentSchema).optional(),
 });
 

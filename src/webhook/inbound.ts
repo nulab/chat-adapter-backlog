@@ -27,9 +27,10 @@ import type { Attachment, Author, Message, MessageData } from 'chat';
 
 /**
  * The activity types whose message is a subject's **root**: an issue's
- * creation (1) and a pull request's (18). Both carry `summary` and
- * `description` and nothing else the mapping reads (docs/specs/adapter.md
- * §5.3).
+ * creation (1) and a pull request's (18). Both carry `summary`,
+ * `description`, `attachments[]` and — on a webhook body, not on the activity
+ * form — the `assignee` the subject was opened for (docs/specs/adapter.md
+ * §5.3; measured 2026-08-28 for type 1 and 2026-09-06 for type 18).
  */
 type RootActivity = IssueCreatedActivity | PullRequestAddedActivity;
 
@@ -63,9 +64,10 @@ export interface InboundMessageFields {
 /**
  * The `content` fields the mapping reads off an activity of either kind, as
  * the widest shape that carries them. Written structurally rather than as a
- * union of the schemas' types so a field one schema does not declare — a
- * pull-request `assignee`, which the activity form was measured never to
- * carry (2026-09-06) — costs a `undefined` here instead of a second builder.
+ * union of the schemas' types so a field one schema does not declare — the
+ * standing `assignee` a webhook puts on issue types 2 and 3, which the issue
+ * schemas do not name because nothing reads it (measured 2026-09-06) — costs
+ * a `undefined` here instead of a second builder.
  */
 interface OptionalContent {
   assignee?: { id: number } | null | undefined;
@@ -141,6 +143,21 @@ export interface MentionEvidence {
   botUserName: string;
   botUserId: number;
   text: string;
+  /**
+   * An assignee id only where it is evidence that an **assignment happened**:
+   * `content.assignee` on a root activity, and nowhere else. `undefined`
+   * means "this activity says nothing about an assignment", never
+   * "unassigned".
+   *
+   * Types 2, 3, 19 and 20 all carry the same key as the **standing**
+   * assignee, repeated on every delivery whether or not the assignment
+   * changed (measured 2026-09-06 on both kinds), so it is not read there: a
+   * multi-field `PATCH` on a bot-assigned pull request carries the bot in
+   * `content.assignee` and notified nobody. An assignment on those types
+   * reports itself in `changes[]` instead, and one `changes[]` leaves out is
+   * caught by the `notifications[]` rule, so the two kinds answer the same
+   * operation the same way without reading a standing state as an event.
+   */
   assigneeId: number | undefined;
   changes: BacklogChange[];
   /** The activity's top-level `notifications[]`: who Backlog notified. */

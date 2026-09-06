@@ -74,10 +74,10 @@ Backlog gives no such shortcut, and the asymmetries decide the design:
 | List cursor | `offset` | `offset`; no `minId`/`maxId`, no order param | [Get Pull Request List](https://developer.nulab.com/docs/backlog/api/2/get-pull-request-list/) |
 | Comment object | has `issueId` | has **no** parent reference; `changeLog` is plain `{ field, newValue, originalValue }` | Get Pull Request Comment page |
 | Activity types | 1, 2, 3, 4 | 18 Added, 19 Updated, 20 Comment Added; **21 was never observed** — merge (UI or git push) and close both arrive as 19 status changes (measured 2026-09-06) | [Get Activity](https://developer.nulab.com/docs/backlog/api/2/get-activity/), `.claude/rules/backlog-pull-request-facts.md` |
-| Activity `content` | measured | measured on the activity API: `{ id, number, summary, description, comment, changes, issue{id,key_id,issue_key,…}, repository{id,name,description} }` — no `assignee`, no `attachments`; the **webhook** form is still unmeasured | `.claude/rules/backlog-pull-request-facts.md` |
-| Assignee change field | `changes[field="assigner"]`, display name | `changes[field="assignee"]`, display name; a multi-field update was measured once to omit it | measured 2026-09-06 |
+| Activity `content` | measured | measured on both forms and diffed by activity id: the activity API gives `{ id, number, summary, description, comment, changes, issue{id,key_id,issue_key,…}, repository{id,name,description} }` — no `assignee`, no `attachments` — and the **webhook** adds `assignee`, `base`, `branch`, `diff` (measured 2026-09-06) | `.claude/rules/backlog-pull-request-facts.md` |
+| Assignee change field | `changes[field="assigner"]`, display name | `changes[field="assignee"]`, display name, with the **old** name in `old_value`; one multi-field update omitted the entry, two later ones did not | measured 2026-09-06 |
 | Mentions in the title | `summary` rewritten to `@name` | `summary` keeps the raw `<@U…>`; `description` and comments are rewritten | measured 2026-09-06 |
-| Notification | `issue`, `comment` | `pullRequest`, `pullRequestComment`, `repository`; reasons 10 Assigned, 11 Comment Added, 12 Added, 13 Updated | [Get Notification](https://developer.nulab.com/docs/backlog/api/2/get-notification/) |
+| Notification | `issue`, `comment`; webhook `notifications[]` populated, activity API `[]` | `pullRequest`, `pullRequestComment`, `repository`; reasons 10 Assigned, 11 Comment Added, 12 Added, 13 Updated — the same two acts the issue side reports as 1 and 2; the **webhook `notifications[]` is populated** on both kinds alike (measured 2026-09-06) | [Get Notification](https://developer.nulab.com/docs/backlog/api/2/get-notification/), `.claude/rules/backlog-pull-request-facts.md` |
 | Status change via API | `PATCH /issues/:id { statusId }` | **none** — Update Pull Request takes `summary`, `description`, `issueId`, `assigneeId`, `notifiedUserId`, `comment` only | [Update Pull Request](https://developer.nulab.com/docs/backlog/api/2/update-pull-request/) |
 
 Two consequences follow and shape everything in §3:
@@ -433,8 +433,14 @@ with P4 and P5 off `main`. The measurements (§5) landed in P0 as
 body itself (M1's webhook half) and the bot's own notification feed (M9) is
 recorded. The gate that read **"P3 must not merge before the webhook form is
 captured"** was **waived by the maintainer** (2026-09-06) rather than
-satisfied; P3 states the waiver and what it costs, §5 M1 keeps the method for
-whoever captures a body, and the `Unmeasured` entry in the rules file stands.
+satisfied; P3 states the waiver and what it cost. The capture was then taken
+after the stack merged, on a deployed receiver, in two captures on 2026-09-06
+— the second with every delivery matched to its activity by id — and cost
+exactly what the waiver predicted: an `assignee` on 18 the adapter was not
+reading. The second capture also **corrected the first reading of it**: the
+same key on 19 and 20 is the standing assignee, and a fallback built on it
+over-reports a mention on any multi-field edit, so only 18 reads it
+(`fix(webhook)`, §5 M1).
 
 **Status** (2026-09-06, as this plan's P5 is written):
 
@@ -578,9 +584,11 @@ written on purpose, stack declared in the first line of the body (CLAUDE.md
   parses, and one that carries *less* than the three identity fields is the 400
   it should be. What stays unknown is whether a webhook adds a field the
   adapter would want (an `assignee` on 18, as type 1 does); that costs a
-  missing mention, not a rejection. The `UNMEASURED` entry in
-  `.claude/rules/backlog-pull-request-facts.md` stays until somebody captures a
-  body.
+  missing mention, not a rejection. **That is what happened**: the captures
+  taken after the stack merged (both 2026-09-06) found `assignee` on
+  18, 19 and 20, and `fix(webhook)` reads it on 18 — no delivery was ever
+  rejected. The rules file now records only the operations whose webhook body
+  is still uncaptured: a merge, a close and a comment with `attachmentId[]`.
 - **Scope**: `src/webhook/payload.ts` (schemas for 18–20 from the measured
   shapes; `DISPATCHED_ACTIVITY_TYPES` widened; `subjectOfActivity`),
   `src/webhook/inbound.ts` (root and comment builders shared with types 1–3
@@ -663,11 +671,11 @@ vocabulary `example.backlog.com`, project 500, repository 700, pull request
 
 | # | Question | Status |
 | --- | --- | --- |
-| M1 | Exact `content` of 18, 19, 20 | **Measured on the activity API form**: `{ id, number, summary, description, comment, changes, issue, repository }`, no `assignee`/`attachments`/`status`/`base`/`branch`. **Webhook form still UNMEASURED** — register a project webhook with `activityTypeIds[]=18,19,20,21` (21 for the capture only) at a receiver Backlog's servers can reach that stores raw bodies, repeat the operations in the rules file's table, and diff each body against `GET /projects/:id/activities`. Gated P3; the gate was **waived** (see §4, P3), so this is now a diff against a shape the shipped schemas already encode, not a prerequisite. |
-| M2 | Does 18 carry `content.assignee`? | Activity form: **no** (measured with an assignee set). Webhook form: part of M1. |
-| M3 | 19 change fields and value systems | **Measured**: `assignee` (display name; absent from a multi-field update once), `status` (id strings `1`/`2`/`3`), `summary`, `description` (full bodies), `issue` (issue keys). Every change carried a changelog `comment.id`. |
+| M1 | Exact `content` of 18, 19, 20 | **Measured on both forms, and diffed against each other.** Activity API: `{ id, number, summary, description, comment, changes, issue, repository }`, no `assignee`/`attachments`/`status`/`base`/`branch`. **Webhook** (captured on a deployed receiver after the waived gate, and re-captured the same day with five deliveries matched to the same activities by activity id — 2026-09-06 both times): the same set **plus `assignee`, `base`, `branch`, `diff`**, omitting nothing, shared keys equal. Only `assignee` changed behaviour, and only on 18. The second capture also found `notifications[]` populated on a pull-request webhook, as it is on an issue webhook, with reasons 10 and 11 where the issue side uses 1 and 2. Still uncaptured: the webhook deliveries for a merge, a close and a comment with `attachmentId[]`. |
+| M2 | Does 18 carry `content.assignee`? | Activity form: **no** (measured with an assignee set). Webhook form: **yes** (measured 2026-09-06 — a create with `assigneeId` and no mention text was answered by the bot, confirmed in the second capture), so §5.4 rule 4 gained the assignment-at-creation mention. |
+| M3 | 19 change fields and value systems | **Measured**: `assignee` (display name, old name in `old_value`; absent from one multi-field update, present in two later ones), `status` (id strings `1`/`2`/`3`), `summary`, `description` (full bodies), `issue` (issue keys). Every change carried a changelog `comment.id`. |
 | M4 | PR comment paging semantics | **Measured**: exclusive `minId`/`maxId`, `count` cut from the head of `order`, one-element window works. |
-| M5 | What fires 21 | **Measured**: not observed — merge (UI and git push) and close are 19 status changes, no delete operation exists in the UI or the API, and the project's activity history holds no type 21. D-PR5 resolved: 21 is ignored and not registered until a payload is seen. |
+| M5 | What fires 21 | **Measured twice**: not observed — merge (UI and git push) and close are 19 status changes, no delete operation exists in the UI or the API, and the project's activity history holds no type 21. Re-checked in the second capture with 21 **in the webhook subscription**: six pull-request operations produced zero type-21 deliveries. D-PR5 resolved: 21 is ignored and not registered until a payload is seen. |
 | M6 | Comment id sequences | **Measured**: separate sequences (7-digit vs 9-digit); overlap possible. |
 | M7 | `pullRequest.issue` shape | **Measured**: a full Issue on list and get alike; the list page's stub example is wrong. |
 | M8 | `attachmentId[]` on a PR comment | **Measured**: accepted; appears in `changeLog[field="attachment"]` by name only and in `GET …/attachments` with an id. |
@@ -707,8 +715,8 @@ The CLAUDE.md checklist, plus for this stack:
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| A type-21 payload appears after all | An unhandled activity | It is 200 Ignored today; the rules file says to capture and re-measure before dispatching it. |
-| Webhook body differs from the measured activity body | A 400 on real deliveries, or a field (an `assignee` on 18) silently unused | P3 gated on the webhook half of M1; schemas tolerate unknown keys; required fields are the three identity fields only. |
+| A type-21 payload appears after all | An unhandled activity | It is 200 Ignored today, and a subscription including 21 produced none (measured 2026-09-06); the rules file says to capture and re-measure before dispatching it. |
+| Webhook body differs from the measured activity body | A 400 on real deliveries, or a field (an `assignee` on 18) silently unused | **Realised as the second, benign half** (2026-09-06): no 400, and `assignee` was unused on 18 until `fix(webhook)` read it. Schemas tolerate unknown keys; required fields are the three identity fields only. |
 | P2 is a large refactor touching every member | Behaviour regressions hidden in a wide diff | "Only id literals change in existing tests" acceptance rule; branch commits in six reviewable steps; property sweep runs for both kinds. |
 | Comment id spaces overlap across kinds | Cross-kind matches in `markAsRead`, dedupe collisions | Kind segment in every message id; `markAsRead` matches by kind; M6 recorded. |
 | No delete for PR comments | A bot flow that deletes its own message fails on PR threads | Typed `UNSUPPORTED_OPERATION` before any call; README row; `capabilities` lets a caller check first. |
