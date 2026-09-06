@@ -1,29 +1,8 @@
 # @nulab/chat-adapter-backlog
 
 A [Backlog](https://backlog.com/) adapter for [Chat SDK](https://chat-sdk.dev/) —
-Backlog issues become threads, comments become messages, and an agent replies
-by commenting.
-
-## Status
-
-**Complete, not yet published.** Every member of Chat SDK's `Adapter`
-interface that Backlog can support is implemented and tested, and the package
-entry exports the surface documented below — but nothing is on npm yet, so the
-install command does not resolve.
-
-**Version line:** releases track `chat`, the same lockstep the first-party
-`@chat-adapter/*` packages use, so the adapter release built against
-`chat@4.39.x` carries a `4.39.x` number of its own. `chat` itself stays a peer
-dependency at a caret range rather than an exact pin, so upgrading the core
-does not require a matching adapter release.
-
-The finished behaviour is specified in
-[docs/specs/adapter.md](./docs/specs/adapter.md) and the order of work in
-[docs/plans/adapter-implementation.md](./docs/plans/adapter-implementation.md).
-Registration in the [Chat SDK adapter catalog](https://chat-sdk.dev/adapters),
-and whether this ships as a community or a
-[vendor-official](https://chat-sdk.dev/docs/contributing/vendor-official)
-adapter, are both open.
+Backlog issues and pull requests become threads, comments become messages, and
+an agent replies by commenting.
 
 ## Installation
 
@@ -31,7 +10,10 @@ adapter, are both open.
 pnpm add @nulab/chat-adapter-backlog chat
 ```
 
-`chat` is a peer dependency at `^4.39.0`. Node 20 or newer.
+`chat` is a peer dependency at `^4.39.0` — a caret range, so upgrading the core
+does not require a matching adapter release. Node 20 or newer. Release numbers
+track `chat`, so the adapter built against `chat@4.39.x` carries a `4.39.x`
+number of its own.
 
 ## Quick start
 
@@ -129,10 +111,16 @@ message and user id this adapter mints.
    https://<your-app>/api/webhooks/backlog?host=<host>&token=<secret>
    ```
 
-   Select activity types **1, 2 and 3** (issue created, updated, commented) and
-   **4** if you want deletion events. **Never `allEvent`** — the full range runs
-   to 49 and would deliver wiki, git, pull-request and document activity this
-   adapter has no meaning for.
+   Select activity types **1, 2, 3** (issue created, updated, commented) and
+   **18, 19, 20** (pull request added, updated, commented), plus **4** if you
+   want issue-deletion events. Leave **21** unchecked: the adapter ignores it,
+   and merging or closing a pull request arrives as a type-19 update anyway.
+   **Never `allEvent`** — the full range runs to 49 and would deliver git push,
+   wiki and document activity this adapter has no meaning for.
+
+   These checkboxes are the on/off switch per kind, and the only one — there is
+   no config option for it. Subscribe to 1, 2, 3 alone and no pull request
+   reaches a handler; subscribe to 18, 19, 20 alone and no issue does.
 
 ## Webhook authenticity — read this
 
@@ -154,26 +142,87 @@ or a reverse-proxy assertion.
 
 Keep the URL out of logs and issue trackers: it carries the secret.
 
+## Issues and pull requests
+
+Both are threads of the same shape: the root message is the summary and the
+body, every comment — Backlog's auto-generated changelog comments included — is
+a message, `thread.post()` comments on the thread, and the **project** is the
+channel for both. Nothing in the `Adapter` surface asks you which kind you are
+on; the id says it.
+
+`message.subject` says it too, when a handler needs to branch:
+
+```ts
+chat.onNewMention(async (thread, message) => {
+  const subject = await message.subject; // null if the lookup failed
+  if (subject?.type === 'pull_request') {
+    await thread.post({ markdown: `Reviewing ${subject.title}` });
+    return;
+  }
+  await thread.post({ markdown: `Saw: ${message.text}` });
+});
+```
+
+`subject.type` is `"issue"` or **`"pull_request"`** — the same string
+`@chat-adapter/github` uses. `subject.labels` carries the issue type and
+priority for an issue, and the status plus `"<base> ← <branch>"` for a pull
+request.
+
+The other spelling, `"pullRequest"`, is this package's own vocabulary and
+appears wherever the id grammar's subject does: `fetchThread().metadata.kind`,
+the `raw.subject.kind` of a comment's raw message, and the `raw.kind` of a root
+message's. Only `subject.type` follows the ecosystem.
+
+What a pull-request thread cannot do — delete a comment, get listed by
+`listThreads`, be merged, closed or created — is in the table below.
+
 ## Features and limitations
 
 | Capability | Support |
 | --- | --- |
-| Post, edit, delete a comment | yes |
-| File uploads and downloads | yes |
+| Issue threads | yes |
+| Pull-request threads | yes |
+| Post and edit a comment | yes — both kinds |
+| Delete a comment | partial — issue comments only (see below) |
+| File uploads and downloads | yes — a pull-request comment's attachment resolves by name (see below) |
 | Mentions | yes — text match, or assignment to the bot |
 | Reactions | partial — one Backlog star; the emoji is ignored |
 | Streaming | partial — buffered, posted once (see below) |
 | Issue creation via `channel.post()` | yes |
-| Thread listing, user lookup, read receipts, parent subject | yes |
-| Message-deleted events | partial — issue deletion only |
+| Pull-request creation, merge or close | **no** — Backlog exposes no API (see below) |
+| Thread listing | partial — issues only (see below) |
+| User lookup, read receipts, parent subject | yes — both kinds |
+| Message-deleted events | partial — issue deletion only; nothing deletes a pull request |
 | Message-updated events | **no** — see below |
 | DMs, ephemeral messages, modals, buttons, slash commands, scheduling, nested replies, typing indicators | no — Backlog has no counterpart |
 
 Limitations worth knowing before you build on this:
 
-- **Comment edits fire no webhook at all** (measured). Editing a comment in
-  Backlog creates no activity, however many times you do it, so
-  `onMessageUpdated` can never fire and text placed by editing reaches nobody.
+- **Comment edits fire no webhook.** Editing a comment in Backlog creates no
+  activity, however many times you do it, so `onMessageUpdated` never fires and
+  text placed by editing reaches nobody.
+- **A pull-request comment cannot be deleted.** Backlog has no endpoint for it,
+  so `deleteMessage` on a pull-request thread throws `AdapterError` with code
+  `UNSUPPORTED_OPERATION` before any request is made — `SentMessage.delete()`
+  there is a rejection a bot author has to expect. Issue comments delete
+  normally.
+- **`listThreads` lists issues only.** A pull-request list is per repository, a
+  coordinate the channel id does not carry;
+  `api(host).listPullRequests(projectId, repositoryId, …)` is the route to one.
+- **A pull request cannot be closed or merged from Chat.** Backlog exposes no
+  API for a status change. Merge in git or in the UI; the change then arrives
+  as a type-19 activity like any other update.
+- **A pull request cannot be created from Chat either.** `channel.post()`
+  creates an issue, and only an issue.
+- **Creating a pull request with `notifiedUserId[]` adds a system comment no
+  activity announces**, so `fetchMessages` returns one message the webhook
+  stream never delivered. A consumer reconciling the two will see the
+  difference.
+- **A pull-request comment's attachment resolves its id by name.** Its
+  `changeLog` names the file without an id, so `fetchData` lists the pull
+  request's attachments and takes the newest match — two files with the same
+  name in one pull request are indistinguishable. The list call is spent only
+  when someone actually reads the file, not once per message.
 - **`stream()` is buffered on purpose.** Left unimplemented, Chat SDK posts a
   message and edits it every 500 ms — roughly 120 edits a minute against a
   documented example limit of 150 updates a minute, so one streamed reply could
@@ -185,17 +234,18 @@ Limitations worth knowing before you build on this:
   `&color()`, `#contents`, `#rev`, `#attach`, `#thumbnail`, wiki links and
   issue-key auto-links pass through as text.
 - **A hand-typed `@Chatbot` is indistinguishable from a real mention.** Backlog
-  rewrites mentions to resolved display text before storing them and the
-  payload's `notifications` array is always empty, so detection is textual.
-  False positives are accepted; assignment to the bot is the reliable trigger.
+  rewrites mentions to resolved display text before storing them, and the
+  payload carries no record of who was notified, so detection is textual. False
+  positives are accepted; assignment to the bot is the reliable trigger.
 - **`chat.getUser()` cannot route to this adapter** — the core infers the
   adapter from the id shape and does not recognise `<host>:<id>`. Call
   `adapter.getUser()` directly.
 - **Read receipts are not automatic.** `markAsRead` costs one to three reads
   plus at most one update, because it pages the bot's notification feed looking
   for the comment. Do not call it for every comment.
-- **`thread.messages` is not free.** Each page is a Get Comment List call;
-  `listThreads` draws on the **search** bucket (a lower limit than `read`).
+- **`thread.messages` is not free.** Each page is one comment-list call for
+  either kind; `listThreads` draws on the **search** bucket (a lower limit than
+  `read`).
 - **Delivery is at-least-once.** The core dedupes on `message.id` for ten
   minutes by default; a redelivery after that is processed again. `message.id`
   is stable across deliveries, so key durable idempotency on it — and use a
@@ -206,26 +256,45 @@ Limitations worth knowing before you build on this:
 
 ## Ids
 
+Every id carries the **subject** — `issue:<issueId>` or
+`pr:<repositoryId>:<number>` — so a thread id and the ids of its messages agree
+about what they address.
+
 | Kind | Shape | Example |
 | --- | --- | --- |
 | Channel (project) | `backlog:<host>:<projectId>` | `backlog:example.backlog.com:500` |
-| Thread (issue) | `backlog:<host>:<projectId>:<issueId>` | `backlog:example.backlog.com:500:8001` |
-| Issue body | `<host>:<issueId>:i` | `example.backlog.com:8001:i` |
-| Comment | `<host>:<issueId>:c<commentId>` | `example.backlog.com:8001:c3001` |
-| Update without a comment | `<host>:<issueId>:u:<created>` | `example.backlog.com:8001:u:2026-09-03T04:05:06Z` |
+| Thread — issue | `backlog:<host>:<projectId>:issue:<issueId>` | `backlog:example.backlog.com:500:issue:8001` |
+| Thread — pull request | `backlog:<host>:<projectId>:pr:<repositoryId>:<number>` | `backlog:example.backlog.com:500:pr:700:12` |
+| Root message (issue body / pull-request description) | `<host>:<subject>:r` | `example.backlog.com:issue:8001:r`<br>`example.backlog.com:pr:700:12:r` |
+| Comment | `<host>:<subject>:c<commentId>` | `example.backlog.com:issue:8001:c3001`<br>`example.backlog.com:pr:700:12:c4002` |
+| Update without a comment | `<host>:<subject>:u:<created>` | `example.backlog.com:issue:8001:u:2026-09-03T04:05:06Z` |
 | User | `<host>:<userId>` | `example.backlog.com:100` |
+
+The kind is an explicit segment on **both** kinds, never inferred. Issue and
+pull-request comment ids come from separate sequences and may overlap, so a
+bare comment id does not identify a message on its own — keep the whole id.
 
 Ids are **numeric, never issue keys**: renaming a project key rewrites every
 issue key under it, while the numeric ids never change. `issueKey` appears only
-in metadata and URLs. The host is inside message and user ids because the
-core's dedupe key carries no thread component and Backlog comment ids are
-unique only within one space.
+in metadata and URLs. A pull request is likewise addressed by its numeric
+repository id and its per-repository `number` — never the repository name,
+which can change, and never its space-wide `id`, which appears only in metadata
+and raw data.
+
+The host is part of message and user ids because Backlog comment ids are unique
+only within one space. A pull request's channel is its **project**, not its
+repository.
 
 ## Mentions
 
 Detected when the message text matches `@<botUserName>` (case-sensitive,
-left-bounded, so `@Chatbot2` and `foo@Chatbot` do not match), or when the bot
-is assigned the issue.
+left-bounded, so `@Chatbot2` and `foo@Chatbot` do not match), or when the bot is
+assigned the issue or the pull request.
+
+One asymmetry is worth knowing: a pull request's **summary keeps mention
+notation raw**. `<@U999>` is stored literally there, while a description or a
+comment is rewritten to `@<display name>` on save — so a new pull request's text
+is matched against both forms.
 
 To mention someone outbound, use the helpers — writing `<@U…>` notifies the
 user even without `notifiedUserId`:
@@ -242,9 +311,10 @@ Backlog silently drops ids that are not project members.
 
 ## Creating an issue
 
-`channel.post()` creates one. The first block becomes the summary as plain
-text (Backlog renders no markup in summaries), the rest becomes the
-description:
+`channel.post()` creates an issue, and only an issue — Backlog exposes no API
+that opens a pull request, so there is no counterpart on the pull-request side.
+The first block becomes the summary as plain text (Backlog renders no markup in
+summaries), the rest becomes the description:
 
 ```ts
 const channel = chat.channel('backlog:example.backlog.com:500');
@@ -277,12 +347,17 @@ numbers differ by plan — so read them from the API rather than assuming:
 adapter.rateLimit('example.backlog.com');
 // { read: { limit, remaining, reset }, update: {…}, search: {…} }
 
-// Anything outside the Chat SDK contract:
-const issue = await adapter.api('example.backlog.com').getIssue(8001);
+// Anything outside the Chat SDK contract — including the pull-request list
+// `listThreads` deliberately does not cover:
+const api = adapter.api('example.backlog.com');
+const issue = await api.getIssue(8001);
+const pullRequests = await api.listPullRequests(500, 700, { count: 20 }); // projectId, repositoryId
 ```
 
 Issue listing and counting spend the **search** bucket, not `read` — the trap
-any polling loop falls into.
+any polling loop falls into. Listing or counting **pull requests** spends `read`
+instead, so the two lists draw on different budgets and one being exhausted says
+nothing about the other.
 
 ## Testing
 
@@ -297,6 +372,11 @@ const api = createInMemoryBacklogApi({
     { id: 500, projectKey: 'EXAMPLE', name: 'Example', textFormattingRule: 'markdown' },
   ],
   issues: [/* BacklogIssue values — see the type for the full shape */],
+  repositories: [{ id: 700, projectId: 500, name: 'example-repo', description: '' }],
+  pullRequests: [/* BacklogPullRequest values */],
+  // Keyed `<repositoryId>:<number>`, because a pull-request comment carries no
+  // reference to its parent.
+  pullRequestComments: { '700:12': [/* BacklogComment values */] },
 });
 
 const adapter = createBacklogAdapter({
@@ -309,8 +389,8 @@ const adapter = createBacklogAdapter({
 });
 ```
 
-`api.state` exposes issues, comments, stars, uploads and recorded inputs for
-assertions.
+`api.state` exposes issues, comments, repositories, pull requests and their
+comments, stars, uploads, notifications and recorded inputs for assertions.
 
 ## Links
 

@@ -477,9 +477,11 @@ version of record.
 
 ## 8. Out of scope / later
 
-- **Pull requests as threads** (activity types 18–21, the git pull-request
-  endpoints) — planned separately in
-  [docs/plans/pull-request-support.md](./pull-request-support.md).
+- ~~**Pull requests as threads**~~ — **done**, by the stack in
+  [docs/plans/pull-request-support.md](./pull-request-support.md): types 18, 19
+  and 20 dispatch, 21 is 200 Ignored (it was never observed; D-PR5), and the
+  git pull-request endpoints are on the port. Read that plan, not this bullet,
+  for what the seam looks like.
 - **Catalog listing** (community or vendor-official) in `vercel/chat`; the
   feature-matrix values are prepared in §13 of the spec.
 - **OAuth token acquisition and refresh**: callers supply a resolver; a helper
@@ -489,7 +491,8 @@ version of record.
 - **Polling fallback** via `GET /notifications` or `GET /projects/:id/activities`
   for deployments that cannot receive webhooks; needs a persisted cursor and
   competes for read/search budgets.
-- **Issue-body editing** through `editMessage(:i)`; today a `ValidationError`.
+- **Body editing** through `editMessage(:r)` — the issue's or the pull
+  request's; today a `ValidationError` for both (D12).
 - **Emoji reactions** if Backlog publishes an API (UI-only today).
 - **`fetchChannelMessages`** as a project-wide activity feed.
 - **Bot identity verification** at `initialize` via `GET /users/myself`
