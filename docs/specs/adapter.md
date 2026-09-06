@@ -461,7 +461,7 @@ message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
 | 3 | Issue Commented | `<host>:issue:<issueId>:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` | text |
 | 4 | Issue Deleted (D10) | root `<host>:issue:<issueId>:r` | — | — | — → `chat.processMessageDeleted({ adapter, channelId, threadId, messageId, raw, deletedAt: new Date(created) })` |
 | 14 | Issue Multi Updated (bulk) | — | — | — | 200 Ignored: no per-issue comment; measured to carry bulk status changes (2026-08-28) |
-| 17 | Comment Notification Added | — | — | — | 200 Ignored (D10): emitted only by `POST /issues/:id/comments/:commentId/notifications`, which adds recipients to an **existing** comment; `content.comment` is that original comment, so its id has already been dispatched (measured 2026-09-06) |
+| 17 | Comment Notification Added | — | — | — | 200 Ignored (D10): emitted by `POST /issues/:id/comments/:commentId/notifications`, which adds recipients to an **existing** comment (picking them while posting emits a plain type 3 instead); `content.comment` is that original comment, so its id has already been dispatched (measured 2026-09-06) |
 | 18 | Pull Request Added | `<host>:pr:<repository.id>:<number>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` if present | text (including the raw `<@U<botUserId>>` form, §5.4) |
 | 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present | `changes[field="assignee"].new_value === botUserName` **or** text |
 | 19 | Pull Request Updated, no comment id | `…:u:<created>` | `""` | none | as above |

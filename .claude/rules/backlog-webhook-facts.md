@@ -75,9 +75,11 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
 
 The support page's "the webhook type is the same as the Backlog API response
 for Get recent updates" holds for the envelope, not field for field. The same
-activity was captured both ways on types 1, 2, 3 and 17 (measured on a
-development space, 2026-09-06); three differences appeared, identically on
-every type:
+activity was captured both ways on types 2, 3, 14 and 17 (measured on a
+development space, 2026-09-06); the type-1 activity form was not read that
+day, and what is known about it comes from an earlier reading (measured
+2026-08-28, below). Three differences appeared, the same on every type that
+carries the key in question:
 
 - The webhook's `content` carries an **issue snapshot** the activity form
   omits entirely: `assignee`, `status`, `priority`, `issueType`, `resolution`,
@@ -85,7 +87,9 @@ every type:
   `estimatedHours`, `actualHours`, `parentIssueId`, `customFields` and — on
   the types that carry it at all, 2, 3 and 17 — `diff`. Code that reads the
   issue's current state off the payload works on a delivery and silently reads
-  `undefined` on a replayed activity.
+  `undefined` on a replayed activity. On type 1 the absence from the activity
+  form is the separate 2026-08-28 reading, not this one — see "What each issue
+  operation emits".
 
   Every snapshot key is present on **every** issue-side delivery, and an empty
   field arrives as `null` rather than as a missing key: 41 deliveries (13 type
@@ -100,7 +104,8 @@ every type:
 - Key convention differs on one field: webhook `externalFileLinks`, activity
   `external_file_links`.
 - `changes[]` entries on the activity form carry an extra `field_text`, the
-  localized display label; the webhook form does not.
+  localized display label; the webhook form does not. This one has nothing to
+  say about type 1, which carries no `changes[]` at all.
 
 `notifications` differs as well and in the more consequential direction: the
 activity form is always `[]`, so an activity replayed from the API cannot
@@ -154,11 +159,12 @@ answer who was notified even when the original delivery could.
   type 17. One type 3 arrives and the chosen recipients are in its top-level
   `notifications[]` with `reason: 2` (measured on a development space,
   2026-09-06).
-- Type 17 is emitted only by Add Comment Notification
-  (`POST /issues/:id/comments/:commentId/notifications`), which adds
-  recipients to a comment that already exists; only that comment's own author
-  may call it (Add Comment Notification docs). Measured on a development
-  space, 2026-09-06 — the docs give no `content` shape:
+- Of the two routes measured, the one that does emit type 17 is Add Comment
+  Notification (`POST /issues/:id/comments/:commentId/notifications`), which
+  adds recipients to a comment that already exists; only that comment's own
+  author may call it (Add Comment Notification docs). No other emitter was
+  looked for. Measured on a development space, 2026-09-06 — the docs give no
+  `content` shape:
   - `content` has the **same key set as types 2 and 3**, issue snapshot
     included; there is no `content.link` key.
   - `content.comment` is the **original** comment, id and text unchanged. No
@@ -181,7 +187,8 @@ answer who was notified even when the original delivery could.
     identical — same `content.comment.id`, same `content.comment.content`,
     the same 24 `content` keys with the same values. The type 3's
     `notifications[]` holds A alone and the type 17's holds B alone.
-  - Only `type`, the activity `id` and `notifications[]` tell the two apart.
+  - Only `type`, the activity `id`, `created` (the three seconds between them)
+    and `notifications[]` tell the two apart.
     A handler that dedupes on `content.comment.id` alone therefore drops the
     type 17 as a repeat of the type 3 and loses the later recipient entirely
     (docs/specs/adapter.md D10 accepts that cost deliberately).
@@ -205,7 +212,7 @@ label a user sees, and only three fields carry an id:
 | `statusId` | `status` | id string (`"2"`) | `standard` |
 | `resolutionId` | `resolution` | id string (`"0"`) | `standard` |
 | `categoryId[]` | **`component`** | display name | `standard` |
-| `milestoneId[]` | `milestone` | display name; several joined with `", "`, in an order that is not the display order | `standard` |
+| `milestoneId[]` | `milestone` | display name; several joined with `", "`, in an order that was not the display order on the one sample taken — the ordering rule is not established | `standard` |
 | `versionId[]` | `version` | display name | `standard` |
 | `dueDate` | **`limitDate`** | a bare date, `"2026-12-31"` — no time part, no `Z` | `standard` |
 | `issueTypeId` | `issueType` | display name | `standard` |
