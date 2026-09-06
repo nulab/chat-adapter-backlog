@@ -285,7 +285,10 @@ tells them apart. `BacklogBulkUpdatePayload` is the type-14 body instead — it
 names as many issues as `content.link[]` holds, so `bulkUpdate` carries its
 own `issueId` naming which entry this message is (§5.3, D22); `payload` is the
 whole delivery, unstripped, reachable again from every message the batch
-produced. The `comment` variant names its `subject` explicitly because a
+produced — and it is the schema's **input** type, because a delivery writes
+`content.link[].id` and `key_id` as decimal strings (§5.2) and only the
+adapter's own re-parse turns them into numbers; a consumer reading them off
+`raw.payload` gets `string | number`. The `comment` variant names its `subject` explicitly because a
 pull-request comment carries no parent reference of its own
 (`.claude/rules/backlog-pull-request-facts.md`); `BacklogRawComment` therefore
 has no `issueId`. The two root variants stay flat (`issue`, `pullRequest`)

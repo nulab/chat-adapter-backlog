@@ -247,3 +247,30 @@ describe('buildBulkUpdateMessage', () => {
     }
   });
 });
+
+describe('BacklogBulkUpdatePayload type-level contract', () => {
+  it('accepts the decimal-string link ids a delivery really carries', () => {
+    // `raw.payload` is the body verbatim, and over the webhook `link[].id` and
+    // `key_id` are strings; the type has to admit that form, not only the
+    // number the schema coerces them into.
+    const delivered: BacklogBulkUpdatePayload = {
+      created: '2026-09-03T04:05:06Z',
+      project: { id: FIXTURE.projectId },
+      createdUser: { id: FIXTURE.alice.id, name: FIXTURE.alice.name },
+      notifications: [],
+      type: 14,
+      content: {
+        comment: { content: '' },
+        link: [{ id: '8001', key_id: '1' }],
+      },
+    };
+    const fromActivityApi: BacklogBulkUpdatePayload = {
+      ...delivered,
+      content: { ...delivered.content, link: [{ id: 8001, key_id: 1 }] },
+    };
+
+    expect(bulkUpdateTargets(bulkActivity(delivered))).toEqual(
+      bulkUpdateTargets(bulkActivity(fromActivityApi))
+    );
+  });
+});

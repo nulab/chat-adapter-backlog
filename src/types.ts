@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import type { BacklogApi } from './client/port';
 import type {
-  IssueMultiUpdatedActivity,
+  IssueMultiUpdatedBody,
   RecognisedActivity,
 } from './webhook/payload';
 import type { Logger } from 'chat';
@@ -113,8 +113,15 @@ export type BacklogWebhookPayload = RecognisedActivity;
  * {@link BacklogWebhookPayload} because a bulk update names no single subject
  * (docs/specs/adapter.md §5.2): the types in that union are the ones an id can
  * be built from without asking which issue of several is meant.
+ *
+ * The schema's **input** type, not its output. `raw.payload` is the delivery
+ * verbatim, and a delivery writes `content.link[].id` and `key_id` as decimal
+ * strings; the output type declares them `number` because the schema coerces
+ * them, which is true of `parseBulkUpdatePayload`'s result and false of the
+ * body it was given. A consumer reading them off `raw.payload` gets
+ * `string | number` here and has to say which it means.
  */
-export type BacklogBulkUpdatePayload = IssueMultiUpdatedActivity;
+export type BacklogBulkUpdatePayload = IssueMultiUpdatedBody;
 
 /**
  * A comment as `message.raw` carries it. The parent is **not** a field here:

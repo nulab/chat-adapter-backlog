@@ -290,6 +290,21 @@ export type IssueUpdatedOrCommentedActivity = z.infer<
 >;
 export type IssueDeletedActivity = z.infer<typeof issueDeletedSchema>;
 export type IssueMultiUpdatedActivity = z.infer<typeof issueMultiUpdatedSchema>;
+
+/**
+ * A type-14 body as it arrives, before {@link issueMultiUpdatedSchema} has
+ * coerced anything — which for this type is not the same shape as
+ * {@link IssueMultiUpdatedActivity}: `content.link[].id` and `key_id` are
+ * decimal **strings** over the webhook and numbers from `GET
+ * /space/activities` (measured on a development space, 2026-09-06), and the
+ * schema's output declares only the number half.
+ *
+ * This is the type `raw.payload` carries, because `raw.payload` is the body
+ * verbatim (docs/specs/adapter.md §5.2 "not a stripped copy"). Declaring the
+ * output there would tell a consumer reading `link[].id` that it holds a
+ * number when a real delivery holds `"8001"`.
+ */
+export type IssueMultiUpdatedBody = z.input<typeof issueMultiUpdatedSchema>;
 export type PullRequestAddedActivity = z.infer<typeof pullRequestAddedSchema>;
 export type PullRequestUpdatedOrCommentedActivity = z.infer<
   typeof pullRequestUpdatedOrCommentedSchema
