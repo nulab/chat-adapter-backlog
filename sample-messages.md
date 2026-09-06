@@ -7,11 +7,16 @@ disagree; regenerate it rather than editing it by hand.
 
 The body is one Activity object as returned by
 [Get Recent Updates](https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/).
-Backlog publishes no dedicated webhook-payload page, and measured payloads match
-the activity shape field for field. Vocabulary throughout: host
-`example.backlog.com`, bot `Chatbot` (id 999), users `Alice` (100) and `Bob`
-(101), project 500, issue 8001, repository 700 (`example-repo`), pull request
-12.
+Backlog publishes no dedicated webhook-payload page, and measured payloads
+match the activity shape in the envelope but **not** field for field: a webhook
+body additionally carries the issue snapshot (`assignee`, `status`, `priority`,
+…), spells one key `externalFileLinks` where the activity form says
+`external_file_links`, and omits the activity form’s `field_text` inside
+`changes[]` (measured on a development space, 2026-09-06).
+
+Vocabulary throughout: host `example.backlog.com`, bot `Chatbot` (id 999),
+users `Alice` (100) and `Bob` (101), project 500, issue 8001, repository 700
+(`example-repo`), pull request 12.
 
 Three properties of these payloads decide how a handler must read them:
 
