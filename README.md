@@ -71,7 +71,7 @@ not a request to fall back.
 | `webhookSecret` | `string` | — | Required on every installation unless `webhookVerifier` is set. |
 | `installations` | `BacklogInstallation[]` | — | Several spaces in one adapter. Mutually exclusive with the fields above. |
 | `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check entirely — for a reverse-proxy assertion, mTLS or an IP allowlist. |
-| `userName` | `string` | first installation's `botUserName` | Exposed to the core as `adapter.userName`. |
+| `userName` | `string` | first installation's `botUserName` | Exposed to the core as `adapter.userName`. One string for the whole adapter; per space, read `adapter.botUserName(host)`. |
 | `logger` | `Logger` | `ConsoleLogger("info")` | Replaced by `chat.getLogger("backlog")` in `initialize`. |
 | `rateLimit.maxWaitMs` | `number` | `60_000` | Longest wait before a 429 retry. |
 | `rateLimit.maxRetries` | `number` | `1` | `0` disables retries. |
@@ -92,6 +92,23 @@ Register each space's webhook with its own `?host=`. Nothing in a Backlog
 payload identifies the space — `projectKey` and the numeric ids are not unique
 across spaces — so the host comes from the URL, and it is part of every thread,
 message and user id this adapter mints.
+
+The bot may carry a different display name in each space, so ask per host:
+
+```ts
+adapter.userName;                       // 'Chatbot' — the first installation's name
+adapter.botUserName('two.backlog.jp');  // 'Helperbot'
+```
+
+`adapter.userName` is a single string the Chat SDK core uses for its own
+fallback `@<userName>` regex, which therefore agrees with only one space.
+Mention detection itself is the adapter's and is correct everywhere: it
+resolves the installation from the webhook's `?host=` and matches that space's
+name. Anything you build on the mention string — stripping the prefix off a
+command, addressing the bot in your own text — should read
+`botUserName(host)`, not `userName`. An unconfigured host throws the same
+`ResourceNotFoundError` as `api(host)`. `botUserId` stays private, because the
+core's `@<id>` pattern would be wrong for every space but one.
 
 ## Platform setup
 
@@ -289,7 +306,9 @@ repository.
 
 Detected when the message text matches `@<botUserName>` (case-sensitive,
 left-bounded, so `@Chatbot2` and `foo@Chatbot` do not match), or when the bot is
-assigned the issue or the pull request.
+assigned the issue or the pull request. The name compared is the one configured
+for the space the event came from, so several spaces under different display
+names each match their own; `adapter.botUserName(host)` reports it.
 
 One asymmetry is worth knowing: a pull request's **summary keeps mention
 notation raw**. `<@U999>` is stored literally there, while a description or a
