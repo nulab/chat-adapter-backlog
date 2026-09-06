@@ -130,6 +130,24 @@ export function describeBacklogApiConformance(
       );
     });
 
+    it("a comment's previous value arrives as originalValue and is read as oldValue", async () => {
+      const api = await factory();
+      const comments = await api.listComments(ISSUE_ID, {
+        count: 100,
+        order: 'asc',
+      });
+      const changed = comments.find((c) => c.changeLog.length > 0);
+      expect(
+        changed,
+        'fixture must seed one comment with a changeLog'
+      ).toBeDefined();
+      expect(changed?.changeLog[0]).toMatchObject({
+        field: 'status',
+        newValue: '4',
+        oldValue: '3',
+      });
+    });
+
     it('adding, editing and deleting a comment is reflected in the list', async () => {
       const api = await factory();
       const added = await api.addComment(ISSUE_ID, { content: 'New comment' });
@@ -301,6 +319,16 @@ export function describeBacklogApiConformance(
   });
 }
 
+/**
+ * The changelog Backlog attaches to a field update. Seeded on one comment in
+ * both implementations so the `originalValue` -> `oldValue` rename has
+ * something to rename; a fixture with an empty `changeLog` everywhere would
+ * let a client read the wrong field forever.
+ */
+const STATUS_CHANGE_LOG: BacklogComment['changeLog'] = [
+  { field: 'status', newValue: '4', oldValue: '3', attachmentInfo: null },
+];
+
 /** Seed shared by both implementations' conformance test files, kept here so the fixture only needs to be written once. */
 export const conformanceFixture = {
   host: HOST,
@@ -313,4 +341,5 @@ export const conformanceFixture = {
   baseProject,
   baseIssue,
   baseComment,
+  statusChangeLog: STATUS_CHANGE_LOG,
 };

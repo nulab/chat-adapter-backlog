@@ -54,6 +54,7 @@ const {
   baseProject,
   baseIssue,
   baseComment,
+  statusChangeLog,
 } = conformanceFixture;
 
 function defaultRateLimitHeaders(
@@ -86,12 +87,27 @@ function toWireUser(user: {
   };
 }
 
+/**
+ * A REST `changeLog[]` entry as Backlog actually serialises it: the previous
+ * value is named `originalValue`, not the port's `oldValue` (measured,
+ * `.claude/rules/backlog-webhook-facts.md`). Emitting the port's own name here
+ * would make the fake agree with a client that reads the wrong field.
+ */
+function toWireChangeLog(changeLog: BacklogComment['changeLog']) {
+  return changeLog.map((change) => ({
+    field: change.field,
+    newValue: change.newValue,
+    originalValue: change.oldValue,
+    attachmentInfo: change.attachmentInfo,
+  }));
+}
+
 function toWireComment(comment: BacklogComment) {
   return {
     id: comment.id,
     issueId: comment.issueId,
     content: comment.content,
-    changeLog: comment.changeLog,
+    changeLog: toWireChangeLog(comment.changeLog),
     createdUser: toWireUser(comment.createdUser),
     created: comment.created.toISOString(),
     updated: comment.updated.toISOString(),
@@ -154,7 +170,12 @@ export function createFakeBacklogServer(
     comments: [
       baseComment({ id: 1, issueId }),
       baseComment({ id: 2, issueId, createdUser: bob }),
-      baseComment({ id: 3, issueId, createdUser: bob }),
+      baseComment({
+        id: 3,
+        issueId,
+        createdUser: bob,
+        changeLog: statusChangeLog,
+      }),
       baseComment({ id: 4, issueId: otherIssueId }),
     ],
     notifications: [

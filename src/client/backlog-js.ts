@@ -80,6 +80,13 @@ interface RequestArgs {
  * - Credentials are resolved fresh before each request rather than once at
  *   construction, because the resolver form (VERIFIED-FACTS) must support a
  *   token that a caller refreshes between calls.
+ * - Array parameters are named **without** the `[]` Backlog's documentation
+ *   shows (`projectId`, not `projectId[]`). `backlog-js` 0.20.1's
+ *   `toQueryString` passes every key through verbatim into
+ *   `qs.stringify(..., { arrayFormat: "brackets" })`, and that appends the
+ *   brackets itself: `{ projectId: [500] }` reaches the wire as
+ *   `projectId[]=500`, while `{ "projectId[]": [500] }` reaches it as
+ *   `projectId[][]=500`, which Backlog does not bind to the parameter at all.
  */
 export function createBacklogJsApi(
   options: CreateBacklogJsApiOptions
@@ -238,7 +245,7 @@ export function createBacklogJsApi(
 
     async listIssues(projectId, options: ListIssuesOptions) {
       const params: Record<string, unknown> = {
-        'projectId[]': [projectId],
+        projectId: [projectId],
         count: options.count,
       };
       if (options.offset !== undefined) {
@@ -263,9 +270,9 @@ export function createBacklogJsApi(
       if (input.assigneeId !== undefined)
         params['assigneeId'] = input.assigneeId;
       if (input.notifiedUserId !== undefined)
-        params['notifiedUserId[]'] = input.notifiedUserId;
+        params['notifiedUserId'] = input.notifiedUserId;
       if (input.attachmentId !== undefined)
-        params['attachmentId[]'] = input.attachmentId;
+        params['attachmentId'] = input.attachmentId;
       return requestJson<BacklogIssue>('createIssue', issueSchema, {
         method: 'POST',
         path: 'issues',
@@ -328,9 +335,9 @@ export function createBacklogJsApi(
     async addComment(issueId, input: AddCommentInput) {
       const params: Record<string, unknown> = { content: input.content };
       if (input.notifiedUserId !== undefined)
-        params['notifiedUserId[]'] = input.notifiedUserId;
+        params['notifiedUserId'] = input.notifiedUserId;
       if (input.attachmentId !== undefined)
-        params['attachmentId[]'] = input.attachmentId;
+        params['attachmentId'] = input.attachmentId;
       return requestJson<BacklogComment>('addComment', commentSchema, {
         method: 'POST',
         path: `issues/${issueId}/comments`,

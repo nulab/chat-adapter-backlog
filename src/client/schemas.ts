@@ -24,18 +24,43 @@ const starSchema = z.object({
   created: z.coerce.date(),
 });
 
+/**
+ * Only `id` is read (`src/reads.ts` builds the download URL from it), and the
+ * two doc pages disagree about the rest: Get Comment List shows
+ * `attachmentInfo: { id, type }` while the attachment endpoints return
+ * `{ id, name, size }`. Requiring `name` and `size` would turn a comment page
+ * carrying the documented shape into an `AdapterError("SCHEMA")` for the whole
+ * page, so they are optional until one form is measured.
+ */
 const attachmentInfoSchema = z.object({
   id: z.number(),
-  name: z.string(),
-  size: z.number(),
+  name: z.string().optional(),
+  size: z.number().optional(),
 });
 
-const changeLogEntrySchema = z.object({
-  field: z.string(),
-  newValue: z.string().nullable().default(null),
-  oldValue: z.string().nullable().default(null),
-  attachmentInfo: attachmentInfoSchema.nullable().default(null),
-});
+/**
+ * A REST `changeLog[]` entry. The previous value arrives as **`originalValue`**
+ * here, not `oldValue` — the webhook's `changes[]` is the one that says
+ * `old_value` (measured, `.claude/rules/backlog-webhook-facts.md` "the REST
+ * comment `changeLog` is different (camelCase `newValue`/`originalValue`…)";
+ * `.claude/rules/backlog-pull-request-facts.md` "`changeLog` entries are
+ * `{ field, newValue, originalValue }` only"). It is renamed to `oldValue` on
+ * the way out so the port's `BacklogChange` reads the same whichever source
+ * filled it, which is what `docs/specs/adapter.md` §3.5 promises.
+ */
+const changeLogEntrySchema = z
+  .object({
+    field: z.string(),
+    newValue: z.string().nullable().default(null),
+    originalValue: z.string().nullable().default(null),
+    attachmentInfo: attachmentInfoSchema.nullable().default(null),
+  })
+  .transform((entry) => ({
+    field: entry.field,
+    newValue: entry.newValue,
+    oldValue: entry.originalValue,
+    attachmentInfo: entry.attachmentInfo,
+  }));
 
 export const commentSchema = z.object({
   id: z.number(),
