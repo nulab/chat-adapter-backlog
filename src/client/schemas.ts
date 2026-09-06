@@ -193,6 +193,7 @@ export const prioritySchema = z.object({ id: z.number(), name: z.string() });
 export const notificationSchema = z.object({
   id: z.number(),
   alreadyRead: z.boolean(),
+  resourceAlreadyRead: z.boolean(),
   project: z.object({
     id: z.number(),
     projectKey: z.string(),

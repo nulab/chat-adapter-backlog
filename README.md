@@ -242,7 +242,9 @@ Limitations worth knowing before you build on this:
   `adapter.getUser()` directly.
 - **Read receipts are not automatic.** `markAsRead` costs one to three reads
   plus at most one update, because it pages the bot's notification feed looking
-  for the comment. Do not call it for every comment.
+  for the comment. Do not call it for every comment. It sets that
+  notification's `resourceAlreadyRead` and never touches `alreadyRead` (the
+  unread-count badge, cleared only by resetting the whole feed).
 - **`thread.messages` is not free.** Each page is one comment-list call for
   either kind; `listThreads` draws on the **search** bucket (a lower limit than
   `read`).

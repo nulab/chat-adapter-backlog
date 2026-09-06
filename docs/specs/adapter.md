@@ -855,10 +855,16 @@ they must agree); `:r`/`:u:` → return without a call (debug log). Page
 an entry matches: `comment.id === commentId` for an issue thread,
 `pullRequestComment.id === commentId` for a pull-request thread — never the
 other field, because the two comment id sequences are distinct and may overlap
-(measured 2026-09-06). Found and
-`alreadyRead` → no call. Found and unread →
+(measured 2026-09-06). Found and `resourceAlreadyRead` → no call. Found and
+not `resourceAlreadyRead` →
 [Read Notification](https://developer.nulab.com/docs/backlog/api/2/read-notification/)
 `POST /notifications/:id/markAsRead`. Not found → `info` log and return.
+`alreadyRead` is a different flag — the inbox-badge count, cleared only by
+[Reset Unread Notification Count](https://developer.nulab.com/docs/backlog/api/2/count-notification/)
+(`POST /notifications/markAsRead`) — and the short-circuit must not read it: a
+notification `markAsRead` itself marked stays `alreadyRead: false` forever, so
+keying off that flag would repeat the `POST` on every call (measured
+2026-09-06).
 Cost is 1–3 reads plus at most one update per call; README says not to call it
 per comment unconditionally.
 

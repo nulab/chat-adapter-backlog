@@ -580,7 +580,7 @@ export function createInMemoryBacklogApi(
       if (notification === undefined) {
         throw new ResourceNotFoundError('backlog', 'notification', String(id));
       }
-      notification.alreadyRead = true;
+      notification.resourceAlreadyRead = true;
     },
 
     async uploadAttachment(filename, _data, mimeType) {

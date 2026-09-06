@@ -204,7 +204,22 @@ export interface BacklogPriority {
 
 export interface BacklogNotification {
   id: number;
+  /**
+   * The inbox-badge flag: flipped to `true` on **every** notification by
+   * [Reset Unread Notification Count](https://developer.nulab.com/docs/backlog/api/2/count-notification/)
+   * (`POST /notifications/markAsRead`), left untouched by
+   * `markNotificationAsRead` (measured 2026-09-06). `markAsRead` (§7.8) must
+   * not read this field — see `resourceAlreadyRead` below.
+   */
   alreadyRead: boolean;
+  /**
+   * Set on **this one** notification by
+   * [Read Notification](https://developer.nulab.com/docs/backlog/api/2/read-notification/)
+   * (`POST /notifications/:id/markAsRead`), left untouched by the
+   * reset-count endpoint above (measured 2026-09-06). This is the flag
+   * `markAsRead` (§7.8) short-circuits on.
+   */
+  resourceAlreadyRead: boolean;
   project: { id: number; projectKey: string; name: string };
   issue: { id: number; issueKey: string; summary: string } | null;
   comment: { id: number } | null;

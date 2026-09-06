@@ -147,6 +147,18 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
 - `reason` is numeric: 1 Assigned to Issue, 2 Issue Commented, 3 Issue Created,
   4 Issue Updated, 5 File Added, 6 Project User Added, 9 Other, 10–13 pull
   request, 14/15/17 document; 7, 8, 16 undocumented; typed as bare `number`.
+- `alreadyRead` and `resourceAlreadyRead` are set by two different endpoints,
+  each leaving the other field untouched (measured 2026-09-06, one bot user's
+  own feed): `POST /notifications/:id/markAsRead` (Read Notification) flips
+  only that notification's `resourceAlreadyRead` to `true`
+  (`(false,false)` → 204 → `(false,true)` for `(alreadyRead,
+  resourceAlreadyRead)`); `POST /notifications/markAsRead` (Reset Unread
+  Notification Count) flips `alreadyRead` to `true` on **every** notification
+  and left `GET /notifications/count?alreadyRead=false` at 16 → 0 without
+  touching any `resourceAlreadyRead`. `alreadyRead` is the inbox-badge count;
+  `resourceAlreadyRead` is "this notification's target was read", which is
+  what Read Notification sets — code that short-circuits a repeat
+  `markAsRead` must test `resourceAlreadyRead`, never `alreadyRead`.
 
 ## Attachments
 

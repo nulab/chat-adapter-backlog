@@ -719,7 +719,7 @@ export async function markAsRead(input: MarkAsReadInput): Promise<void> {
         subject.notificationCommentId(notification) === commentId
     );
     if (found !== undefined) {
-      if (!found.alreadyRead) {
+      if (!found.resourceAlreadyRead) {
         await api.markNotificationAsRead(found.id);
       }
       return;
