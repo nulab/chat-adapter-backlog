@@ -115,8 +115,12 @@ export function parseBulkUpdatePayload(
  * delivery names no comment. `created` is the batch's, so every issue in a
  * commentless batch gets a distinct id anyway — the issue id is already in
  * the subject half of the message id.
+ *
+ * Exported because the dispatcher logs the id of a message whose construction
+ * failed, and a log line naming a different id than the message would have
+ * carried is worse than no log line.
  */
-function bulkMessageId(
+export function bulkMessageId(
   host: string,
   subject: BacklogSubjectRef,
   target: BulkUpdateTarget,

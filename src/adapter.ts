@@ -62,6 +62,7 @@ import type {
 } from './types';
 import {
   buildBulkUpdateMessage,
+  bulkMessageId,
   bulkUpdateTargets,
   parseBulkUpdatePayload,
 } from './webhook/bulk';
@@ -1242,20 +1243,14 @@ export class BacklogAdapter implements Adapter<
         await projectReady;
         return this.parseMessage(raw);
       };
-      const messageIdForLog =
-        target.commentId === undefined
-          ? encodeMessageId({
-              host,
-              subject,
-              part: 'update',
-              created: activity.created,
-            })
-          : encodeMessageId({
-              host,
-              subject,
-              part: 'comment',
-              commentId: target.commentId,
-            });
+      // The same function the message itself is built with, so the id logged
+      // for a failed dispatch is the id the handler would have seen.
+      const messageIdForLog = bulkMessageId(
+        host,
+        subject,
+        target,
+        activity.created
+      );
 
       // Dispatched per issue and never awaited, exactly as the single-subject
       // path below; the response returns before any of them completes.
