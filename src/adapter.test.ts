@@ -2509,6 +2509,7 @@ describe('BacklogAdapter.markAsRead (§7.8)', () => {
   ): BacklogNotification {
     return {
       alreadyRead: false,
+      resourceAlreadyRead: false,
       project: {
         id: FIXTURE.projectId,
         projectKey: FIXTURE.projectKey,
@@ -2691,7 +2692,7 @@ describe('BacklogAdapter.markAsRead (§7.8)', () => {
         notifications: [
           botNotification({
             id: 1,
-            alreadyRead: true,
+            resourceAlreadyRead: true,
             comment: { id: 7 },
           }),
         ],
@@ -2714,7 +2715,7 @@ describe('BacklogAdapter.markAsRead (§7.8)', () => {
         notifications: [
           botNotification({
             id: 1,
-            alreadyRead: true,
+            resourceAlreadyRead: true,
             pullRequestComment: { id: PULL_REQUEST_COMMENT_ID },
           }),
         ],
@@ -2727,6 +2728,33 @@ describe('BacklogAdapter.markAsRead (§7.8)', () => {
     );
 
     expect(api.state.recordedInputs).toEqual([]);
+  });
+
+  it('an inbox-cleared notification whose resource is still unread still gets marked', async () => {
+    // `alreadyRead` is the badge flag the reset-unread-count endpoint sets on
+    // every notification; `resourceAlreadyRead` is what `markAsRead`'s own
+    // endpoint sets on this one. A seed with the former true and the latter
+    // false proves the short-circuit no longer keys off the wrong flag
+    // (measured 2026-09-06, `.claude/rules/backlog-api-facts.md`).
+    const { adapter, api } = egressAdapter({
+      seed: {
+        notifications: [
+          botNotification({
+            id: 1,
+            alreadyRead: true,
+            resourceAlreadyRead: false,
+            comment: { id: 7 },
+          }),
+        ],
+      },
+    });
+
+    await adapter.markAsRead(EGRESS_THREAD_ID, issueCommentMessageId(7));
+
+    expect(api.state.recordedInputs).toContainEqual({
+      method: 'markNotificationAsRead',
+      id: 1,
+    });
   });
 
   it('marking a comment read through the wrong kind of thread is rejected', async () => {

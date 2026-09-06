@@ -183,6 +183,7 @@ function baseNotifications(): BacklogNotification[] {
     {
       id: 1,
       alreadyRead: false,
+      resourceAlreadyRead: false,
       project,
       issue: null,
       comment: { id: 1 },
@@ -194,6 +195,7 @@ function baseNotifications(): BacklogNotification[] {
     {
       id: 2,
       alreadyRead: false,
+      resourceAlreadyRead: false,
       project,
       issue: null,
       comment: { id: 2 },
@@ -205,6 +207,7 @@ function baseNotifications(): BacklogNotification[] {
     {
       id: 3,
       alreadyRead: false,
+      resourceAlreadyRead: false,
       project,
       issue: null,
       comment: null,

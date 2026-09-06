@@ -854,7 +854,7 @@ export function createFakeBacklogServer(
       const notification = state.notifications.find((n) => n.id === id);
       if (notification === undefined)
         throw new RouteError(404, 6, 'No such notification');
-      notification.alreadyRead = true;
+      notification.resourceAlreadyRead = true;
       return respond(204, undefined);
     }
 
