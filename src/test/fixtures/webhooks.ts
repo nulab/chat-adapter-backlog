@@ -561,10 +561,19 @@ interface PullRequestOptions extends ActivityOptions {
   /**
    * The subject's **current** assignee, which the webhook form carries on 18,
    * 19 and 20 alike while the activity form carries it on none of them
-   * (measured 2026-09-06). Left out of `content` entirely unless given, so a
-   * fixture that models the activity form still has the key set that form has.
+   * (measured 2026-09-07). `null` — an unassigned pull request — is the
+   * default because these builders model the webhook form, which is the only
+   * form the adapter ever receives.
    */
   assignee?: FixtureUser | null;
+  /**
+   * The diff(1)-style body a description edit puts on its type 19, and `null`
+   * on every other delivery (measured 2026-09-07). Only
+   * `pullRequestDescriptionEdited` sets it, so the pairing of the key with the
+   * `description` change is a property of the fixtures rather than of each
+   * caller.
+   */
+  diff?: string | null;
 }
 
 function repositoryOf(options: PullRequestOptions): Record<string, unknown> {
@@ -576,12 +585,13 @@ function repositoryOf(options: PullRequestOptions): Record<string, unknown> {
 }
 
 /**
- * The one `content` key set types 18, 19 and 20 share
- * (`.claude/rules/backlog-pull-request-facts.md`): no `attachments`, no
- * `status`, and `repository.name` on every one. The activity form carries
- * nothing more (measured 2026-09-06 on 17 activities); the webhook form adds
- * `assignee`, `base`, `branch` and `diff` (measured 2026-09-06), of which
- * only `assignee` changes any behaviour, so only it has an option.
+ * The `content` key set types 18, 19 and 20 share in the form the adapter
+ * receives (`.claude/rules/backlog-pull-request-facts.md`): the activity
+ * form's keys — no `attachments`, no `status`, `repository.name` on every one
+ * — plus the four the **webhook** adds, `assignee`, `base`, `branch` and
+ * `diff` (measured 2026-09-07 by diffing five deliveries against the same
+ * activities). `base` and `branch` are constants here because nothing reads
+ * them and no measured delivery omitted them.
  */
 function pullRequestContent(
   options: PullRequestOptions & {
@@ -592,32 +602,44 @@ function pullRequestContent(
     issue?: Record<string, unknown> | null;
   }
 ): Record<string, unknown> {
-  const content: Record<string, unknown> = {
+  const assignee = options.assignee ?? null;
+  return {
     id: options.pullRequestId ?? FIXTURE.pullRequestId,
     number: options.number ?? FIXTURE.pullRequestNumber,
     summary: options.summary ?? 'Retry the deploy step on a 5xx',
     description: options.description ?? 'Fixes the flaky staging deploy.',
+    base: 'main',
+    branch: 'fix/deploy-retry',
+    diff: options.diff ?? null,
+    assignee:
+      assignee === null
+        ? null
+        : {
+            id: assignee.id,
+            userId: assignee.userId ?? null,
+            name: assignee.name,
+            // Not the `roleType` the same user carries under
+            // `notifications[].user`, which was 2 for the same account
+            // (measured 2026-09-07). Nothing reads either; the fixture keeps
+            // them different so nothing starts to.
+            roleType: 94,
+            lang: 'ja',
+          },
     comment: options.comment ?? null,
     changes: changeEntries(options.changes ?? []),
     issue: options.issue ?? null,
     repository: repositoryOf(options),
   };
-  if (options.assignee !== undefined) {
-    content['assignee'] =
-      options.assignee === null
-        ? null
-        : { id: options.assignee.id, name: options.assignee.name };
-  }
-  return content;
 }
 
 /**
  * Type 18 — Pull Request Added.
  *
  * The attachments a create call takes are **not in the activity at all**, so
- * no option adds them; the `assignee` it takes is in the webhook form only,
- * so `assignee` adds a key the activity form has none of. `linkedIssue`
- * populates `content.issue`, which is display data and never routing (D-PR6).
+ * no option adds them; the `assignee` it takes is, on the webhook form
+ * (measured 2026-09-07), which is what makes opening a pull request for the
+ * bot a mention. `linkedIssue` populates `content.issue`, which is display
+ * data and never routing (D-PR6).
  */
 export function pullRequestAdded(
   options: PullRequestOptions & {
@@ -676,6 +698,8 @@ export function pullRequestUpdated(
   options: PullRequestOptions & {
     commentId?: number;
     text?: string | null;
+    summary?: string;
+    description?: string | null;
     changes?: FixtureChange[];
   } = {}
 ): Record<string, unknown> {
@@ -697,6 +721,29 @@ export function pullRequestUpdated(
     }),
     options
   );
+}
+
+/**
+ * A description edit, the one delivery measured to carry a non-null
+ * `content.diff` (2026-09-07): a diff(1)-style body of the edit, alongside the
+ * `description` change that carries both full bodies. Every other pull-request
+ * delivery has `diff: null`, which is what the other builders emit.
+ */
+export function pullRequestDescriptionEdited(
+  options: PullRequestOptions & {
+    newBody?: string;
+    oldBody?: string;
+  } = {}
+): Record<string, unknown> {
+  const newBody = options.newBody ?? 'Retries the deploy step on a 5xx.';
+  const oldBody = options.oldBody ?? 'Fixes the flaky staging deploy.';
+  return pullRequestUpdated({
+    ...options,
+    description: newBody,
+    diff: `1c1\n<${newBody}---\n>${oldBody}`,
+    text: '',
+    changes: [{ field: 'description', new_value: newBody, old_value: oldBody }],
+  });
 }
 
 /**
@@ -724,9 +771,12 @@ export function pullRequestStatusChanged(
 }
 
 /**
- * An assignee change reports the new assignee by **display name** under the
+ * An assignee change reports both assignees by **display name** under the
  * field name `assignee` — the issue side calls the same thing `assigner`
- * (measured 2026-09-06).
+ * (measured 2026-09-06). `previousName` defaults to `""`, the value measured
+ * when nobody was assigned before; a reassignment carries the old name there,
+ * and an unassignment is `assigneeName: ""` with the old name kept (measured
+ * 2026-09-07).
  */
 export function pullRequestAssigneeChanged(
   options: PullRequestOptions & {
