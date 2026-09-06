@@ -483,21 +483,22 @@ of length 1 as "really a type 2":
 
 The webhook form of types 18–20 is the activity form plus four keys —
 `assignee`, `base`, `branch` and `diff` — measured on both forms and diffed
-against each other by activity id (2026-09-07,
-`.claude/rules/backlog-pull-request-facts.md`). `base` and `branch` are the
-branch names; `diff` is a diff(1)-style body carried only by the type 19 that
-changed the description, and is named by no Backlog document. Two of the four
-are not pull-request-specific: issue types 2 and 3 carry `assignee` and `diff`
-with the same meanings. The schemas name all of them as the record of the
-measurement, and nothing reads `base`, `branch` or `diff`, which costs a
-consumer nothing either way: `raw.payload` is the parsed body, so an unread
-key is not a lost one.
+against each other by activity id (measured on a development space,
+2026-09-06, `.claude/rules/backlog-pull-request-facts.md`). `base` and
+`branch` are the branch names; `diff` is a diff(1)-style body carried only by
+the type 19 that changed the description, and is named by no Backlog document.
+Two of the four are not pull-request-specific: issue types 2 and 3 carry
+`assignee` and `diff` with the same meanings. The schemas name all of them as
+the record of the measurement, and nothing reads `base`, `branch` or `diff`,
+which costs a consumer nothing either way: `raw.payload` is the parsed body,
+so an unread key is not a lost one.
 
-A pull-request webhook's top-level `notifications[]` **is populated** —
-reason 10 for an assignment, 11 for a comment mention — where an issue
-webhook's is always `[]` and the activity API returns `[]` for the same
-activities (measured 2026-09-07). Nothing reads it here; mention detection
-from `notifications[]` is D9 rule 6's, and covers both kinds when it lands.
+A pull-request webhook's top-level `notifications[]` **is populated**, as an
+issue webhook's is; only the reason codes for the same act differ — 10 for an
+assignment and 11 for a comment mention, where the issue side uses 1 and 2.
+The activity API returns `[]` for the same activities on both kinds (measured
+2026-09-06), so the webhook remains the only source of it. §5.4 rule 6 reads
+it for every dispatched type alike, with no pull-request branch.
 
 ### 5.3 Activity-type mapping
 
@@ -510,11 +511,11 @@ from `notifications[]` is D9 rule 6's, and covers both kinds when it lands.
 | 4 | Issue Deleted (D10) | root `<host>:issue:<issueId>:r` | — | — | — → `chat.processMessageDeleted({ adapter, channelId, threadId, messageId, raw, deletedAt: new Date(created) })` |
 | 14 | Issue Multi Updated (bulk) | one per `content.link[]` entry: `<host>:issue:<link.id>:c<link.comment.id>`, or `…:u:<created>` for an entry with no comment | `link[].comment.content ?? ""` | none (a bulk update names no file) | `changes[field="assigner"].new_value === botUserName` **or** text **or** the delivery's whole `notifications[]` (§5.4 rule 6, undivided — so it marks every message of the batch, D22) → **N** `chat.processMessage` calls, one per entry |
 | 17 | Comment Notification Added | — | — | — | 200 Ignored (D10): emitted by `POST /issues/:id/comments/:commentId/notifications`, which adds recipients to an **existing** comment (picking them while posting emits a plain type 3 instead); `content.comment` is that original comment, so its id has already been dispatched (measured 2026-09-06) |
-| 18 | Pull Request Added | `<host>:pr:<repository.id>:<number>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` if present | text (including the raw `<@U<botUserId>>` form, §5.4) |
+| 18 | Pull Request Added | `<host>:pr:<repository.id>:<number>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` if present | `content.assignee?.id === botUserId` **or** text (including the raw `<@U<botUserId>>` form, §5.4) |
 | 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present | `changes[field="assignee"].new_value === botUserName` **or** text |
 | 19 | Pull Request Updated, no comment id | `…:u:<created>` | `""` | none | as above |
 | 20 | Comment Added on Pull Request | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present; a `changes[field="attachment"]` entry names the file but carries no id (§6.6) | text |
-| 21 | Pull Request Deleted (docs) / Merged (`backlog-js`) | — | — | — | 200 Ignored (D-PR5): not observed on two attempts, the second with 21 in the webhook subscription — merge and close arrive as 19 status changes and no delete operation exists in the UI or the API (measured 2026-09-06, re-checked 2026-09-07) |
+| 21 | Pull Request Deleted (docs) / Merged (`backlog-js`) | — | — | — | 200 Ignored (D-PR5): not observed on either of two attempts, the second made with 21 in the webhook subscription — merge and close arrive as 19 status changes and no delete operation exists in the UI or the API (both measured 2026-09-06) |
 | 12, 13 | Git Pushed, Git Repository Created | — | — | — | 200 Ignored: no thread meaning |
 | other | wiki, document, … | — | — | — | 200 Ignored |
 
@@ -622,14 +623,14 @@ Behavioural consequences of measured facts (details and dates in
   delivered. Editing a pull-request comment fires no activity, as for issues.
 - **The webhook form of 18–20 adds four keys** the activity form has none of:
   `assignee`, `base`, `branch` and `diff` (measured on both forms and diffed
-  by activity id, 2026-09-07; §5.2). Only `assignee` changes behaviour, and
+  by activity id, 2026-09-06; §5.2). Only `assignee` changes behaviour, and
   only on 18, where it is the assignment; on 19 and 20 it is the standing
   assignee and is not read, exactly as on issue types 2 and 3, which carry the
   same key (§5.4 rule 4).
 - **A pull-request operation can produce an issue-thread message.** Linking an
   issue to a pull request emits a **type 3 on that issue** whose comment is a
   localized system sentence naming the pull request and whose `changes[]` is
-  empty (measured 2026-09-07), alongside the type 19 on the pull request. It
+  empty (measured 2026-09-06), alongside the type 19 on the pull request. It
   is delivered as an ordinary issue comment; nothing in the payload marks it
   as machine-generated, so a consumer that acts on every comment acts on this
   one.
@@ -658,27 +659,31 @@ no notification:
 4. Type 19: as rule 3 with `field === "assignee"` (the pull-request field
    name, measured 2026-09-06). Type 18: `content.assignee?.id === botUserId`,
    as rule 2 — the webhook body carries the assignee the activity form omits
-   (measured 2026-09-07), so opening a pull request assigned to the bot and
+   (measured 2026-09-06), so opening a pull request assigned to the bot and
    mentioning nobody in its text is a mention.
 
    On 2, 3, 19 and 20 the same `content.assignee` is **not** an assignment and
    is not read. It is whoever the subject is assigned to right now, repeated
-   on every delivery of both kinds (measured 2026-09-07), so reading it would
+   on every delivery of both kinds (measured 2026-09-06), so reading it would
    make every comment on a bot-assigned subject a mention. The evidence that
    an assignment happened is the `changes[]` entry rules 3 and 4 read, and
    nothing else in the body: a `summary` + `description` + `issue` `PATCH` on
    a pull request assigned to the bot carried the bot in `content.assignee`,
    named no assignment in `changes[]`, and notified nobody (measured
-   2026-09-07).
+   2026-09-06).
 
-   One shape is therefore under-reported and accepted as such: a `PATCH` that
-   set `assigneeId` alongside another field was once measured to emit a 19
-   with no `assignee` entry while still notifying the new assignee (2026-09-06,
-   never reproduced — two later multi-field `PATCH`es reported every field they
-   changed). A fallback that read `content.assignee` on such a 19 would turn
-   that unreproduced miss into a false mention on every plain multi-field edit,
-   which is the reproducible case; the miss stays. `notifications[]` reason 10
-   is the evidence that settles it, and rule 6 is where it belongs.
+   An assignment `changes[]` leaves out is not missed, because rule 6 catches
+   it. A `PATCH` that set `assigneeId` alongside another field was once
+   measured to emit a 19 with no `assignee` entry while still notifying the
+   new assignee (2026-09-06, never reproduced — two later multi-field
+   `PATCH`es reported every field they changed), and a delivery that notifies
+   somebody names them in `notifications[]`. So an update whose `changes[]`
+   carries no assignment is a mention when `notifications[]` names the bot
+   and is not one when it does not — which is what both measured shapes want:
+   the under-reporting `PATCH` notified the new assignee, and the plain
+   multi-field edit of a bot-assigned pull request notified nobody. Reading
+   `content.assignee` here instead would make that second, reproducible shape
+   a false mention, which is why rules 3 and 4 stop at `changes[]`.
 5. A pull request's **summary carries mention notation unrewritten** — in
    storage, in the activity body and in the webhook body alike, while
    `description` and comments are rewritten to `@<display name>` everywhere
@@ -1587,7 +1592,7 @@ for one scratch space is worse than requiring the two to share it.
   `example.backlog.com`, bot `Chatbot` (999), users `Alice` (100) and `Bob`
   (101), project 500, issue 8001, repository 700 (`example-repo`), pull request
   12. The pull-request payloads are the **webhook** form, which the fixtures
-  model since it was measured (2026-09-07): the activity API form plus
+  model since it was measured (2026-09-06): the activity API form plus
   `assignee`, `base`, `branch` and `diff`
   (`.claude/rules/backlog-pull-request-facts.md`).
 - **DEVELOPMENT.md**: credentials table gains `BACKLOG_BOT_USER_ID`,

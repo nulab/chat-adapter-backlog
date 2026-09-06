@@ -6,8 +6,8 @@ paths:
 # Backlog pull-request facts
 
 What Backlog's Git pull-request API and activities actually deliver, measured
-on a development space on 2026-09-06 unless a line says otherwise; the docs cited are
-at `https://developer.nulab.com/docs/backlog/api/2/<slug>/`. Re-measure before
+on a development space on 2026-09-06 unless a line says otherwise; the docs
+cited are at `https://developer.nulab.com/docs/backlog/api/2/<slug>/`. Re-measure before
 changing code that contradicts a fact here. Issue-side facts stay in
 `backlog-api-facts.md` and `backlog-webhook-facts.md`; this file records only
 where pull requests differ or where nothing issue-side applies. Vocabulary:
@@ -48,12 +48,12 @@ no `status`, `base` or `branch`. `repository.name` is present on every one,
 so the webhook is the free source of the name the REST object lacks.
 
 The **webhook** `content` is that key set **plus `assignee`, `base`, `branch`
-and `diff`**, and omits nothing from it. Measured twice: on deliveries of all
-three types on 2026-09-06, and again on 2026-09-07 by matching five
-deliveries to the same activities by activity id and diffing both directions
-— the top-level key sets are identical, the shared `content` keys hold equal
-values, and the four above are added on every type. Consequences, in the
-order they matter:
+and `diff`**, and omits nothing from it. Measured on a development space,
+2026-09-06, in two captures: first on deliveries of all three types, then
+again by matching five deliveries to the same activities by activity id and
+diffing both directions — the top-level key sets are identical, the shared
+`content` keys hold equal values, and the four above are added on every type.
+Consequences, in the order they matter:
 
 - **`assignee` is on 18, 19 and 20**, as
   `{ id, userId, name, roleType, lang } | null` — no `mailAddress`, no
@@ -65,13 +65,13 @@ order they matter:
   a standing state, not an event, so the adapter does not read it there
   (`src/webhook/inbound.ts`).
 - **A `PATCH` of other fields mentions nobody**, even when the bot is already
-  the assignee (measured 2026-09-07): a `summary` + `description` + `issue`
+  the assignee (measured 2026-09-06): a `summary` + `description` + `issue`
   `PATCH` on a pull request assigned to the bot emitted a 19 carrying
   `assignee` = the bot, no `assignee` entry in `changes[]` and an **empty
   `notifications[]`** — nobody was notified. An assignment reports itself in
   `changes[]`, and that is the only structural evidence of one on 19.
 - `roleType` inside `content.assignee` was **94** while the same user under
-  `notifications[].user` was **2** in the same body (measured 2026-09-07).
+  `notifications[].user` was **2** in the same body (measured 2026-09-06).
   Nothing reads either; do not treat one as a source for the other.
 - `base` and `branch` are the branch names, on every type and every delivery.
   `diff` is a diff(1)-style body of a description edit and `null` everywhere
@@ -79,7 +79,7 @@ order they matter:
   description, and `null` on 18, on 20 and on a 19 that did not.
 - Two of the four are not pull-request inventions: **issue** webhook types 2
   and 3 carry `assignee` and `diff` too, with the same meanings (measured
-  2026-09-07 on 26 issue deliveries; `assignee` present on every one,
+  2026-09-06 on 26 issue deliveries; `assignee` present on every one,
   `diff` non-null only on a description edit). What is genuinely
   pull-request-only is `base` and `branch`. The issue side reads neither, for
   the same reason the pull-request side does not.
@@ -89,16 +89,15 @@ order they matter:
   from the parsed JSON, not from a schema's output
   (`src/webhook/payload.ts`), so a key the adapter does not read is not a key
   it loses.
-- **`notifications[]` is populated on a pull-request webhook**, unlike the
-  issue webhooks, where it is always `[]`
-  (`backlog-webhook-facts.md`), and unlike the activity API, which returned
-  `[]` for the very same activities (measured 2026-09-07). Assignment
-  notifies with **reason 10**, a comment mention or a `notifiedUserId[]`
-  comment with **reason 11**. That array is the exact evidence `changes[]`
-  only approximates, but nothing here reads it: mention detection through
-  `notifications[]` is D9 rule 6's job, and once that rule lands it covers
-  pull requests without a pull-request-specific branch
-  (docs/specs/adapter.md §5.4).
+- **`notifications[]` is populated on a pull-request webhook**, exactly as it
+  is on an issue webhook (`backlog-webhook-facts.md` § Payload envelope) and
+  unlike the activity API, which returned `[]` for the very same activities
+  (measured 2026-09-06). What differs is only the reason code for the same
+  act: assignment notifies with **reason 10** and a comment mention or a
+  `notifiedUserId[]` comment with **reason 11**, where the issue side uses 1
+  and 2. That array is the exact evidence `changes[]` only approximates, and
+  §5.4 rule 6 reads it for both kinds without a pull-request-specific branch,
+  so nothing here needs to (docs/specs/adapter.md §5.4).
 
 | Operation | Activity | `content.comment` | `changes[]` |
 | --- | --- | --- | --- |
@@ -106,13 +105,13 @@ order they matter:
 | Plain comment | **20** | `{ id, content }` | `[]` |
 | Comment with `attachmentId[]` | **20** | `{ id, content }` | `[{ field: "attachment", new_value: "<file name>", old_value: "" }]` — name only, no id |
 | Summary / description / linked-issue change (`PATCH` with `comment`) | **19** | `{ id, content: <the comment text> }` | `summary`, `description` (both full bodies), `issue` (`new_value: "PROJ-54"`, `old_value: "PROJ-47"` — issue **keys**) |
-| Assignee change alone | **19** | `{ id, content: "" }` | `[{ field: "assignee", new_value: "<new display name>", old_value: "<old display name>" }]` — **`assignee`**, not the issue side's `assigner`; `old_value` is `""` only when nobody was assigned before, and unassign is `new_value: ""` with the old name still in `old_value` (measured 2026-09-07) |
-| Assignee change **together with** other fields in one `PATCH` | 19 | as above | the `assignee` entry was **absent** while the reason-10 notification was still created (measured once, 2026-09-06); a second attempt (`assigneeId` + `description`, 2026-09-06) and a `summary` + `description` + `issue` `PATCH` (2026-09-07) both reported every field they changed. One unreproduced observation against two reproductions, and reading `content.assignee` as a fallback costs a **measured false positive** — a multi-field `PATCH` that changes no assignee carries the standing one and notifies nobody (above) — so the adapter reports the assignment from `changes[]` alone. `notifications[]` reason 10 is the evidence that would settle it; see D9 rule 6 |
+| Assignee change alone | **19** | `{ id, content: "" }` | `[{ field: "assignee", new_value: "<new display name>", old_value: "<old display name>" }]` — **`assignee`**, not the issue side's `assigner`; `old_value` carries the previous display name on a reassignment and `""` when nobody was assigned before, and unassign is `new_value: ""` with the old name still in `old_value` (all measured 2026-09-06) |
+| Assignee change **together with** other fields in one `PATCH` | 19 | as above | the `assignee` entry was **absent** while the reason-10 notification was still created (measured once, 2026-09-06); two later `PATCH`es the same day — `assigneeId` + `description`, and `summary` + `description` + `issue` — both reported every field they changed. One unreproduced observation against two reproductions, and reading `content.assignee` as a fallback costs a **measured false positive** — a multi-field `PATCH` that changes no assignee carries the standing one and notifies nobody (above) — so the adapter reports the assignment from `changes[]` alone. An assignment `changes[]` leaves out is caught by `notifications[]` reason 10 instead, which is what §5.4 rule 6 reads |
 | Merge (measured via a `git push` of the merge to the base branch) | **19** | `{ id, content: "" }` | `[{ field: "status", new_value: "3", old_value: "1" }]` — status by **id string**, like issues; the changelog comment is authored by the pusher; `mergeCommit` stays `null`, `mergeAt`/`closeAt` are set |
 | Close (from history, UI) | 19 | `{ id, content: "" }` | `[{ field: "status", new_value: "2", old_value: "1" }]` |
 | Comment edit (`PATCH …/comments/:id`) | **none** — no new activity (measured; same as issue comments) | | |
 | `git push` of a branch | 12 Git Pushed, `content: { repository, change_type, revision_type, ref, revision_count, revisions[] }` — no pull-request reference | | |
-| Type 21 | **Not observed, twice.** The Get Activity page names it "Pull Request Deleted"; `backlog-js` 0.20.1 names it `PullRequestMerged`. Neither the UI nor the API offers a way to delete a pull request, merge and close both arrived as 19 (above), and `GET /projects/:id/activities?activityTypeId[]=21` over this project's whole history returned nothing. Re-checked 2026-09-07 with 21 **added to the webhook subscription** for the measurement: a create, two assignee changes, two comments and a multi-field update produced **zero** type-21 deliveries, and `GET /space/activities?activityTypeId[]=21` was empty as well. What, if anything, emits it is unknown from the outside; capture a payload before dispatching it. | | |
+| Type 21 | **Not observed, twice.** The Get Activity page names it "Pull Request Deleted"; `backlog-js` 0.20.1 names it `PullRequestMerged`. Neither the UI nor the API offers a way to delete a pull request, merge and close both arrived as 19 (above), and `GET /projects/:id/activities?activityTypeId[]=21` over this project's whole history returned nothing. Re-checked in a second capture the same day with 21 **added to the webhook subscription**: a create, two assignee changes, two comments and a multi-field update produced **zero** type-21 deliveries, and `GET /space/activities?activityTypeId[]=21` was empty as well. What, if anything, emits it is unknown from the outside; capture a payload before dispatching it. | | |
 
 - **Mentions.** `<@U…>` and `<@project>` in a `description` or comment
   `content` are rewritten to `@<display name>` / `@<project-members label>`
@@ -128,13 +127,14 @@ order they matter:
   webhook body holds both at once: a 19 that rewrote the summary carried
   `content.summary` with the literal `<@U…>` and
   `changes[0].new_value` with `@<display name>` for the same string (measured
-  2026-09-07).
-- `notifiedUserId[]` on a comment **is not a mention**: it creates the
-  notification (reason 13 in the bot's own feed) and leaves `comment.content`
-  without any `@name`, so no textual rule can see it and none should
-  (measured 2026-09-06). It is the counterpart of the `<@U…>` rule above —
-  visible mention without notification is impossible, notification without a
-  visible mention is not.
+  2026-09-06).
+- `notifiedUserId[]` on a comment leaves `comment.content` without any
+  `@name`, so **no textual rule can see it** (measured 2026-09-06). It is not
+  invisible: the delivery names the recipient in the top-level
+  `notifications[]` with reason 11, so §5.4 rule 6 reads it as a mention —
+  which is the whole reason that rule exists. It is the counterpart of the
+  `<@U…>` rule above: a visible mention without a notification is impossible,
+  a notification without a visible mention is not.
 - Creating a pull request with `notifiedUserId[]` (or a `<@project>` in the
   description) adds a **system comment** with `changeLog: [{ field:
   "notification", newValue: "pullRequestCreate" }]` and `notifications[]`
@@ -148,7 +148,7 @@ order they matter:
   `PATCH` that set `issueId` produced its own 19 and, on the linked issue, a
   **type 3** whose `comment.content` is a system sentence naming the pull
   request (`<projectKey>/<repository>#<number> <summary> …`) and whose
-  `changes[]` is `[]` (measured 2026-09-07). A pull-request operation can
+  `changes[]` is `[]` (measured 2026-09-06). A pull-request operation can
   therefore reach a consumer as an issue-thread message; nothing in that
   type 3 says a pull request caused it except the comment text, which is
   localized, so no code may key on it.
@@ -233,7 +233,7 @@ Measured on six comments with consecutive ids `n…n+5`:
   `attachmentId[]`.** The webhook `content` key set is settled and was
   re-measured against the activity API in both directions (§ What each
   pull-request operation emits). A linked-issue change has now been captured
-  as a webhook too (2026-09-07), leaving three rows of the table above whose
+  as a webhook too, leaving three rows of the table above whose
   `changes[]` shapes are still **activity-form** measurements: merge, close,
   and a comment with an attachment. A merge and a close have no API at all
   (§ Writes the API cannot make), so capturing them needs a git push or the

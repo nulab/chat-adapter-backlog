@@ -411,11 +411,13 @@ would address the bot. The payload does carry the current assignee on every
 event, and this adapter deliberately does not read it as an assignment; only
 the change record is one.
 
-The known gap: a single `PATCH` that changes the assignee together with another
-field was once measured to report the other fields and not the assignee. Such a
-call reaches you as an ordinary message rather than a mention. It has not
-reproduced, and the alternative — treating every edit of a bot-assigned subject
-as a mention — misfires far more often.
+That leaves no gap where the change record under-reports. A single `PATCH` that
+changed the assignee together with another field was once measured to report the
+other fields and not the assignee — but it still notified the new assignee, and
+the notification list is read first. So an update naming no assignee change is a
+mention when Backlog notified the bot about it and an ordinary message when it
+did not, which is also the right answer for a plain edit of a subject the bot
+already owns.
 
 To mention someone outbound, use the helpers — writing `<@U…>` notifies the
 user even without `notifiedUserId`:
