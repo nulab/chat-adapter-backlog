@@ -271,9 +271,13 @@ const pullRequestContentSchema = z.object({
     .object({ id: z.number(), name: z.string() })
     .nullable()
     .optional(),
-  /** The pull request's target and source branch names, on every webhook type. */
-  base: z.string().optional(),
-  branch: z.string().optional(),
+  /**
+   * The pull request's target and source branch names, on every webhook type.
+   * Nullable although no measured delivery omitted either: a body Backlog
+   * widens is not worth a 400 over a key nothing reads.
+   */
+  base: z.string().nullable().optional(),
+  branch: z.string().nullable().optional(),
   /**
    * A diff(1)-style body of the description edit that produced this activity,
    * `null` on every other delivery — measured on a type 19 that changed the
