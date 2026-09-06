@@ -410,8 +410,8 @@ const THREE_BULK_ISSUES: FixtureBulkIssue[] = [
  * Type 14 — Issue Multi Updated: one delivery for a bulk update made from the
  * issue list, however many issues it covered — **one included**.
  *
- * Four details are measured (on a development space, 2026-09-06 and
- * 2026-09-07) and are the reason this builder does not go through
+ * Four details are measured (on a development space, 2026-09-06) and are the
+ * reason this builder does not go through
  * {@link changeEntries} or reuse the numeric ids the other builders emit:
  *
  * - `content.link[].id` and `key_id` are decimal **strings** here, while every
@@ -468,7 +468,7 @@ export function issueMultiUpdated(
 /**
  * A bulk update of several fields at once, as the issue list makes one: four
  * `changes[]` entries in two value systems and one assignee notification per
- * issue (measured on a development space, 2026-09-07).
+ * issue (measured on a development space, 2026-09-06).
  *
  * The notation is type 2's, not a bulk-specific one — `priority` is a
  * **id** written as a string while `component` (the category), `milestone`
@@ -502,7 +502,7 @@ export function bulkFieldsChanged(
 /**
  * A bulk update of a **single** issue — still a type 14, and still with an
  * empty `notifications[]` when no assignee changed (measured on a development
- * space, 2026-09-07).
+ * space, 2026-09-06).
  *
  * What separates a type 2 from a type 14 is the screen the update was made
  * from, not how many issues it covered: one issue ticked on the issue list

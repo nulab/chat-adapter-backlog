@@ -195,10 +195,9 @@ answer who was notified even when the original delivery could.
 - Bulk operations from the issue list ("multi update") → **one** type 14
   however many issues were touched, and **no** type 2 or 3 for any of them
   (measured 2026-08-28 and again 2026-09-06). **One** issue ticked is a type 14
-  too, with a single-entry `link[]` (measured 2026-09-07): what separates a
-  type 2 from a type 14 is the screen the edit was made from — the issue's own
-  page versus the bulk update screen — never the number of issues.
-  `content` has exactly five keys:
+  too, with a single-entry `link[]`: what separates a type 2 from a type 14 is
+  the screen the edit was made from — the issue's own page versus the bulk
+  update screen — never the number of issues. `content` has exactly five keys:
   `tx_id` (string), `comment{content}` (**no `id`**), `link[{id, key_id, title,
   comment{id, content}}]`, `individual_update` (boolean) and
   `changes[{field, new_value, type}]`. There is no `content.id` and no issue
@@ -208,10 +207,10 @@ answer who was notified even when the original delivery could.
 - In `link[]`, `id` and `key_id` are decimal **strings** (`"8001"` for issue id 8001) where
   every other activity writes numbers; `GET /space/activities` returns those
   two, and `tx_id`, as numbers. `individual_update` is webhook-only (absent
-  from the activity form) and was `false` on all six measured deliveries
-  (2026-09-06 and 2026-09-07); the bulk update screen offers no way to give two
-  issues different values (checked in the UI, 2026-09-07), so what operation
-  would produce a `true` is unknown. Do not branch on it.
+  from the activity form) and was `false` on all six measured deliveries; the
+  bulk update screen offers no way to give two issues different values
+  (checked in the UI), so what operation would produce a `true` is unknown. Do
+  not branch on it.
 - `link[].comment` is present even when the comment box was left empty, and its
   `id` is a comment that really was created on that issue, with a `changeLog`.
   An empty comment's `content` is `""` in the webhook and `null` in REST. A
@@ -223,18 +222,18 @@ answer who was notified even when the original delivery could.
   only fields reported by id at all, the rest being display names (several
   milestones joined `", "`), a `yyyy-MM-dd` date for `limitDate`, or the whole
   text for `summary` and `description`. The one difference between a type 2's
-  entries and a type 14's is the absent `old_value` (measured 2026-09-07,
+  entries and a type 14's is the absent `old_value` (measured 2026-09-06,
   comparing a four-field bulk update against the same fields changed singly
   from the issue page). Changing several fields at once lists them all, and
   both value systems appear in the one array — do not assume one.
 - `GET /issues/:id/comments`'s `changeLog` reports `priority` and `status` as
-  **display names** where the webhook reports ids (measured 2026-09-07). Those
+  **display names** where the webhook reports ids (measured 2026-09-06). Those
   two fields are the whole of the conversion needed to match a webhook change
   against the same change read back over REST.
 - `notifications[]` on a type 14 carries the assignee notification (reason 1)
   **once per issue**, so the same user repeats; a batch that changed no
-  assignee carries `[]` (measured 2026-09-06 and 2026-09-07). What is peculiar
-  to 14 is the repetition, not the array being populated — the webhook form
+  assignee carries `[]` (measured 2026-09-06). What is peculiar to 14 is the
+  repetition, not the array being populated — the webhook form
   fills `notifications[]` on other types too (§ Mentions). An entry has the
   keys `id`, `alreadyRead`, `reason`, `resourceAlreadyRead` and `user` and
   **nothing that names an issue**, so with the same user repeated, entry *n* is

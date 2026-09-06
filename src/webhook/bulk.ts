@@ -155,7 +155,7 @@ export function bulkMessageId(
  * The delivery's `notifications[]` reaches §5.4 rule 6 whole, on every message
  * the batch produced, and is **not** divided between them. A batch that
  * changed the assignee carries one reason-1 entry per issue (measured
- * 2026-09-07), so the array looks like it pairs with `link[]` positionally —
+ * 2026-09-06), so the array looks like it pairs with `link[]` positionally —
  * but an entry holds only `id`, `alreadyRead`, `reason`,
  * `resourceAlreadyRead` and `user`, names no issue, and repeats the same user
  * unchanged, so a pairing would be an ordering assumption Backlog documents
