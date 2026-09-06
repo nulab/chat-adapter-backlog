@@ -20,6 +20,14 @@ export const FIXTURE = {
   projectKey: 'EXAMPLE',
   issueId: 8001,
   issueKeyId: 42,
+  // The pull-request vocabulary P3's builders address a thread with: a pull
+  // request is keyed by repository id + number, never by `pullRequestId` —
+  // that space-wide id addresses no endpoint and exists here only because
+  // `POST /stars` wants it (`.claude/rules/backlog-pull-request-facts.md`).
+  repositoryId: 700,
+  repositoryName: 'example-repo',
+  pullRequestNumber: 12,
+  pullRequestId: 90001,
   bot: { id: 999, name: 'Chatbot', userId: 'chatbot' },
   alice: { id: 100, name: 'Alice', userId: 'alice' },
   bob: { id: 101, name: 'Bob', userId: 'bob' },

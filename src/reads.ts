@@ -1,22 +1,39 @@
-import { ResourceNotFoundError, ValidationError } from '@chat-adapter/shared';
-import { paragraph, root, text as textNode } from 'chat';
+import {
+  AdapterError,
+  ResourceNotFoundError,
+  ValidationError,
+} from '@chat-adapter/shared';
+import { paragraph, root as rootNode, text as textNode } from 'chat';
 
 import {
   decodeChannelId,
   decodeMessageId,
   decodeThreadId,
   decodeUserId,
+  encodeChannelId,
   encodeMessageId,
+  encodeThreadId,
 } from './ids';
+import { toRawChanges, toRawComment, toRawIssue } from './subject/raw';
+import { parseAttachmentPath } from './subject/url';
 
 import type {
   BacklogApi,
   BacklogComment,
   BacklogIssue,
-  BacklogIssueComment,
   TextFormattingRule,
 } from './client/port';
-import type { BacklogRawMessage } from './types';
+import type {
+  SubjectClient,
+  SubjectNames,
+  SubjectRoot,
+} from './subject/client';
+import type { AttachmentLocation } from './subject/url';
+import type {
+  BacklogRawMessage,
+  BacklogSubjectRef,
+  BacklogThreadId,
+} from './types';
 import type {
   Attachment,
   Author,
@@ -56,7 +73,7 @@ function parseCursor(cursor: string | undefined): number | undefined {
 }
 
 /**
- * Author for a REST-derived message (a comment or the issue root). Mirrors
+ * Author for a REST-derived message (a comment or a thread's root). Mirrors
  * the webhook path's `<host>:<id>` shape (`src/webhook/inbound.ts`
  * `buildAuthor`) using `BacklogUserRef.id`, the same numeric identity §2
  * specifies for every user id in this adapter.
@@ -77,139 +94,70 @@ export function buildRestAuthor(
 }
 
 function plainTextAst(value: string): MessageData['formatted'] {
-  return root([paragraph([textNode(value)])]);
+  return rootNode([paragraph([textNode(value)])]);
 }
 
 /**
- * Attachments added via a comment surface only as `changeLog` entries with
- * `field === "attachment"` and `newValue` set — a removal (`originalValue`
- * set, per docs/specs/adapter.md §6.6) is skipped since it names a file no
- * longer on the issue. `size` is unknown from a changelog entry (only the
- * webhook and the issue's own `attachments[]` carry it).
+ * Everything a `Message` needs beyond the record it is built from. `subject`
+ * carries both the addressing (`subject.ref`) and every call the two kinds
+ * answer differently, so nothing below this line names an issue or a pull
+ * request (docs/plans/pull-request-support.md §3.4).
  */
-function toCommentAttachments(
-  host: string,
-  issueId: number,
-  fetchAttachment: (issueId: number, attachmentId: number) => Promise<Buffer>,
-  comment: BacklogComment
-): Attachment[] {
-  const attachments: Attachment[] = [];
-  for (const change of comment.changeLog) {
-    if (
-      change.field !== 'attachment' ||
-      change.newValue === null ||
-      change.attachmentInfo === null
-    ) {
-      continue;
-    }
-    const attachmentId = change.attachmentInfo.id;
-    attachments.push({
-      type: 'file',
-      name: change.newValue,
-      url: `https://${host}/api/v2/issues/${issueId}/attachments/${attachmentId}`,
-      fetchData: () => fetchAttachment(issueId, attachmentId),
-    });
-  }
-  return attachments;
-}
-
 export interface MessageBuilders {
   host: string;
   projectId: number;
-  issueId: number;
+  subject: SubjectClient;
   botUserId: number;
-  fetchAttachment: (issueId: number, attachmentId: number) => Promise<Buffer>;
   MessageCtor: new (
     data: MessageData<BacklogRawMessage>
   ) => Message<BacklogRawMessage>;
 }
 
 /**
- * The issue root as a `Message` (docs/specs/adapter.md §7.1). `edited` is
- * always `false`: `issue.updated` moves on any field change (status,
- * assignee, a comment being added) and says nothing about whether the issue
- * *body* itself was edited, so treating it as an edit signal would report a
- * false positive on every unrelated update.
+ * A thread's root — the issue body or the pull-request body — as a `Message`
+ * (docs/specs/adapter.md §7.1). `edited` is always `false`: a root's `updated`
+ * moves on any field change (status, assignee, a comment being added) and says
+ * nothing about whether the *body* itself was edited, so treating it as an
+ * edit signal would report a false positive on every unrelated update.
  */
 export function buildRootMessage(
   builders: MessageBuilders,
-  issue: BacklogIssue
+  root: SubjectRoot
 ): Message<BacklogRawMessage> {
-  const { host, projectId, issueId, botUserId, MessageCtor } = builders;
-  const text = [issue.summary, issue.description].filter(Boolean).join('\n\n');
+  const { host, projectId, subject, botUserId, MessageCtor } = builders;
+  const text = [root.title, root.body].filter(Boolean).join('\n\n');
   return new MessageCtor({
-    id: encodeMessageId({ kind: 'issue', host, issueId }),
-    threadId: `backlog:${host}:${projectId}:${issueId}`,
+    id: encodeMessageId({ host, subject: subject.ref, part: 'root' }),
+    threadId: encodeThreadId({ host, projectId, subject: subject.ref }),
     text,
     formatted: plainTextAst(text),
-    raw: { kind: 'issue', host, issue: toRawIssue(issue), changes: [] },
-    author: buildRestAuthor(host, botUserId, issue.createdUser),
-    metadata: { dateSent: issue.created, edited: false },
-    // The port's `BacklogIssue` (src/client/port.ts, an earlier phase) has no
-    // `attachments[]` — `getIssue` never surfaces them — so a REST-derived
-    // root message cannot carry the §6.6 "REST issue attachments[]" source;
-    // only the webhook path (`src/webhook/inbound.ts`) can.
+    raw: subject.rootRaw(root),
+    author: buildRestAuthor(host, botUserId, root.createdUser),
+    metadata: { dateSent: root.created, edited: false },
+    // A root message carries no attachments, by decision rather than
+    // omission (§6.6): neither `getIssue` nor `getPullRequest` surfaces
+    // `attachments[]` through the port, and listing them would cost a read per
+    // root message for a source that only matters when a body has files. The
+    // webhook path (`src/webhook/inbound.ts`) is the one that can, because the
+    // payload already carries them.
     attachments: [],
     isMention: false,
   });
 }
 
 /**
- * Shared with `createChannelIssue` (`src/egress.ts`): both a REST-fetched
- * issue (this file) and a freshly created one (`postChannelMessage`) become
- * the same `BacklogRawMessage` `{ kind: "issue" }` shape, so the port ->
- * types.ts field mapping has exactly one implementation.
- */
-export function toRawIssue(issue: BacklogIssue): {
-  id: number;
-  issueKey: string;
-  projectId: number;
-  summary: string;
-  description: string;
-  status: { id: number; name: string };
-  issueType: { id: number; name: string };
-  priority: { id: number; name: string };
-  assignee: { id: number; name: string } | null;
-  createdUser: { id: number; name: string; userId?: string | null };
-  created: string;
-  updated: string;
-} {
-  return {
-    id: issue.id,
-    issueKey: issue.issueKey,
-    projectId: issue.projectId,
-    summary: issue.summary,
-    description: issue.description,
-    status: { id: issue.status.id, name: issue.status.name },
-    issueType: { id: issue.issueType.id, name: issue.issueType.name },
-    priority: { id: issue.priority.id, name: issue.priority.name },
-    assignee:
-      issue.assignee === null
-        ? null
-        : { id: issue.assignee.id, name: issue.assignee.name },
-    createdUser: {
-      id: issue.createdUser.id,
-      name: issue.createdUser.name,
-      userId: issue.createdUser.userId,
-    },
-    created: issue.created.toISOString(),
-    updated: issue.updated.toISOString(),
-  };
-}
-
-/**
  * A comment as a `Message` (docs/specs/adapter.md §7.1). `edited` is derived
  * from `updated !== created`, unlike the always-`false` root — a comment
  * genuinely reports its own edit history, and Backlog fires no webhook for a
- * comment edit (`.claude/rules/backlog-webhook-facts.md`), so this REST path
- * is the only way a consumer learns of one at all.
+ * comment edit of either kind (`.claude/rules/backlog-webhook-facts.md`,
+ * `.claude/rules/backlog-pull-request-facts.md`), so this REST path is the
+ * only way a consumer learns of one at all.
  */
 export function buildCommentMessage(
   builders: MessageBuilders,
-  comment: BacklogIssueComment
+  comment: BacklogComment
 ): Message<BacklogRawMessage> {
-  const { host, projectId, issueId, botUserId, fetchAttachment, MessageCtor } =
-    builders;
+  const { host, projectId, subject, botUserId, MessageCtor } = builders;
   const text = comment.content ?? '';
   const edited = comment.updated.getTime() !== comment.created.getTime();
   const metadata: MessageData['metadata'] = edited
@@ -217,84 +165,47 @@ export function buildCommentMessage(
     : { dateSent: comment.created, edited };
   return new MessageCtor({
     id: encodeMessageId({
-      kind: 'comment',
       host,
-      issueId,
+      subject: subject.ref,
+      part: 'comment',
       commentId: comment.id,
     }),
-    threadId: `backlog:${host}:${projectId}:${issueId}`,
+    threadId: encodeThreadId({ host, projectId, subject: subject.ref }),
     text,
     formatted: plainTextAst(text),
     raw: {
       kind: 'comment',
       host,
       projectId,
-      comment: toRawCommentForRead(comment),
-      changes: comment.changeLog.map((change) => ({
-        field: change.field,
-        newValue: change.newValue,
-        oldValue: change.oldValue,
-      })),
+      subject: subject.ref,
+      comment: toRawComment(comment),
+      changes: toRawChanges(comment.changeLog),
     },
     author: buildRestAuthor(host, botUserId, comment.createdUser),
     metadata,
-    attachments: toCommentAttachments(host, issueId, fetchAttachment, comment),
+    attachments: subject.commentAttachments(comment),
     isMention: false,
   });
-}
-
-function toRawCommentForRead(comment: BacklogIssueComment): {
-  id: number;
-  issueId: number;
-  content: string | null;
-  createdUser: { id: number; name: string; userId?: string | null };
-  created: string;
-  updated: string;
-  changeLog: {
-    field: string;
-    newValue: string | null;
-    oldValue: string | null;
-  }[];
-  stars: { id: number; presenter: { id: number } }[];
-} {
-  return {
-    id: comment.id,
-    issueId: comment.issueId,
-    content: comment.content,
-    createdUser: {
-      id: comment.createdUser.id,
-      name: comment.createdUser.name,
-      userId: comment.createdUser.userId,
-    },
-    created: comment.created.toISOString(),
-    updated: comment.updated.toISOString(),
-    changeLog: comment.changeLog.map((change) => ({
-      field: change.field,
-      newValue: change.newValue,
-      oldValue: change.oldValue,
-    })),
-    stars: comment.stars.map((star) => ({
-      id: star.id,
-      presenter: { id: star.presenter.id },
-    })),
-  };
 }
 
 export interface FetchMessagesInput {
   threadId: string;
   options: FetchOptions | undefined;
-  api: BacklogApi;
-  builders: Omit<MessageBuilders, 'projectId' | 'issueId'>;
+  subject: SubjectClient;
+  builders: Omit<MessageBuilders, 'projectId' | 'subject'>;
 }
 
 /**
- * `fetchMessages` (docs/specs/adapter.md §7.1). The algorithm is specified
- * exactly, including its off-by-one behaviour:
+ * `fetchMessages` (docs/specs/adapter.md §7.1). One algorithm for both kinds:
+ * pull-request comments page through the same `minId`/`maxId`/`count`/`order`
+ * parameters with the same exclusive bounds and the same head-cut `count`
+ * (measured 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`
+ * "Paging"). The algorithm is specified exactly, including its off-by-one
+ * behaviour:
  *
- * - `minId`/`maxId` are exclusive and `count` cuts from the head of `order`
- *   (measured 2026-09-03, `.claude/rules/backlog-api-facts.md`), so the
- *   previous page's edge id is passed straight through as the cursor with
- *   no `±1` correction.
+ * - `minId`/`maxId` are exclusive and `count` cuts from the head of `order`,
+ *   so the previous page's edge id is passed straight through as the cursor
+ *   with no `±1` correction.
  * - `commentLimit` reserves one slot for the root message only on the very
  *   first forward page (`startsWithRoot`); every other page's `commentLimit`
  *   equals `limit`.
@@ -307,8 +218,8 @@ export interface FetchMessagesInput {
 export async function fetchMessages(
   input: FetchMessagesInput
 ): Promise<FetchResult<BacklogRawMessage>> {
-  const { threadId, options, api, builders } = input;
-  const { projectId, issueId } = decodeThreadId(threadId);
+  const { threadId, options, subject, builders } = input;
+  const { projectId } = decodeThreadId(threadId);
   const direction: FetchDirection = options?.direction ?? 'backward';
   const limit = clampLimit(options?.limit);
   const cursor = parseCursor(options?.cursor);
@@ -319,14 +230,12 @@ export async function fetchMessages(
 
   const comments =
     direction === 'backward'
-      ? await api.listComments(
-          issueId,
+      ? await subject.listComments(
           cursor === undefined
             ? { count, order: 'desc' }
             : { count, order: 'desc', maxId: cursor }
         )
-      : await api.listComments(
-          issueId,
+      : await subject.listComments(
           cursor === undefined
             ? { count, order: 'asc' }
             : { count, order: 'asc', minId: cursor }
@@ -335,13 +244,12 @@ export async function fetchMessages(
   const hasMore = comments.length >= count;
   const page = [...comments].sort((a, b) => a.id - b.id).slice(0, commentLimit);
 
-  const messageBuilders: MessageBuilders = { ...builders, projectId, issueId };
+  const messageBuilders: MessageBuilders = { ...builders, projectId, subject };
   const prependRoot = startsWithRoot || (direction === 'backward' && !hasMore);
 
   const messages: Message<BacklogRawMessage>[] = [];
   if (prependRoot) {
-    const issue = await api.getIssue(issueId);
-    messages.push(buildRootMessage(messageBuilders, issue));
+    messages.push(buildRootMessage(messageBuilders, await subject.fetchRoot()));
   }
   for (const comment of page) {
     messages.push(buildCommentMessage(messageBuilders, comment));
@@ -365,46 +273,72 @@ export async function fetchMessages(
   return result;
 }
 
+/**
+ * Whether a decoded message id addresses the thread's own subject. Compared
+ * through the grammar rather than field by field because a field-by-field
+ * comparison needs a `kind` branch, and `subjectClientFor` is the only place
+ * in `src/` allowed to have one (docs/plans/pull-request-support.md §6); the
+ * encoding is injective over subjects, so string equality is a total
+ * comparison with no branch to keep in step with `BacklogSubjectRef`.
+ *
+ * Exported because every egress member that takes a thread id and a message
+ * id owes the caller the same answer (`src/egress.ts`). A second copy of the
+ * rule is what let egress take the subject from the message id while reads
+ * took it from the thread id, so there is deliberately one implementation and
+ * `src/egress.ts` imports it rather than restating it.
+ */
+export function addressesSameSubject(
+  thread: BacklogThreadId,
+  subject: BacklogSubjectRef
+): boolean {
+  return encodeThreadId({ ...thread, subject }) === encodeThreadId(thread);
+}
+
 export interface FetchMessageInput {
   threadId: string;
   messageId: string;
-  api: BacklogApi;
-  builders: Omit<MessageBuilders, 'projectId' | 'issueId'>;
+  subject: SubjectClient;
+  builders: Omit<MessageBuilders, 'projectId' | 'subject'>;
 }
 
 /**
  * `fetchMessage` (docs/specs/adapter.md §7.2). Returns `null` without an API
  * call for a message id that cannot possibly belong to `threadId` (a
- * different host or issue) and for `:u:` ids — Backlog has no single-fetch
- * endpoint for a fieldchange update with no comment (D12) — rather than
- * spending a call that could only ever come back empty-handed.
+ * different host or a different subject) and for `u:` ids — Backlog has no
+ * single-fetch endpoint for a fieldchange update with no comment (D12) —
+ * rather than spending a call that could only ever come back empty-handed.
+ * `subject.getComment` is one endpoint for an issue and a one-element list
+ * window for a pull request (`src/subject/pull-request.ts`); both raise
+ * `ResourceNotFoundError`, which is `null` here.
  */
 export async function fetchMessage(
   input: FetchMessageInput
 ): Promise<Message<BacklogRawMessage> | null> {
-  const { threadId, messageId, api, builders } = input;
+  const { threadId, messageId, subject, builders } = input;
   const thread = decodeThreadId(threadId);
   const decoded = decodeMessageId(messageId);
 
-  if (decoded.host !== thread.host || decoded.issueId !== thread.issueId) {
+  if (
+    decoded.host !== thread.host ||
+    !addressesSameSubject(thread, decoded.subject)
+  ) {
     return null;
   }
-  if (decoded.kind === 'update') {
+  if (decoded.part === 'update') {
     return null;
   }
 
   const messageBuilders: MessageBuilders = {
     ...builders,
     projectId: thread.projectId,
-    issueId: thread.issueId,
+    subject,
   };
 
   try {
-    if (decoded.kind === 'issue') {
-      const issue = await api.getIssue(thread.issueId);
-      return buildRootMessage(messageBuilders, issue);
+    if (decoded.part === 'root') {
+      return buildRootMessage(messageBuilders, await subject.fetchRoot());
     }
-    const comment = await api.getComment(thread.issueId, decoded.commentId);
+    const comment = await subject.getComment(decoded.commentId);
     return buildCommentMessage(messageBuilders, comment);
   } catch (cause) {
     if (cause instanceof ResourceNotFoundError) {
@@ -416,72 +350,44 @@ export async function fetchMessage(
 
 export interface FetchThreadInput {
   threadId: string;
-  api: BacklogApi;
+  subject: SubjectClient;
+  names: SubjectNames;
 }
 
 /**
- * `fetchThread` (docs/specs/adapter.md §7.3). `channelName` is the project
- * key: `issueKey` is `<projectKey>-<number>`, so it is derived by trimming
- * from the issue key's last `-` rather than round-tripping through
- * `getProject` for a value the issue response already carries.
+ * `fetchThread` (docs/specs/adapter.md §7.3): one Get Issue or one Get Pull
+ * Request, then `channelName` and `metadata` off the subject client — an
+ * issue derives both from the object it just read, a pull request needs the
+ * project key and repository name its object does not carry, which is what
+ * `names` supplies. `url` lives inside `metadata` and is omitted there when a
+ * name could not be resolved, so an unresolvable URL costs the thread its
+ * link rather than the read.
  */
 export async function fetchThread(
   input: FetchThreadInput
 ): Promise<ThreadInfo> {
-  const { threadId, api } = input;
-  const { host, projectId, issueId } = decodeThreadId(threadId);
-  const issue = await api.getIssue(issueId);
-  const lastDash = issue.issueKey.lastIndexOf('-');
-  const channelName =
-    lastDash === -1 ? issue.issueKey : issue.issueKey.slice(0, lastDash);
+  const { threadId, subject, names } = input;
+  const { host, projectId } = decodeThreadId(threadId);
+  const root = await subject.fetchRoot();
 
-  return {
+  const info: ThreadInfo = {
     id: threadId,
-    channelId: `backlog:${host}:${projectId}`,
-    channelName,
+    channelId: encodeChannelId({ host, projectId }),
     isDM: false,
-    metadata: {
-      host,
-      issueId,
-      issueKey: issue.issueKey,
-      projectId,
-      summary: issue.summary,
-      description: issue.description,
-      status: issue.status,
-      assignee:
-        issue.assignee === null
-          ? null
-          : { id: issue.assignee.id, name: issue.assignee.name },
-      issueType: issue.issueType,
-      priority: issue.priority,
-      createdUserId: issue.createdUser.id,
-      created: issue.created,
-      updated: issue.updated,
-      url: `https://${host}/view/${issue.issueKey}`,
-    },
+    metadata: subject.threadMetadata(root, names),
   };
-}
-
-/**
- * `<host>, <issueId>` a `BacklogRawMessage` belongs to, for every `kind`
- * (docs/specs/adapter.md §7.4). `fetchSubject` uses this to decide whether it
- * can skip the Get Issue call entirely: `kind: "issue"` already carries the
- * issue, so there is nothing left to resolve.
- */
-function issueRefOf(raw: BacklogRawMessage): { host: string; issueId: number } {
-  switch (raw.kind) {
-    case 'webhook':
-      return { host: raw.host, issueId: raw.payload.content.id };
-    case 'comment':
-      return { host: raw.host, issueId: raw.comment.issueId };
-    case 'issue':
-      return { host: raw.host, issueId: raw.issue.id };
+  const channelName = subject.channelName(root, names);
+  if (channelName !== undefined) {
+    info.channelName = channelName;
   }
+  return info;
 }
 
 export interface FetchSubjectInput {
   raw: BacklogRawMessage;
-  api: BacklogApi;
+  subject: SubjectClient;
+  names: SubjectNames;
+  threadId: string;
 }
 
 /**
@@ -489,38 +395,43 @@ export interface FetchSubjectInput {
  * `message.subject` and its errors are turned into `null` by the core
  * (`.claude/rules/chat-sdk-core-facts.md` "`fetchSubject` is called lazily by
  * the `Message.subject` getter, errors -> `null`"), so every access — not
- * just the first — spends a Get Issue call unless `raw.kind === "issue"`
- * already carries it; document this cost to a caller that reads
- * `message.subject` in a loop.
+ * just the first — spends a read unless the raw already carries the object;
+ * document this cost to a caller that reads `message.subject` in a loop.
+ * `url` is omitted rather than set to `undefined` when a pull request's names
+ * are unresolved: `MessageSubject.url` is optional, and a present-but-empty
+ * key reads as "this subject has no page".
  */
 export async function fetchSubject(
   input: FetchSubjectInput
 ): Promise<MessageSubject> {
-  const { raw, api } = input;
-  const { host, issueId } = issueRefOf(raw);
-  const issue = raw.kind === 'issue' ? raw.issue : await api.getIssue(issueId);
+  const { raw, subject, names, threadId } = input;
+  const root = subject.rootFrom(raw) ?? (await subject.fetchRoot());
 
-  const subject: MessageSubject = {
-    id: `backlog:${host}:${issue.projectId}:${issueId}`,
-    type: 'issue',
-    title: issue.summary,
-    description: issue.description,
-    status: issue.status.name,
-    url: `https://${host}/view/${issue.issueKey}`,
+  const messageSubject: MessageSubject = {
+    id: threadId,
+    type: subject.subjectType,
+    title: root.title,
+    description: root.body,
+    status: root.status.name,
     author: {
-      id: `${host}:${issue.createdUser.id}`,
-      name: issue.createdUser.name,
+      id: `${raw.host}:${root.createdUser.id}`,
+      name: root.createdUser.name,
     },
-    labels: [issue.issueType.name, issue.priority.name],
-    raw: issue,
+    labels: subject.subjectLabels(root),
+    raw: subject.subjectRaw(root),
   };
-  if (issue.assignee !== null) {
-    subject.assignee = {
-      id: `${host}:${issue.assignee.id}`,
-      name: issue.assignee.name,
+
+  const url = subject.webUrl(root, names);
+  if (url !== undefined) {
+    messageSubject.url = url;
+  }
+  if (root.assignee !== null) {
+    messageSubject.assignee = {
+      id: `${raw.host}:${root.assignee.id}`,
+      name: root.assignee.name,
     };
   }
-  return subject;
+  return messageSubject;
 }
 
 export interface FetchChannelInfoInput {
@@ -530,15 +441,19 @@ export interface FetchChannelInfoInput {
 
 /**
  * `fetchChannelInfo` (docs/specs/adapter.md §7.5). Returns the project's
- * `textFormattingRule` alongside the `ChannelInfo` (not just inside
- * `metadata`, whose type is `Record<string, unknown>`) so the caller
- * (`adapter.ts`) can replace the §9.1 formatting-rule cache entry — the one
+ * `projectKey` and `textFormattingRule` alongside the `ChannelInfo` (not just
+ * inside `metadata`, whose type is `Record<string, unknown>`) so the caller
+ * (`adapter.ts`) can replace its §9.1 project cache entry — the one
  * documented way to pick up a changed project setting without restarting,
- * since that cache is otherwise permanent (D14) — without a runtime cast.
+ * since that cache is otherwise permanent (D14) — without a runtime cast. The
+ * project key is in that cache because a pull request's web URL needs it and
+ * its own object does not carry it (§7.3).
  */
-export async function fetchChannelInfo(
-  input: FetchChannelInfoInput
-): Promise<{ info: ChannelInfo; textFormattingRule: TextFormattingRule }> {
+export async function fetchChannelInfo(input: FetchChannelInfoInput): Promise<{
+  info: ChannelInfo;
+  projectKey: string;
+  textFormattingRule: TextFormattingRule;
+}> {
   const { channelId, api } = input;
   const { host, projectId } = decodeChannelId(channelId);
   const project = await api.getProject(projectId);
@@ -555,6 +470,7 @@ export async function fetchChannelInfo(
         textFormattingRule: project.textFormattingRule,
       },
     },
+    projectKey: project.projectKey,
     textFormattingRule: project.textFormattingRule,
   };
 }
@@ -563,42 +479,84 @@ export interface ListThreadsInput {
   channelId: string;
   options: ListThreadsOptions | undefined;
   api: BacklogApi;
-  builders: Omit<MessageBuilders, 'projectId' | 'issueId'>;
+  builders: Omit<MessageBuilders, 'projectId' | 'subject'>;
+  subjectFor: (issueId: number) => SubjectClient;
 }
 
 /**
- * `listThreads` (docs/specs/adapter.md §7.6). Deliberately does not sort or
- * filter the port's response: Get Issue List draws on the **search** bucket
- * (a documented example 150/min, far lower than `read`'s 600), so silently
- * re-sorting or dropping closed issues here would hide that cost from a
- * caller who asked for one page and would also disagree with what Backlog's
- * own UI shows for the same call. `nextCursor` is only set on a full page —
- * a short final page and a documented trailing empty page are both possible,
- * per §7.6.
+ * The `SubjectRoot` for an issue `listThreads` already holds. Get Issue List
+ * returns whole issues, so asking each row's client to `fetchRoot()` would
+ * spend one Get Issue per thread for data the page already carries; the root
+ * is shaped by the subject client rather than here so `fetchRoot` and this
+ * path cannot disagree about what a root is (§3.4).
+ */
+function listedIssueRoot(
+  host: string,
+  subject: SubjectClient,
+  issue: BacklogIssue
+): SubjectRoot {
+  const root = subject.rootFrom({
+    kind: 'issue',
+    host,
+    issue: toRawIssue(issue),
+    changes: [],
+  });
+  if (root === undefined) {
+    // Unreachable: `subjectFor` builds an issue client keyed by this very
+    // issue, and an issue client reads an `{ kind: "issue" }` raw. Throwing
+    // rather than falling back to `fetchRoot()` keeps a mistake here loud
+    // instead of quietly spending one read per row of a page the caller
+    // already paid a search-bucket call for.
+    throw new AdapterError(
+      'a listed issue did not describe its own thread root',
+      'backlog',
+      'INVALID_SUBJECT_ROOT'
+    );
+  }
+  return root;
+}
+
+/**
+ * `listThreads` (docs/specs/adapter.md §7.6). Lists the project's **issues**
+ * and deliberately not its pull requests (D-PR7): a pull-request list is per
+ * repository, a coordinate a channel id does not carry, and
+ * `api(host).listPullRequests(projectId, repositoryId, …)` is the route to
+ * one.
+ *
+ * Deliberately does not sort or filter the port's response either: Get Issue
+ * List draws on the **search** bucket (a documented example 150/min, far
+ * lower than `read`'s 600), so silently re-sorting or dropping closed issues
+ * here would hide that cost from a caller who asked for one page and would
+ * also disagree with what Backlog's own UI shows for the same call.
+ * `nextCursor` is only set on a full page — a short final page and a
+ * documented trailing empty page are both possible, per §7.6.
  */
 export async function listThreads(
   input: ListThreadsInput
 ): Promise<ListThreadsResult<BacklogRawMessage>> {
-  const { channelId, options, api, builders } = input;
+  const { channelId, options, api, builders, subjectFor } = input;
   const { host, projectId } = decodeChannelId(channelId);
   const limit = clampLimit(options?.limit);
   const offset = parseOffset(options?.cursor);
 
   const issues = await api.listIssues(projectId, { count: limit, offset });
 
-  const messageBuilders: MessageBuilders = {
-    ...builders,
-    projectId,
-    issueId: 0,
-  };
-  const threads = issues.map((issue) => ({
-    id: `backlog:${host}:${projectId}:${issue.id}`,
-    rootMessage: buildRootMessage(
-      { ...messageBuilders, issueId: issue.id },
-      issue
-    ),
-    lastReplyAt: issue.updated,
-  }));
+  const threads = issues.map((issue) => {
+    const subject = subjectFor(issue.id);
+    const messageBuilders: MessageBuilders = {
+      ...builders,
+      projectId,
+      subject,
+    };
+    return {
+      id: encodeThreadId({ host, projectId, subject: subject.ref }),
+      rootMessage: buildRootMessage(
+        messageBuilders,
+        listedIssueRoot(host, subject, issue)
+      ),
+      lastReplyAt: issue.updated,
+    };
+  });
 
   const result: ListThreadsResult<BacklogRawMessage> = { threads };
   if (issues.length >= limit) {
@@ -654,9 +612,11 @@ export async function getUser(input: GetUserInput): Promise<UserInfo | null> {
 }
 
 export interface MarkAsReadInput {
+  threadId: string;
   messageId: string;
   message: Message<BacklogRawMessage> | undefined;
   api: BacklogApi;
+  subject: SubjectClient;
   logger: {
     debug: (message: string, ...args: unknown[]) => void;
     info: (message: string, ...args: unknown[]) => void;
@@ -667,25 +627,48 @@ const MARK_AS_READ_PAGE_SIZE = 100;
 const MARK_AS_READ_MAX_PAGES = 3;
 
 /**
- * Comment id `markAsRead` looks for, from `messageId` and — when a `message`
- * is given — cross-checked against `message.raw` (docs/specs/adapter.md
- * §7.8 "comment id from `messageId` (or `message.raw` when given — they must
- * agree)"). `:i`/`:u:` ids have no notification-worthy comment and return
- * `undefined`, which the caller turns into a no-call debug log.
+ * Comment id **and subject** `markAsRead` looks for, from `threadId` and
+ * `messageId` and — when a `message` is given — cross-checked against
+ * `message.raw` (docs/specs/adapter.md §7.8 "comment id and kind from
+ * `messageId` (or `message.raw` when given — they must agree)"). `:r`/`:u:`
+ * ids have no notification-worthy comment and return `undefined`, which the
+ * caller turns into a no-call debug log.
+ *
+ * The subject is compared as well as the number, in both directions, because
+ * an issue comment id and a pull-request comment id come from different
+ * sequences and may collide (measured 2026-09-06,
+ * `.claude/rules/backlog-pull-request-facts.md`): a numeric match alone would
+ * let a notification about another subject's comment be marked read, and
+ * which field carries it (`comment.id` or `pullRequestComment.id`) is chosen
+ * by the thread's subject client.
  */
 function commentIdForMarkAsRead(
+  threadId: string,
   messageId: string,
   message: Message<BacklogRawMessage> | undefined
 ): number | undefined {
+  const thread = decodeThreadId(threadId);
   const decoded = decodeMessageId(messageId);
-  if (decoded.kind !== 'comment') {
+  if (
+    decoded.host !== thread.host ||
+    !addressesSameSubject(thread, decoded.subject)
+  ) {
+    throw new ValidationError(
+      'backlog',
+      `messageId "${messageId}" does not name a message in thread "${threadId}"`
+    );
+  }
+  if (decoded.part !== 'comment') {
     return undefined;
   }
   if (message !== undefined && message.raw.kind === 'comment') {
-    if (message.raw.comment.id !== decoded.commentId) {
+    if (
+      message.raw.comment.id !== decoded.commentId ||
+      !addressesSameSubject(thread, message.raw.subject)
+    ) {
       throw new ValidationError(
         'backlog',
-        `messageId "${messageId}" and message.raw disagree on the comment id`
+        `messageId "${messageId}" and message.raw disagree on which comment to mark read`
       );
     }
   }
@@ -695,16 +678,22 @@ function commentIdForMarkAsRead(
 /**
  * `markAsRead` (docs/specs/adapter.md §7.8): notifications are the **bot
  * user's own** feed, paged newest-first at most 3 times
- * (`GET /notifications?count=100[&maxId=]`) looking for `comment.id ===
- * commentId`. Capped at 3 pages (300 notifications) rather than paging until
- * exhausted because this is meant to be called per-message, not swept
- * unboundedly — an old comment that has scrolled off the bot's most recent
- * 300 notifications is treated the same as "no notification exists for this
- * comment", which is the common case for a bot that was not itself notified.
+ * (`GET /notifications?count=100[&maxId=]`) looking for the entry about this
+ * comment. Which field that is belongs to the subject
+ * (`subject.notificationCommentId`): an issue's comment id is read from
+ * `comment.id` and a pull request's from `pullRequestComment.id`, never the
+ * other way round, because the two id sequences are distinct and may overlap
+ * (measured 2026-09-06).
+ *
+ * Capped at 3 pages (300 notifications) rather than paging until exhausted
+ * because this is meant to be called per-message, not swept unboundedly — an
+ * old comment that has scrolled off the bot's most recent 300 notifications
+ * is treated the same as "no notification exists for this comment", which is
+ * the common case for a bot that was not itself notified.
  */
 export async function markAsRead(input: MarkAsReadInput): Promise<void> {
-  const { messageId, message, api, logger } = input;
-  const commentId = commentIdForMarkAsRead(messageId, message);
+  const { threadId, messageId, message, api, subject, logger } = input;
+  const commentId = commentIdForMarkAsRead(threadId, messageId, message);
   if (commentId === undefined) {
     logger.debug('markAsRead: not a comment id, nothing to mark', {
       messageId,
@@ -723,7 +712,10 @@ export async function markAsRead(input: MarkAsReadInput): Promise<void> {
       break;
     }
 
-    const found = notifications.find((n) => n.comment?.id === commentId);
+    const found = notifications.find(
+      (notification) =>
+        subject.notificationCommentId(notification) === commentId
+    );
     if (found !== undefined) {
       if (!found.alreadyRead) {
         await api.markNotificationAsRead(found.id);
@@ -744,32 +736,26 @@ export async function markAsRead(input: MarkAsReadInput): Promise<void> {
   });
 }
 
-const ATTACHMENT_URL_PATTERN =
-  /^\/api\/v2\/issues\/([1-9]\d*)\/attachments\/([1-9]\d*)$/;
-
 export interface RehydrateAttachmentInput {
   attachment: Attachment;
   configuredHosts: ReadonlySet<string>;
-  fetchAttachment: (
-    host: string,
-    issueId: number,
-    attachmentId: number
-  ) => Promise<Buffer>;
+  download: (host: string, location: AttachmentLocation) => Promise<Buffer>;
 }
 
 /**
  * `rehydrateAttachment` (docs/specs/adapter.md §6.6): synchronous, and a
  * security boundary — it accepts only a URL whose host is one of this
- * adapter's **configured** installations and whose path matches
- * `/api/v2/issues/<posint>/attachments/<posint>`; anything else (a foreign
- * host, a malformed path, no URL at all) is returned unchanged, without
- * `fetchData`, which is what keeps a rehydrated attachment from ever
- * downloading through a host this adapter was not configured for (§11).
+ * adapter's **configured** installations and whose path is one this adapter
+ * builds (`src/subject/url.ts`, which owns both directions of the grammar);
+ * anything else (a foreign host, a malformed path, no URL at all) is returned
+ * unchanged, without `fetchData`, which is what keeps a rehydrated attachment
+ * from ever downloading through a host this adapter was not configured for
+ * (§11).
  */
 export function rehydrateAttachment(
   input: RehydrateAttachmentInput
 ): Attachment {
-  const { attachment, configuredHosts, fetchAttachment } = input;
+  const { attachment, configuredHosts, download } = input;
   if (attachment.url === undefined) {
     return attachment;
   }
@@ -784,21 +770,14 @@ export function rehydrateAttachment(
   if (!configuredHosts.has(parsed.hostname)) {
     return attachment;
   }
-  const match = ATTACHMENT_URL_PATTERN.exec(parsed.pathname);
-  if (match === null) {
+  const location = parseAttachmentPath(parsed.pathname);
+  if (location === null) {
     return attachment;
   }
-  const issueIdSegment = match[1];
-  const attachmentIdSegment = match[2];
-  if (issueIdSegment === undefined || attachmentIdSegment === undefined) {
-    return attachment;
-  }
-  const issueId = Number(issueIdSegment);
-  const attachmentId = Number(attachmentIdSegment);
   const host = parsed.hostname;
 
   return {
     ...attachment,
-    fetchData: () => fetchAttachment(host, issueId, attachmentId),
+    fetchData: () => download(host, location),
   };
 }

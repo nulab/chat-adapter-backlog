@@ -1,6 +1,6 @@
 import { root, paragraph, text as textNode } from 'chat';
 
-import { encodeMessageId, mentionPattern } from '../ids';
+import { encodeMessageId, encodeThreadId, mentionPattern } from '../ids';
 
 import type {
   ActivityAttachment,
@@ -9,6 +9,7 @@ import type {
   IssueCreatedActivity,
   IssueUpdatedOrCommentedActivity,
 } from './payload';
+import type { SubjectClient } from '../subject/client';
 import type {
   BacklogChange,
   BacklogRawMessage,
@@ -32,20 +33,10 @@ export interface InboundMessageFields {
 }
 
 function toAttachments(
-  host: string,
-  issueId: number,
-  fetchData: (issueId: number, attachmentId: number) => Promise<Buffer>,
+  subject: SubjectClient,
   raw: ActivityAttachment[] | undefined
 ): Attachment[] {
-  return (raw ?? []).map((attachment) => ({
-    type: 'file',
-    name: attachment.name,
-    size: attachment.size,
-    // An authenticated API URL, not a public link (docs/specs/adapter.md
-    // §5.3 "Attachments"); `fetchData` is the only way to actually read it.
-    url: `https://${host}/api/v2/issues/${issueId}/attachments/${attachment.id}`,
-    fetchData: () => fetchData(issueId, attachment.id),
-  }));
+  return (raw ?? []).map((attachment) => subject.webhookAttachment(attachment));
 }
 
 function normaliseChanges(raw: ActivityChange[] | undefined): BacklogChange[] {
@@ -81,27 +72,30 @@ function detectMention(
   );
 }
 
-export interface FetchAttachment {
-  (issueId: number, attachmentId: number): Promise<Buffer>;
-}
-
 export interface BuildInboundMessageInput {
   host: string;
   botUserId: number;
   botUserName: string;
-  fetchAttachment: FetchAttachment;
+  /**
+   * The subject the activity is about, already resolved by the caller through
+   * `subjectOfActivity` (docs/plans/pull-request-support.md §3.4). It supplies
+   * both the ref every id is built from and the attachment mapping, which
+   * differs per kind: an issue attachment carries its id, a pull-request one
+   * resolves it by name (D-PR10).
+   */
+  subject: SubjectClient;
 }
 
 /**
  * Type 1 — Issue Created (docs/specs/adapter.md §5.3 row 1). The message id
- * is the issue root (`<host>:<issueId>:i`); mention text is `summary +
- * description`, so a mention placed in the summary counts.
+ * is the subject's root (`<host>:issue:<issueId>:r`); mention text is
+ * `summary + description`, so a mention placed in the summary counts.
  */
 function buildIssueCreatedFields(
   activity: IssueCreatedActivity,
   input: BuildInboundMessageInput
 ): InboundMessageFields {
-  const { host, botUserId, botUserName, fetchAttachment } = input;
+  const { host, botUserId, botUserName, subject } = input;
   const text = [activity.content.summary, activity.content.description ?? '']
     .filter((part) => part.length > 0)
     .join('\n\n')
@@ -109,17 +103,12 @@ function buildIssueCreatedFields(
   const changes: BacklogChange[] = [];
   return {
     messageId: encodeMessageId({
-      kind: 'issue',
       host,
-      issueId: activity.content.id,
+      subject: subject.ref,
+      part: 'root',
     }),
     text,
-    attachments: toAttachments(
-      host,
-      activity.content.id,
-      fetchAttachment,
-      activity.content.attachments
-    ),
+    attachments: toAttachments(subject, activity.content.attachments),
     isMention: detectMention(
       botUserName,
       botUserId,
@@ -145,22 +134,22 @@ function buildIssueUpdatedOrCommentedFields(
   activity: IssueUpdatedOrCommentedActivity,
   input: BuildInboundMessageInput
 ): InboundMessageFields {
-  const { host, botUserId, botUserName, fetchAttachment } = input;
+  const { host, botUserId, botUserName, subject } = input;
   const changes = normaliseChanges(activity.content.changes);
   const comment = activity.content.comment;
 
   const messageId =
     comment !== null && comment !== undefined
       ? encodeMessageId({
-          kind: 'comment',
           host,
-          issueId: activity.content.id,
+          subject: subject.ref,
+          part: 'comment',
           commentId: comment.id,
         })
       : encodeMessageId({
-          kind: 'update',
           host,
-          issueId: activity.content.id,
+          subject: subject.ref,
+          part: 'update',
           created: activity.created,
         });
 
@@ -169,12 +158,7 @@ function buildIssueUpdatedOrCommentedFields(
   return {
     messageId,
     text,
-    attachments: toAttachments(
-      host,
-      activity.content.id,
-      fetchAttachment,
-      activity.content.attachments
-    ),
+    attachments: toAttachments(subject, activity.content.attachments),
     isMention: detectMention(botUserName, botUserId, text, undefined, changes),
     changes,
     dateSent: new Date(activity.created),
@@ -255,7 +239,11 @@ export function buildInboundMessage(
 
   return new MessageCtor({
     id: fields.messageId,
-    threadId: `backlog:${input.host}:${activity.project.id}:${activity.content.id}`,
+    threadId: encodeThreadId({
+      host: input.host,
+      projectId: activity.project.id,
+      subject: input.subject.ref,
+    }),
     text: fields.text,
     formatted: plainTextAst(fields.text),
     raw,

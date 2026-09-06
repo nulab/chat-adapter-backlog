@@ -25,7 +25,7 @@ Three properties of these payloads decide how a handler must read them:
 
 ## Type 1 — Issue Created
 
-`<host>:<issueId>:i` — text is `summary` + blank line + `description`
+`<host>:issue:<issueId>:r` — text is `summary` + blank line + `description`
 
 ```json
 {
@@ -64,7 +64,7 @@ Three properties of these payloads decide how a handler must read them:
 
 ## Type 3 — Issue Commented
 
-`<host>:<issueId>:c<commentId>` — a plain comment carries no changes
+`<host>:issue:<issueId>:c<commentId>` — a plain comment carries no changes
 
 ```json
 {
@@ -353,7 +353,7 @@ one event, not two
 
 ## Type 2 — Issue Updated — no comment id
 
-`<host>:<issueId>:u:<created>`, the rare update-without-comment path
+`<host>:issue:<issueId>:u:<created>`, the rare update-without-comment path
 
 ```json
 {

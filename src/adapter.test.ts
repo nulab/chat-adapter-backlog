@@ -1,4 +1,8 @@
-import { ResourceNotFoundError, ValidationError } from '@chat-adapter/shared';
+import {
+  AdapterError,
+  ResourceNotFoundError,
+  ValidationError,
+} from '@chat-adapter/shared';
 import { MemoryStateAdapter } from '@chat-adapter/state-memory';
 import {
   connectWebhookContract,
@@ -26,8 +30,13 @@ import {
   webhookRequest,
 } from './test/fixtures/webhooks';
 import { UNAUTHORIZED_BODY } from './webhook/verify';
-import type { BacklogThreadId, ResolvedInstallation } from './types';
-import type { Adapter, ChatInstance, Message } from 'chat';
+import type { BacklogApi, BacklogComment } from './client/port';
+import type {
+  BacklogSubjectRef,
+  BacklogThreadId,
+  ResolvedInstallation,
+} from './types';
+import type { Adapter, ChatInstance, FormattedContent, Message } from 'chat';
 
 /**
  * `@chat-adapter/tests@4.39.0`'s own `matchers.d.ts` augments
@@ -315,22 +324,50 @@ describe('BacklogAdapter lifecycle and identity', () => {
 
   it('is always not a DM', () => {
     const adapter = new BacklogAdapter(validConfig());
-    expect(adapter.isDM('backlog:example.backlog.com:500:8001')).toBe(false);
+    expect(adapter.isDM('backlog:example.backlog.com:500:issue:8001')).toBe(
+      false
+    );
   });
 
   it('resolves startTyping as a no-op accepting all three parameters', async () => {
     const adapter = new BacklogAdapter(validConfig());
     await expect(
-      adapter.startTyping('backlog:example.backlog.com:500:8001', 'typing', {
-        initiatorUserId: '100',
-      })
+      adapter.startTyping(
+        'backlog:example.backlog.com:500:issue:8001',
+        'typing',
+        { initiatorUserId: '100' }
+      )
     ).resolves.toBeUndefined();
   });
 
   it('derives the channel id from a thread id', () => {
     const adapter = new BacklogAdapter(validConfig());
     expect(
-      adapter.channelIdFromThreadId('backlog:example.backlog.com:500:8001')
+      adapter.channelIdFromThreadId(
+        'backlog:example.backlog.com:500:issue:8001'
+      )
+    ).toBe('backlog:example.backlog.com:500');
+  });
+
+  it('a pull request thread id carries the repository id and number, never the repository name', () => {
+    const adapter = new BacklogAdapter(validConfig());
+    const decoded: BacklogThreadId = {
+      host: 'example.backlog.com',
+      projectId: 500,
+      subject: { kind: 'pullRequest', repositoryId: 700, number: 12 },
+    };
+
+    const threadId = adapter.encodeThreadId(decoded);
+
+    expect(threadId).toBe('backlog:example.backlog.com:500:pr:700:12');
+    expect(threadId).not.toContain('example-repo');
+    expect(adapter.decodeThreadId(threadId)).toEqual(decoded);
+  });
+
+  it('the channel of a pull request thread is its project', () => {
+    const adapter = new BacklogAdapter(validConfig());
+    expect(
+      adapter.channelIdFromThreadId('backlog:example.backlog.com:500:pr:700:12')
     ).toBe('backlog:example.backlog.com:500');
   });
 
@@ -453,20 +490,52 @@ threadIdContract<BacklogThreadId>({
   decode: (id) => new BacklogAdapter(validConfig()).decodeThreadId(id),
   cases: [
     {
-      decoded: { host: 'example.backlog.com', projectId: 500, issueId: 8001 },
-      encoded: 'backlog:example.backlog.com:500:8001',
+      decoded: {
+        host: 'example.backlog.com',
+        projectId: 500,
+        subject: { kind: 'issue', issueId: 8001 },
+      },
+      encoded: 'backlog:example.backlog.com:500:issue:8001',
     },
     {
-      decoded: { host: 'example.backlog.jp', projectId: 500, issueId: 8001 },
-      encoded: 'backlog:example.backlog.jp:500:8001',
+      decoded: {
+        host: 'example.backlog.jp',
+        projectId: 500,
+        subject: { kind: 'issue', issueId: 8001 },
+      },
+      encoded: 'backlog:example.backlog.jp:500:issue:8001',
     },
     {
       decoded: {
         host: 'example.backlogtool.com',
         projectId: 500,
-        issueId: 8001,
+        subject: { kind: 'issue', issueId: 8001 },
       },
-      encoded: 'backlog:example.backlogtool.com:500:8001',
+      encoded: 'backlog:example.backlogtool.com:500:issue:8001',
+    },
+    {
+      decoded: {
+        host: 'example.backlog.com',
+        projectId: 500,
+        subject: { kind: 'pullRequest', repositoryId: 700, number: 12 },
+      },
+      encoded: 'backlog:example.backlog.com:500:pr:700:12',
+    },
+    {
+      decoded: {
+        host: 'example.backlog.jp',
+        projectId: 500,
+        subject: { kind: 'pullRequest', repositoryId: 700, number: 12 },
+      },
+      encoded: 'backlog:example.backlog.jp:500:pr:700:12',
+    },
+    {
+      decoded: {
+        host: 'example.backlogtool.com',
+        projectId: 500,
+        subject: { kind: 'pullRequest', repositoryId: 700, number: 12 },
+      },
+      encoded: 'backlog:example.backlogtool.com:500:pr:700:12',
     },
   ],
 });
@@ -556,7 +625,7 @@ describe('BacklogAdapter port wiring', () => {
   });
 });
 
-/** One installation matching `FIXTURE`, backed by an in-memory port pre-seeded with the fixture project so `ensureFormattingRule` resolves without a network call. */
+/** One installation matching `FIXTURE`, backed by an in-memory port pre-seeded with the fixture project so `ensureProject` resolves without a network call. */
 function webhookAdapterConfig(overrides: Partial<ResolvedInstallation> = {}) {
   return {
     host: FIXTURE.host,
@@ -781,9 +850,9 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
     ];
     expect(event.platform).toBe('backlog');
     expect(event.threadId).toBe(
-      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:${FIXTURE.issueId}`
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`
     );
-    expect(event.messageId).toBe(`${FIXTURE.host}:${FIXTURE.issueId}:i`);
+    expect(event.messageId).toBe(`${FIXTURE.host}:issue:${FIXTURE.issueId}:r`);
   });
 });
 
@@ -859,7 +928,7 @@ describe('BacklogAdapter.handleWebhook — dispatch ordering and error handling'
       },
     });
     await adapter.initialize(chat);
-    // Forces the factory to reject after `ensureFormattingRule` succeeds, by
+    // Forces the factory to reject after `ensureProject` succeeds, by
     // making `parseMessage` itself throw — the simplest reliable way to
     // exercise "a factory that throws" without depending on which internal
     // step happens to fail for a given fixture.
@@ -1083,6 +1152,22 @@ const CHATBOT_USER_REF = {
 };
 
 /**
+ * The two subjects every id in this file is built from. A pull request is
+ * addressed by repository id and number, never by the global
+ * `FIXTURE.pullRequestId`, which addresses no endpoint
+ * (`.claude/rules/backlog-pull-request-facts.md` "Addressing").
+ */
+const ISSUE_SUBJECT: BacklogSubjectRef = {
+  kind: 'issue',
+  issueId: FIXTURE.issueId,
+};
+const PULL_REQUEST_SUBJECT: BacklogSubjectRef = {
+  kind: 'pullRequest',
+  repositoryId: FIXTURE.repositoryId,
+  number: FIXTURE.pullRequestNumber,
+};
+
+/**
  * A `BacklogAdapter` backed by an in-memory port seeded with `FIXTURE`'s
  * project, issue and bot user — used by the egress/reads/stream/reactions
  * tests below, which exercise real port state rather than the webhook
@@ -1093,6 +1178,13 @@ function egressAdapter(
   options: {
     textFormattingRule?: 'markdown' | 'backlog';
     seed?: Partial<Parameters<typeof createInMemoryBacklogApi>[0]>;
+    logger?: ReturnType<typeof createMockLogger>;
+    /**
+     * Wraps the port the adapter is handed, leaving the returned `api`
+     * untouched for state assertions — the seam `recordPortCalls` uses to
+     * count reads the in-memory port does not record.
+     */
+    wrapApi?: (api: BacklogApi) => BacklogApi;
   } = {}
 ): {
   adapter: BacklogAdapter;
@@ -1134,13 +1226,86 @@ function egressAdapter(
     botUserId: FIXTURE.bot.id,
     botUserName: FIXTURE.bot.name,
     webhookSecret: FIXTURE.webhookSecret,
-    createApi: () => api,
+    createApi: () => options.wrapApi?.(api) ?? api,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
 
   return { adapter, api };
 }
 
-const EGRESS_THREAD_ID = `backlog:${FIXTURE.host}:${FIXTURE.projectId}:${FIXTURE.issueId}`;
+/**
+ * Records every port method the adapter calls, in order. The in-memory port
+ * records writes only, so a `read`-bucket call nobody asked for is invisible
+ * without this — and §7.3 and §7.4 budget those calls exactly.
+ */
+function recordPortCalls(api: BacklogApi, calls: string[]): BacklogApi {
+  return new Proxy(api, {
+    get(target, property, receiver) {
+      const value: unknown = Reflect.get(target, property, receiver);
+      if (typeof property !== 'string' || typeof value !== 'function') {
+        return value;
+      }
+      return (...args: unknown[]): unknown => {
+        calls.push(property);
+        return (value as (...rest: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  });
+}
+
+const EGRESS_THREAD_ID = `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`;
+const PULL_REQUEST_THREAD_ID = `backlog:${FIXTURE.host}:${FIXTURE.projectId}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}`;
+
+/**
+ * Seed for a project that also has a git repository holding one pull request,
+ * so a pull-request thread resolves through the same adapter as an issue one.
+ * Comment ids are seven-digit while the issue comments above are 1..n: the two
+ * sequences are separate on a real space (measured 2026-09-06), and a fixture
+ * where a bare comment id identified one kind would let a
+ * `commentId`/`pullRequestCommentId` mix-up pass unnoticed.
+ */
+function pullRequestSeed(
+  comments: Partial<BacklogComment>[] = []
+): Partial<Parameters<typeof createInMemoryBacklogApi>[0]> {
+  return {
+    repositories: [
+      conformanceFixture.baseGitRepository({
+        name: FIXTURE.repositoryName,
+      }),
+    ],
+    pullRequests: [conformanceFixture.basePullRequest()],
+    pullRequestComments: {
+      [`${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}`]: comments.map(
+        (overrides) => conformanceFixture.basePullRequestComment(overrides)
+      ),
+    },
+  };
+}
+
+const PULL_REQUEST_COMMENT_ID = conformanceFixture.pullRequestCommentIds[0];
+
+/** One issue comment authored by the bot, editable and deletable by it. */
+function seededComment(): {
+  id: number;
+  issueId: number;
+  content: string;
+  changeLog: [];
+  createdUser: typeof CHATBOT_USER_REF;
+  created: Date;
+  updated: Date;
+  stars: [];
+} {
+  return {
+    id: 1,
+    issueId: FIXTURE.issueId,
+    content: 'Original',
+    changeLog: [],
+    createdUser: CHATBOT_USER_REF,
+    created: new Date('2026-01-01T00:00:00Z'),
+    updated: new Date('2026-01-01T00:00:00Z'),
+    stars: [],
+  };
+}
 
 describe('BacklogAdapter.postMessage (§6.1)', () => {
   it('a reply is posted as a comment on the issue', async () => {
@@ -1202,9 +1367,9 @@ describe('BacklogAdapter.editMessage / deleteMessage (§6.2, §6.3, D12)', () =>
   it('the issue body cannot be edited', async () => {
     const { adapter } = egressAdapter();
     const issueMessageId = encodeMessageId({
-      kind: 'issue',
       host: FIXTURE.host,
-      issueId: FIXTURE.issueId,
+      subject: ISSUE_SUBJECT,
+      part: 'root',
     });
     await expect(
       adapter.editMessage(EGRESS_THREAD_ID, issueMessageId, { markdown: 'x' })
@@ -1214,9 +1379,9 @@ describe('BacklogAdapter.editMessage / deleteMessage (§6.2, §6.3, D12)', () =>
   it('a fieldchange update with no comment cannot be deleted', async () => {
     const { adapter } = egressAdapter();
     const updateMessageId = encodeMessageId({
-      kind: 'update',
       host: FIXTURE.host,
-      issueId: FIXTURE.issueId,
+      subject: ISSUE_SUBJECT,
+      part: 'update',
       created: '2026-09-03T04:05:06Z',
     });
     await expect(
@@ -1243,9 +1408,9 @@ describe('BacklogAdapter.editMessage / deleteMessage (§6.2, §6.3, D12)', () =>
     });
     void api;
     const commentMessageId = encodeMessageId({
-      kind: 'comment',
       host: FIXTURE.host,
-      issueId: FIXTURE.issueId,
+      subject: ISSUE_SUBJECT,
+      part: 'comment',
       commentId: 1,
     });
     await expect(
@@ -1254,6 +1419,106 @@ describe('BacklogAdapter.editMessage / deleteMessage (§6.2, §6.3, D12)', () =>
         files: [{ filename: 'a.txt', data: Buffer.from('a') }],
       })
     ).rejects.toThrow(ValidationError);
+  });
+
+  it('editing a message that belongs to another thread is rejected', async () => {
+    const { adapter, api } = egressAdapter({
+      seed: { comments: [seededComment()] },
+    });
+    const foreignMessageId = encodeMessageId({
+      host: FIXTURE.host,
+      subject: { kind: 'issue', issueId: FIXTURE.issueId + 1 },
+      part: 'comment',
+      commentId: 1,
+    });
+
+    await expect(
+      adapter.editMessage(EGRESS_THREAD_ID, foreignMessageId, {
+        markdown: 'rewritten',
+      })
+    ).rejects.toThrow(ValidationError);
+    expect(api.state.comments[0]?.content).toBe('Original');
+  });
+
+  it('a message id naming another space is not edited in this one', async () => {
+    const { adapter, api } = egressAdapter({
+      seed: { comments: [seededComment()] },
+    });
+    const otherSpaceMessageId = encodeMessageId({
+      host: 'other.backlog.jp',
+      subject: ISSUE_SUBJECT,
+      part: 'comment',
+      commentId: 1,
+    });
+
+    await expect(
+      adapter.editMessage(EGRESS_THREAD_ID, otherSpaceMessageId, {
+        markdown: 'rewritten',
+      })
+    ).rejects.toThrow(ValidationError);
+    expect(api.state.comments[0]?.content).toBe('Original');
+  });
+
+  it('deleting a pull request comment through an issue thread is rejected', async () => {
+    const { adapter, api } = egressAdapter({
+      seed: {
+        comments: [seededComment()],
+        ...pullRequestSeed([{ id: PULL_REQUEST_COMMENT_ID }]),
+      },
+    });
+    const pullRequestMessageId = encodeMessageId({
+      host: FIXTURE.host,
+      subject: PULL_REQUEST_SUBJECT,
+      part: 'comment',
+      commentId: PULL_REQUEST_COMMENT_ID,
+    });
+
+    await expect(
+      adapter.deleteMessage(EGRESS_THREAD_ID, pullRequestMessageId)
+    ).rejects.toThrow(ValidationError);
+    expect(api.state.recordedInputs).toEqual([]);
+  });
+
+  it('deleting an issue comment through a pull request thread is rejected before any request', async () => {
+    const { adapter, api } = egressAdapter({
+      seed: {
+        comments: [seededComment()],
+        ...pullRequestSeed([{ id: PULL_REQUEST_COMMENT_ID }]),
+      },
+    });
+    const issueMessageId = encodeMessageId({
+      host: FIXTURE.host,
+      subject: ISSUE_SUBJECT,
+      part: 'comment',
+      commentId: 1,
+    });
+
+    await expect(
+      adapter.deleteMessage(PULL_REQUEST_THREAD_ID, issueMessageId)
+    ).rejects.toThrow(ValidationError);
+    expect(api.state.recordedInputs).toEqual([]);
+    expect(api.state.comments).toHaveLength(1);
+  });
+
+  it('deleting a pull request comment fails before any request because Backlog has no endpoint', async () => {
+    const { adapter, api } = egressAdapter({
+      seed: pullRequestSeed([{ id: PULL_REQUEST_COMMENT_ID }]),
+    });
+    const commentMessageId = encodeMessageId({
+      host: FIXTURE.host,
+      subject: PULL_REQUEST_SUBJECT,
+      part: 'comment',
+      commentId: PULL_REQUEST_COMMENT_ID,
+    });
+
+    const failure: unknown = await adapter
+      .deleteMessage(PULL_REQUEST_THREAD_ID, commentMessageId)
+      .then(() => undefined)
+      .catch((cause: unknown) => cause);
+
+    expect(failure).toBeInstanceOf(AdapterError);
+    expect((failure as AdapterError).code).toBe('UNSUPPORTED_OPERATION');
+    expect(api.state.recordedInputs).toEqual([]);
   });
 });
 
@@ -1330,9 +1595,9 @@ describe('BacklogAdapter reactions (§6.5)', () => {
   }
 
   const commentMessageId = encodeMessageId({
-    kind: 'comment',
     host: FIXTURE.host,
-    issueId: FIXTURE.issueId,
+    subject: ISSUE_SUBJECT,
+    part: 'comment',
     commentId: 1,
   });
 
@@ -1357,9 +1622,9 @@ describe('BacklogAdapter reactions (§6.5)', () => {
   it('a non-comment id cannot be starred', async () => {
     const { adapter } = egressAdapter();
     const issueMessageId = encodeMessageId({
-      kind: 'issue',
       host: FIXTURE.host,
-      issueId: FIXTURE.issueId,
+      subject: ISSUE_SUBJECT,
+      part: 'root',
     });
     await expect(
       adapter.addReaction(EGRESS_THREAD_ID, issueMessageId, 'star')
@@ -1407,9 +1672,9 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
     expect(last).toHaveLength(1);
     expect(last[0]?.id).toBe(
       encodeMessageId({
-        kind: 'issue',
         host: FIXTURE.host,
-        issueId: FIXTURE.issueId,
+        subject: ISSUE_SUBJECT,
+        part: 'root',
       })
     );
   });
@@ -1456,6 +1721,89 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
       channelName: FIXTURE.projectKey,
       isDM: false,
     });
+  });
+
+  it('thread info names its kind for both issues and pull requests', async () => {
+    const { adapter } = egressAdapter({ seed: pullRequestSeed() });
+
+    const issue = await adapter.fetchThread(EGRESS_THREAD_ID);
+    const pullRequest = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
+
+    expect(issue.metadata).toMatchObject({
+      kind: 'issue',
+      issueId: FIXTURE.issueId,
+      url: `https://${FIXTURE.host}/view/${FIXTURE.projectKey}-1`,
+    });
+    expect(pullRequest).toMatchObject({
+      channelId: `backlog:${FIXTURE.host}:${FIXTURE.projectId}`,
+      channelName: FIXTURE.projectKey,
+      isDM: false,
+    });
+    expect(pullRequest.metadata).toMatchObject({
+      kind: 'pullRequest',
+      repositoryId: FIXTURE.repositoryId,
+      repositoryName: FIXTURE.repositoryName,
+      number: FIXTURE.pullRequestNumber,
+      url: `https://${FIXTURE.host}/git/${FIXTURE.projectKey}/${FIXTURE.repositoryName}/pullRequests/${FIXTURE.pullRequestNumber}`,
+    });
+  });
+
+  it('a pull request thread without a cached repository name is described without a url', async () => {
+    const logger = createMockLogger();
+    // The pull request exists, its repository does not answer: the name half
+    // of the web URL cannot be resolved (docs/specs/adapter.md §7.3).
+    const { adapter } = egressAdapter({
+      logger,
+      seed: { pullRequests: [conformanceFixture.basePullRequest()] },
+    });
+
+    const thread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
+
+    expect(thread.metadata).toMatchObject({ kind: 'pullRequest' });
+    expect(thread.metadata).not.toHaveProperty('url');
+    expect(thread.metadata).not.toHaveProperty('repositoryName');
+    expect(logger.warn).toHaveBeenCalledWith(
+      'repository name lookup failed; url omitted',
+      expect.objectContaining({ repositoryId: FIXTURE.repositoryId })
+    );
+  });
+});
+
+describe('BacklogAdapter read budget (§7.3, §7.4)', () => {
+  it('resolving an issue thread spends one read', async () => {
+    const calls: string[] = [];
+    const { adapter } = egressAdapter({
+      wrapApi: (api) => recordPortCalls(api, calls),
+    });
+
+    const thread = await adapter.fetchThread(EGRESS_THREAD_ID);
+
+    expect(thread.metadata).toMatchObject({ kind: 'issue' });
+    expect(calls).toEqual(['getIssue']);
+  });
+
+  it('the subject of a serialised issue root spends none', async () => {
+    const calls: string[] = [];
+    const { adapter } = egressAdapter({
+      wrapApi: (api) => recordPortCalls(api, calls),
+    });
+    const message = await adapter.fetchMessage(
+      EGRESS_THREAD_ID,
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: ISSUE_SUBJECT,
+        part: 'root',
+      })
+    );
+    if (message === null) {
+      throw new Error('the issue root was not returned');
+    }
+    calls.length = 0;
+
+    const subject = await adapter.fetchSubject(message.raw);
+
+    expect(subject).toMatchObject({ type: 'issue' });
+    expect(calls).toEqual([]);
   });
 });
 
@@ -1626,9 +1974,9 @@ describe('BacklogAdapter.fetchSubject (§7.4)', () => {
     const message = await adapter.fetchMessage(
       EGRESS_THREAD_ID,
       encodeMessageId({
-        kind: 'issue',
         host: FIXTURE.host,
-        issueId: FIXTURE.issueId,
+        subject: ISSUE_SUBJECT,
+        part: 'root',
       })
     );
     expect(message).not.toBeNull();
@@ -1705,9 +2053,9 @@ describe('BacklogAdapter.markAsRead (§7.8)', () => {
       seed: { notifications },
     });
     const commentMessageId = encodeMessageId({
-      kind: 'comment',
       host: FIXTURE.host,
-      issueId: FIXTURE.issueId,
+      subject: ISSUE_SUBJECT,
+      part: 'comment',
       commentId: targetCommentId,
     });
 
@@ -1742,9 +2090,9 @@ describe('BacklogAdapter.markAsRead (§7.8)', () => {
       },
     });
     const commentMessageId = encodeMessageId({
-      kind: 'comment',
       host: FIXTURE.host,
-      issueId: FIXTURE.issueId,
+      subject: ISSUE_SUBJECT,
+      part: 'comment',
       commentId: 7,
     });
 
@@ -1757,12 +2105,48 @@ describe('BacklogAdapter.markAsRead (§7.8)', () => {
     ).toHaveLength(0);
   });
 
+  it('marking a comment read through the wrong kind of thread is rejected', async () => {
+    const { adapter, api } = egressAdapter({
+      seed: {
+        ...pullRequestSeed([{ id: PULL_REQUEST_COMMENT_ID }]),
+        notifications: [
+          {
+            id: 1,
+            alreadyRead: false,
+            project: {
+              id: FIXTURE.projectId,
+              projectKey: FIXTURE.projectKey,
+              name: 'Example project',
+            },
+            issue: null,
+            comment: { id: PULL_REQUEST_COMMENT_ID },
+            pullRequest: null,
+            pullRequestComment: null,
+            sender: ALICE_USER_REF,
+            created: new Date('2026-01-01T00:00:00Z'),
+          },
+        ],
+      },
+    });
+    const pullRequestMessageId = encodeMessageId({
+      host: FIXTURE.host,
+      subject: PULL_REQUEST_SUBJECT,
+      part: 'comment',
+      commentId: PULL_REQUEST_COMMENT_ID,
+    });
+
+    await expect(
+      adapter.markAsRead(EGRESS_THREAD_ID, pullRequestMessageId)
+    ).rejects.toThrow(ValidationError);
+    expect(api.state.recordedInputs).toEqual([]);
+  });
+
   it('the issue body id makes no notification call', async () => {
     const { adapter, api } = egressAdapter();
     const issueMessageId = encodeMessageId({
-      kind: 'issue',
       host: FIXTURE.host,
-      issueId: FIXTURE.issueId,
+      subject: ISSUE_SUBJECT,
+      part: 'root',
     });
 
     await adapter.markAsRead(EGRESS_THREAD_ID, issueMessageId);
@@ -1804,7 +2188,43 @@ describe('BacklogAdapter.rehydrateAttachment (§6.6)', () => {
     const attachment = { type: 'file' as const, name: 'log.txt' };
     expect(adapter.rehydrateAttachment(attachment)).toEqual(attachment);
   });
+
+  it('rehydrating an attachment accepts both url shapes and refuses a foreign host for both', () => {
+    const { adapter } = egressAdapter({ seed: pullRequestSeed() });
+    const urls = [
+      `https://${FIXTURE.host}/api/v2/issues/${FIXTURE.issueId}/attachments/42`,
+      `https://${FIXTURE.host}/api/v2/projects/${FIXTURE.projectId}/git/repositories/${FIXTURE.repositoryId}/pullRequests/${FIXTURE.pullRequestNumber}/attachments/42`,
+    ];
+
+    for (const url of urls) {
+      const rehydrated = adapter.rehydrateAttachment({
+        type: 'file',
+        name: 'log.txt',
+        url,
+      });
+      expect(typeof rehydrated.fetchData).toBe('function');
+
+      const foreign = adapter.rehydrateAttachment({
+        type: 'file',
+        name: 'log.txt',
+        url: url.replace(FIXTURE.host, 'not-configured.backlog.com'),
+      });
+      expect(foreign.fetchData).toBeUndefined();
+    }
+  });
 });
+
+const BOLD_CONTENT: FormattedContent = {
+  type: 'root',
+  children: [
+    {
+      type: 'paragraph',
+      children: [
+        { type: 'strong', children: [{ type: 'text', value: 'bold' }] },
+      ],
+    },
+  ],
+};
 
 describe('BacklogAdapter.renderFormatted (§9.1)', () => {
   it('a bold reply on a notation project uses two quotes', async () => {
@@ -1844,6 +2264,40 @@ describe('BacklogAdapter.renderFormatted (§9.1)', () => {
       ],
     });
     expect(rendered).toBe('**bold**');
+  });
+
+  it("rendering for a channel uses that channel's cached rule", async () => {
+    const { adapter } = egressAdapter({ textFormattingRule: 'backlog' });
+    // Prime the cache the way egress would (one Get Project per channel).
+    await adapter.postMessage(EGRESS_THREAD_ID, {
+      markdown: 'prime the cache',
+    });
+
+    const rendered = adapter.renderFormatted(
+      BOLD_CONTENT,
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}`
+    );
+
+    expect(rendered).toBe("''bold''");
+  });
+
+  it('rendering for an unparseable target warns and falls back to markdown', async () => {
+    const logger = createMockLogger();
+    const { adapter } = egressAdapter({
+      textFormattingRule: 'backlog',
+      logger,
+    });
+    await adapter.postMessage(EGRESS_THREAD_ID, {
+      markdown: 'prime the cache',
+    });
+
+    const rendered = adapter.renderFormatted(BOLD_CONTENT, 'not-an-id');
+
+    expect(rendered).toBe('**bold**');
+    expect(logger.warn).toHaveBeenCalledWith(
+      'textFormattingRule uncached; assuming markdown',
+      { target: 'not-an-id' }
+    );
   });
 });
 

@@ -16,14 +16,14 @@ import {
 } from '../src/test/fixtures/webhooks.ts';
 
 const rows: [string, string, string, unknown][] = [
-  ['1', 'Issue Created', '`<host>:<issueId>:i` — text is `summary` + blank line + `description`', issueCreated({ assignee: FIXTURE.bot })],
-  ['3', 'Issue Commented', '`<host>:<issueId>:c<commentId>` — a plain comment carries no changes', issueCommented()],
+  ['1', 'Issue Created', '`<host>:issue:<issueId>:r` — text is `summary` + blank line + `description`', issueCreated({ assignee: FIXTURE.bot })],
+  ['3', 'Issue Commented', '`<host>:issue:<issueId>:c<commentId>` — a plain comment carries no changes', issueCommented()],
   ['2', 'Issue Updated — status only', '`…:c<commentId>` with empty text; the change is in `changes[]`', statusChanged()],
   ['2', 'Issue Updated — assignee', '`changes[].field` is `assigner` and `new_value` is a display name', assigneeChanged()],
   ['2', 'Issue Updated — description', '`changes[]` carries both complete bodies', descriptionEdited()],
   ['2', 'Issue Updated — attachment added', 'a changelog comment; the change is visible only in the comment’s REST `changeLog`', attachmentAdded()],
   ['2', 'Issue Updated — comment and status together', 'one event, not two', commentWithStatusChange()],
-  ['2', 'Issue Updated — no comment id', '`<host>:<issueId>:u:<created>`, the rare update-without-comment path', issueUpdatedWithoutComment()],
+  ['2', 'Issue Updated — no comment id', '`<host>:issue:<issueId>:u:<created>`, the rare update-without-comment path', issueUpdatedWithoutComment()],
   ['4', 'Issue Deleted', 'dispatched as `processMessageDeleted` on the root message', issueDeleted()],
   ['14', 'Issue Multi Updated', '200 Ignored — no per-issue comment exists', issueMultiUpdated()],
   ['17', 'Comment Notification Added', '200 Ignored — repeats an existing comment', commentNotificationAdded()],

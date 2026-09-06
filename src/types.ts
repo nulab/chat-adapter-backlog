@@ -5,15 +5,39 @@ import type { RecognisedActivity } from './webhook/payload';
 import type { Logger } from 'chat';
 
 /**
- * A thread is a Backlog issue: `backlog:<host>:<projectId>:<issueId>`
- * (docs/specs/adapter.md §2). The numeric `issueId` is carried instead of the
- * issue key because renaming a project's key rewrites every issue key under
- * it (docs/specs/adapter.md D8, `.claude/rules/backlog-webhook-facts.md`).
+ * Which issue or pull request a thread, message or raw message is about
+ * (docs/specs/adapter.md §2, D-PR2). The kind is an explicit, non-optional
+ * coordinate on **both** kinds rather than issues being the unmarked default:
+ * Backlog addresses the two through different endpoint families with
+ * different coordinates, and their comment ids come from separate sequences
+ * that may overlap (measured 2026-09-06,
+ * `.claude/rules/backlog-pull-request-facts.md`), so nothing may infer the
+ * kind from a segment count or from which field happens to be present.
+ *
+ * A pull request is addressed by `repositoryId` + `number`, never by its
+ * space-wide `id`: that id addresses no endpoint at all.
+ */
+export type BacklogSubjectRef =
+  | { kind: 'issue'; issueId: number }
+  | { kind: 'pullRequest'; repositoryId: number; number: number };
+
+/**
+ * A thread is a Backlog issue or pull request:
+ * `backlog:<host>:<projectId>:issue:<issueId>` or
+ * `backlog:<host>:<projectId>:pr:<repositoryId>:<number>`
+ * (docs/specs/adapter.md §2). Numeric ids throughout: renaming a project's key
+ * rewrites every issue key under it, and a repository can be renamed too
+ * (docs/specs/adapter.md D8, `.claude/rules/backlog-webhook-facts.md`).
+ *
+ * `subject` is nested rather than flattened into this interface so the same
+ * value travels from `decodeThreadId` into the subject layer, into
+ * `raw.subject` and back out of `encodeMessageId` without being re-shaped at
+ * each boundary (D-PR2).
  */
 export interface BacklogThreadId {
   host: string;
   projectId: number;
-  issueId: number;
+  subject: BacklogSubjectRef;
 }
 
 /**
@@ -35,18 +59,29 @@ export interface BacklogUserId {
 }
 
 /**
- * A message: the issue body, a comment, or a fieldchange update with no
- * comment (docs/specs/adapter.md §2). Host-qualified, and without the
+ * Which part of a subject a message is: its body, one comment, or a
+ * fieldchange update that carried no comment (docs/specs/adapter.md §2).
+ * The root tag is `r` for both kinds rather than the earlier `i`, which meant
+ * "issue" and would mislead on a pull request (D-PR9).
+ */
+export type BacklogMessagePart =
+  | { part: 'root' }
+  | { part: 'comment'; commentId: number }
+  | { part: 'update'; created: string };
+
+/**
+ * A message id: `<host>:<subject>:<part>`. Host-qualified, and without the
  * `backlog:` prefix that thread and channel ids carry, because the core's
  * dedupe key (`dedupe:<adapter.name>:<message.id>`) already carries the
  * adapter name and has no thread component of its own
  * (docs/specs/adapter.md §2, `.claude/rules/chat-sdk-core-facts.md`) — so the
- * message id alone must disambiguate across every configured space.
+ * message id alone must disambiguate across every configured space, and the
+ * subject's kind keeps two comment ids from different sequences apart.
  */
-export type BacklogMessageId =
-  | { kind: 'issue'; host: string; issueId: number }
-  | { kind: 'comment'; host: string; issueId: number; commentId: number }
-  | { kind: 'update'; host: string; issueId: number; created: string };
+export type BacklogMessageId = {
+  host: string;
+  subject: BacklogSubjectRef;
+} & BacklogMessagePart;
 
 /**
  * A normalised field change, shared by webhook `content.changes[]` and REST
@@ -70,15 +105,15 @@ export interface BacklogChange {
  */
 export type BacklogWebhookPayload = RecognisedActivity;
 
-export interface BacklogComment {
+/**
+ * A comment as `message.raw` carries it. The parent is **not** a field here:
+ * a pull-request comment has no parent reference of its own (measured
+ * 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`), so the
+ * enclosing raw variant names the `subject` instead and one shape serves both
+ * kinds.
+ */
+export interface BacklogRawComment {
   id: number;
-  /**
-   * The issue this comment belongs to. Carried on the raw shape (not just
-   * derivable from the enclosing thread id) because `fetchSubject` and
-   * `markAsRead` (docs/specs/adapter.md §7.4, §7.8) both take a bare `raw` or
-   * `message.raw` with no thread context alongside it.
-   */
-  issueId: number;
   content: string | null;
   createdUser: { id: number; name: string; userId?: string | null };
   created: string;
@@ -87,7 +122,7 @@ export interface BacklogComment {
   stars: { id: number; presenter: { id: number } }[];
 }
 
-export interface BacklogIssue {
+export interface BacklogRawIssue {
   id: number;
   issueKey: string;
   projectId: number;
@@ -102,10 +137,37 @@ export interface BacklogIssue {
   updated: string;
 }
 
+/** Mirrors the port's `BacklogPullRequest` with ISO strings; see `src/index.ts`. */
+export interface BacklogRawPullRequest {
+  id: number;
+  projectId: number;
+  repositoryId: number;
+  number: number;
+  summary: string;
+  description: string;
+  base: string;
+  branch: string;
+  status: { id: number; name: string };
+  assignee: { id: number; name: string } | null;
+  issue: { id: number; issueKey: string | null } | null;
+  baseCommit: string | null;
+  branchCommit: string | null;
+  mergeCommit: string | null;
+  closeAt: string | null;
+  mergeAt: string | null;
+  createdUser: { id: number; name: string; userId?: string | null };
+  created: string;
+  updated: string;
+}
+
 /**
- * The three shapes `parseMessage` accepts (docs/specs/adapter.md §3.5):
- * a webhook activity, a REST comment fetched for a known project, or a REST
- * issue fetched as a thread's root message. `changes` is always normalised to
+ * The four shapes `parseMessage` accepts (docs/specs/adapter.md §3.5): a
+ * webhook activity, a REST comment fetched for a known project and subject,
+ * or a REST issue or pull request fetched as a thread's root message. The two
+ * root variants stay flat rather than one `root` variant with a nested
+ * discriminator, so `raw.issue` is reachable after one `kind` check — the
+ * common case — instead of descending into `raw.subject.kind` first.
+ * `changes` is always normalised to
  * `BacklogChange`, but the value systems underneath are not unified —
  * webhook `status` changes carry ids and `assigner` changes carry display
  * names, while REST `changeLog` carries display names for both (measured
@@ -123,10 +185,17 @@ export type BacklogRawMessage =
       kind: 'comment';
       host: string;
       projectId: number;
-      comment: BacklogComment;
+      subject: BacklogSubjectRef;
+      comment: BacklogRawComment;
       changes: BacklogChange[];
     }
-  | { kind: 'issue'; host: string; issue: BacklogIssue; changes: [] };
+  | { kind: 'issue'; host: string; issue: BacklogRawIssue; changes: [] }
+  | {
+      kind: 'pullRequest';
+      host: string;
+      pullRequest: BacklogRawPullRequest;
+      changes: [];
+    };
 
 /**
  * Extras a caller intersects with a Chat SDK postable to reach Backlog-only

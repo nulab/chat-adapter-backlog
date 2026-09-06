@@ -3,6 +3,7 @@ import { ValidationError } from '@chat-adapter/shared';
 import type {
   BacklogChannelId,
   BacklogMessageId,
+  BacklogSubjectRef,
   BacklogThreadId,
   BacklogUserId,
 } from './types';
@@ -34,30 +35,91 @@ function assertPosint(segment: string, label: string): void {
   }
 }
 
+/**
+ * `issue:<issueId>` or `pr:<repositoryId>:<number>` (docs/specs/adapter.md
+ * §2.1). Shared by thread ids and message ids so the two grammars cannot
+ * drift apart.
+ */
+function encodeSubject(subject: BacklogSubjectRef): string {
+  return subject.kind === 'issue'
+    ? `issue:${subject.issueId}`
+    : `pr:${subject.repositoryId}:${subject.number}`;
+}
+
+/**
+ * Reads a subject starting at `segments[start]` and reports where it ended, so
+ * a caller can go on to require exactly the segments its own grammar allows
+ * after it. Returns `null` for an unknown keyword or a segment count the
+ * keyword does not take; the caller turns that into a `ValidationError` naming
+ * the whole id, which is more useful than naming the segment.
+ */
+function decodeSubject(
+  segments: readonly string[],
+  start: number
+): { subject: BacklogSubjectRef; next: number } | null {
+  const keyword = segments[start];
+  if (keyword === 'issue') {
+    const issueId = segments[start + 1];
+    if (issueId === undefined) {
+      return null;
+    }
+    assertPosint(issueId, 'issue id');
+    return {
+      subject: { kind: 'issue', issueId: Number(issueId) },
+      next: start + 2,
+    };
+  }
+  if (keyword === 'pr') {
+    const repositoryId = segments[start + 1];
+    const number = segments[start + 2];
+    if (repositoryId === undefined || number === undefined) {
+      return null;
+    }
+    assertPosint(repositoryId, 'repository id');
+    assertPosint(number, 'pull request number');
+    return {
+      subject: {
+        kind: 'pullRequest',
+        repositoryId: Number(repositoryId),
+        number: Number(number),
+      },
+      next: start + 3,
+    };
+  }
+  return null;
+}
+
 export function encodeThreadId(id: BacklogThreadId): string {
-  return `backlog:${id.host}:${id.projectId}:${id.issueId}`;
+  return `backlog:${id.host}:${id.projectId}:${encodeSubject(id.subject)}`;
 }
 
 export function decodeThreadId(id: string): BacklogThreadId {
   const segments = id.split(':');
-  if (segments.length !== 4 || segments[0] !== 'backlog') {
-    throw new ValidationError(
-      'backlog',
-      `"${id}" is not a valid Backlog thread id`
-    );
+  const [prefix, host, projectId] = segments;
+  if (
+    segments.length < 5 ||
+    prefix !== 'backlog' ||
+    host === undefined ||
+    projectId === undefined
+  ) {
+    throw invalidThreadId(id);
   }
-
-  const [, host, projectId, issueId] = segments as [
-    string,
-    string,
-    string,
-    string,
-  ];
   assertValidHost(host);
   assertPosint(projectId, 'project id');
-  assertPosint(issueId, 'issue id');
 
-  return { host, projectId: Number(projectId), issueId: Number(issueId) };
+  const decoded = decodeSubject(segments, 3);
+  if (decoded === null || decoded.next !== segments.length) {
+    throw invalidThreadId(id);
+  }
+
+  return { host, projectId: Number(projectId), subject: decoded.subject };
+}
+
+function invalidThreadId(id: string): ValidationError {
+  return new ValidationError(
+    'backlog',
+    `"${id}" is not a valid Backlog thread id`
+  );
 }
 
 export function encodeChannelId(id: BacklogChannelId): string {
@@ -81,10 +143,11 @@ export function decodeChannelId(id: string): BacklogChannelId {
 }
 
 /**
- * The channel id is the thread id's first three segments (docs/specs/adapter.md
- * §4.1 `channelIdFromThreadId`); decoding and re-encoding keeps this file the
- * single place that knows the grammar rather than duplicating the prefix rule
- * at each call site.
+ * The channel id is the thread id's first three segments for both kinds
+ * (docs/specs/adapter.md §4.1 `channelIdFromThreadId`, D-PR1: a pull request
+ * belongs to its project's channel, not to a channel of its own); decoding and
+ * re-encoding keeps this file the single place that knows the grammar rather
+ * than duplicating the prefix rule at each call site.
  */
 export function channelIdFromThreadId(threadId: string): string {
   const { host, projectId } = decodeThreadId(threadId);
@@ -92,55 +155,68 @@ export function channelIdFromThreadId(threadId: string): string {
 }
 
 export function encodeMessageId(id: BacklogMessageId): string {
-  switch (id.kind) {
-    case 'issue':
-      return `${id.host}:${id.issueId}:i`;
+  const prefix = `${id.host}:${encodeSubject(id.subject)}`;
+  switch (id.part) {
+    case 'root':
+      return `${prefix}:r`;
     case 'comment':
-      return `${id.host}:${id.issueId}:c${id.commentId}`;
+      return `${prefix}:c${id.commentId}`;
     case 'update':
-      return `${id.host}:${id.issueId}:u:${id.created}`;
+      return `${prefix}:u:${id.created}`;
   }
 }
 
 export function decodeMessageId(id: string): BacklogMessageId {
-  const firstColon = id.indexOf(':');
-  const secondColon = firstColon === -1 ? -1 : id.indexOf(':', firstColon + 1);
-  if (firstColon === -1 || secondColon === -1) {
-    throw new ValidationError(
-      'backlog',
-      `"${id}" is not a valid Backlog message id`
-    );
+  const segments = id.split(':');
+  const host = segments[0];
+  if (segments.length < 4 || host === undefined) {
+    throw invalidMessageId(id);
   }
-
-  const host = id.slice(0, firstColon);
-  const issueIdSegment = id.slice(firstColon + 1, secondColon);
-  const tag = id.slice(secondColon + 1);
-
   assertValidHost(host);
-  assertPosint(issueIdSegment, 'issue id');
-  const issueId = Number(issueIdSegment);
 
-  if (tag === 'i') {
-    return { kind: 'issue', host, issueId };
+  const decoded = decodeSubject(segments, 1);
+  if (decoded === null) {
+    throw invalidMessageId(id);
   }
 
-  if (tag.startsWith('c')) {
-    assertPosint(tag.slice(1), 'comment id');
-    return { kind: 'comment', host, issueId, commentId: Number(tag.slice(1)) };
+  const tag = segments[decoded.next];
+  if (tag === undefined) {
+    throw invalidMessageId(id);
   }
+  const base = { host, subject: decoded.subject };
 
-  if (tag.startsWith('u:')) {
-    const created = tag.slice(2);
+  // `created` is opaque and may itself contain ":" (it is an ISO timestamp),
+  // so the `u:` tail is rejoined rather than required to be a single segment.
+  if (tag === 'u') {
+    const created = segments.slice(decoded.next + 1).join(':');
     if (created.length === 0) {
       throw new ValidationError(
         'backlog',
         `"${id}" is missing the timestamp after "u:"`
       );
     }
-    return { kind: 'update', host, issueId, created };
+    return { ...base, part: 'update', created };
+  }
+
+  if (decoded.next !== segments.length - 1) {
+    throw invalidMessageId(id);
+  }
+  if (tag === 'r') {
+    return { ...base, part: 'root' };
+  }
+  if (tag.startsWith('c')) {
+    assertPosint(tag.slice(1), 'comment id');
+    return { ...base, part: 'comment', commentId: Number(tag.slice(1)) };
   }
 
   throw new ValidationError('backlog', `"${id}" has an unknown message tag`);
+}
+
+function invalidMessageId(id: string): ValidationError {
+  return new ValidationError(
+    'backlog',
+    `"${id}" is not a valid Backlog message id`
+  );
 }
 
 export function encodeUserId(id: BacklogUserId): string {
