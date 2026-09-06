@@ -13,6 +13,7 @@ import {
   pullRequestAssigneeChanged,
   pullRequestCommented,
   pullRequestCommentWithAttachment,
+  pullRequestDescriptionEdited,
   pullRequestStatusChanged,
   pullRequestUpdated,
   RESOLVED_MENTION,
@@ -449,9 +450,24 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
     expect(fields.isMention).toBe(false);
   });
 
-  it('opening a pull request that an activity replay strips the assignee from is not a mention', () => {
+  it('opening a pull request assigned to nobody is not a mention', () => {
     const fields = buildInboundMessageFields(
-      activityOfType(18, pullRequestAdded()),
+      activityOfType(18, pullRequestAdded({ assignee: null })),
+      pullRequestInput()
+    );
+
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('opening a pull request whose body carries no assignee key at all is not a mention', () => {
+    // The activity form of type 18 has no `assignee` key (measured
+    // 2026-09-07), so a replayed activity reaches the mapping without one;
+    // the key is deleted by hand because the builders model the webhook form.
+    const payload = pullRequestAdded();
+    delete (payload['content'] as Record<string, unknown>)['assignee'];
+
+    const fields = buildInboundMessageFields(
+      activityOfType(18, payload),
       pullRequestInput()
     );
 
@@ -563,19 +579,40 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
     expect(fields.isMention).toBe(false);
   });
 
-  it('a multi-field update naming no assignee mentions the bot when the bot is the assignee', () => {
+  it('editing a field of a pull request the bot is assigned to is not a mention', () => {
     const fields = buildInboundMessageFields(
       activityOfType(19, pullRequestUpdated({ assignee: FIXTURE.bot })),
       pullRequestInput()
     );
 
     expect(fields.changes.map((change) => change.field)).toEqual(['summary']);
-    expect(fields.isMention).toBe(true);
+    expect(fields.isMention).toBe(false);
   });
 
-  it('a multi-field update naming no assignee is not a mention when someone else is the assignee', () => {
+  it('a description edit carries its diff and mentions nobody', () => {
     const fields = buildInboundMessageFields(
-      activityOfType(19, pullRequestUpdated({ assignee: FIXTURE.alice })),
+      activityOfType(
+        19,
+        pullRequestDescriptionEdited({ assignee: FIXTURE.bot })
+      ),
+      pullRequestInput()
+    );
+
+    expect(fields.changes.map((change) => change.field)).toEqual([
+      'description',
+    ]);
+    expect(fields.isMention).toBe(false);
+  });
+
+  it('an assignment Backlog leaves out of a multi-field update is missed, which is accepted', () => {
+    // The one shape §5.4 rule 4 documents as under-reported: a `PATCH` that
+    // set the assignee alongside another field was once measured to report
+    // only the other field. Reading `content.assignee` to cover it would make
+    // every edit of a bot-assigned pull request a mention, which reproduces
+    // and this does not, so the miss stands and is pinned here rather than
+    // left to be rediscovered.
+    const fields = buildInboundMessageFields(
+      activityOfType(19, pullRequestUpdated({ assignee: FIXTURE.bot })),
       pullRequestInput()
     );
 
@@ -617,11 +654,11 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
     expect(fields.isMention).toBe(false);
   });
 
-  it('an issue update is decided by its changes entry alone, whatever assignee a body carries', () => {
-    // No measured issue webhook carries `content.assignee` on type 2 at all
-    // (2026-08-28), so the field is added by hand: the point of the test is
-    // that the pull-request rule above cannot start firing on issues if one
-    // ever does.
+  it('an update is decided by its changes entry alone, whatever assignee a body carries', () => {
+    // An issue webhook does carry the standing `content.assignee` on type 2
+    // (measured 2026-09-07), but the issue fixtures model the key set the
+    // adapter's issue tests were written against, so it is added by hand: an
+    // issue and a pull request must answer the same operation the same way.
     const payload = descriptionEdited();
     (payload['content'] as Record<string, unknown>)['assignee'] = {
       id: FIXTURE.bot.id,

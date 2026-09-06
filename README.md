@@ -403,15 +403,19 @@ request's text is matched against both forms, so **read `message.isMention`
 rather than re-matching the text yourself**; a handler looking for `@Chatbot`
 finds nothing in a summary that says `<@U999>`.
 
-Being the **standing assignee** of a pull request is not a mention. Assignment
-is: opening a pull request assigned to the bot, or changing the assignee to it,
-both count. But once the bot is the assignee, later comments and merges on that
-pull request are ordinary messages — otherwise every review comment would
-address the bot. The one exception is a single `PATCH` that changes the assignee
-together with another field, which Backlog was measured to report without the
-assignee change; an edit to a bot-assigned pull request's summary, description
-or linked issue is therefore treated as a mention, because it is
-indistinguishable from that case.
+Being the **standing assignee** is not a mention. Assignment is: opening a pull
+request assigned to the bot, or changing an issue's or a pull request's assignee
+to it, all count. But once the bot is the assignee, later comments, edits and
+merges on that subject are ordinary messages — otherwise every review comment
+would address the bot. The payload does carry the current assignee on every
+event, and this adapter deliberately does not read it as an assignment; only
+the change record is one.
+
+The known gap: a single `PATCH` that changes the assignee together with another
+field was once measured to report the other fields and not the assignee. Such a
+call reaches you as an ordinary message rather than a mention. It has not
+reproduced, and the alternative — treating every edit of a bot-assigned subject
+as a mention — misfires far more often.
 
 To mention someone outbound, use the helpers — writing `<@U…>` notifies the
 user even without `notifiedUserId`:

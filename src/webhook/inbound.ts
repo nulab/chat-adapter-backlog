@@ -64,9 +64,10 @@ export interface InboundMessageFields {
 /**
  * The `content` fields the mapping reads off an activity of either kind, as
  * the widest shape that carries them. Written structurally rather than as a
- * union of the schemas' types so a field one schema does not declare — an
- * issue `assignee` on types 2 and 3, which no webhook body carries (measured
- * 2026-08-28) — costs a `undefined` here instead of a second builder.
+ * union of the schemas' types so a field one schema does not declare — the
+ * standing `assignee` a webhook puts on issue types 2 and 3, which the issue
+ * schemas do not name because nothing reads it (measured 2026-09-07) — costs
+ * a `undefined` here instead of a second builder.
  */
 interface OptionalContent {
   assignee?: { id: number } | null | undefined;
@@ -137,69 +138,24 @@ export function normaliseChanges(
  */
 const ASSIGNMENT_CHANGE_FIELDS: readonly string[] = ['assigner', 'assignee'];
 
-/**
- * The `changes[]` fields a `PATCH …/pullRequests/:number` can produce.
- * `status` is deliberately absent: `statusId` is not a parameter the endpoint
- * accepts (400 `error.unknownParameter`, measured 2026-09-06,
- * `.claude/rules/backlog-pull-request-facts.md` "Writes the API cannot
- * make"), so a type 19 whose changes are a status change is a merge or a
- * close and cannot be the multi-field `PATCH` `assigneeIdOfUpdate` looks for.
- */
-const PATCHABLE_PULL_REQUEST_FIELDS: readonly string[] = [
-  'summary',
-  'description',
-  'issue',
-];
-
-/**
- * The standing assignee, read only where it can be evidence of an
- * *assignment*.
- *
- * `content.assignee` means two different things across the pull-request
- * types: on 18 it is who the pull request was opened for, so it is the
- * assignment itself (§5.4 rule 2's shape, measured on a webhook body
- * 2026-09-06); on 19 and 20 it is whoever the pull request is assigned to
- * right now, which every delivery repeats whether or not anything about the
- * assignment changed. Reading it on all of them would make every comment on a
- * bot-assigned pull request a mention — something the issue side cannot do at
- * all, because webhook types 2 and 3 carry no `assignee` key (measured
- * 2026-08-28), so the two kinds would disagree about the same operation.
- *
- * It is therefore read for exactly the shape `changes[]` was measured to
- * under-report: a `PATCH` setting `assigneeId` alongside another field emitted
- * a 19 with no `assignee` entry while still notifying the new assignee
- * (measured once 2026-09-06; a second attempt reproduced the notification
- * with the entry present). A 19 that changed a `PATCH`-able field and names no
- * assignment is that shape; a type-20 comment and a status-only 19 are not.
- */
-function assigneeIdOfUpdate(
-  activity: CommentOrUpdateActivity,
-  changes: readonly BacklogChange[]
-): number | undefined {
-  if (activity.type !== 19) {
-    return undefined;
-  }
-  const names = (fields: readonly string[]): boolean =>
-    changes.some((change) => fields.includes(change.field));
-  if (
-    names(ASSIGNMENT_CHANGE_FIELDS) ||
-    !names(PATCHABLE_PULL_REQUEST_FIELDS)
-  ) {
-    return undefined;
-  }
-  return assigneeIdOf(activity.content);
-}
-
 /** What §5.4 decides `isMention` from. */
 export interface MentionEvidence {
   botUserName: string;
   botUserId: number;
   text: string;
   /**
-   * An assignee id only where it is evidence that an **assignment happened** —
-   * `content.assignee` on a root activity, and on nothing else but the
-   * under-reporting update `assigneeIdOfUpdate` describes. `undefined` means
-   * "this activity says nothing about an assignment", never "unassigned".
+   * An assignee id only where it is evidence that an **assignment happened**:
+   * `content.assignee` on a root activity, and nowhere else. `undefined`
+   * means "this activity says nothing about an assignment", never
+   * "unassigned".
+   *
+   * Types 2, 3, 19 and 20 all carry the same key as the **standing**
+   * assignee, repeated on every delivery whether or not the assignment
+   * changed (measured 2026-09-07 on both kinds), so it is not read there: a
+   * multi-field `PATCH` on a bot-assigned pull request carries the bot in
+   * `content.assignee` and notified nobody. An assignment on those types
+   * reports itself in `changes[]` instead, which the rule below reads, so the
+   * two kinds answer the same operation the same way.
    */
   assigneeId: number | undefined;
   changes: BacklogChange[];
@@ -372,7 +328,7 @@ function buildCommentOrUpdateFields(
       botUserName,
       botUserId,
       text,
-      assigneeId: assigneeIdOfUpdate(activity, changes),
+      assigneeId: undefined,
       changes,
       notifications: activity.notifications,
       rawMentionNotationSurvives: false,
