@@ -154,8 +154,21 @@ answer who was notified even when the original delivery could.
     notified on that comment do not reappear, so the array is a delta, not
     the comment's notification list. (This supersedes a 2026-09-03 note that
     recorded `[]` here.)
+    `GET /issues/:id/comments/:commentId/notifications` is cumulative and
+    returns every recipient, so REST and the deliveries answer different
+    questions.
   - `createdUser` is the user who added the notification, which is the comment
     author — not the person being notified.
+  - Measured as a **pair**: a comment posted naming recipient A, then
+    recipient B added to it three seconds later. Two activities arrive with
+    different activity `id`s, three seconds apart, and everything else
+    identical — same `content.comment.id`, same `content.comment.content`,
+    the same 24 `content` keys with the same values. The type 3's
+    `notifications[]` holds A alone and the type 17's holds B alone.
+  - Only `type`, the activity `id` and `notifications[]` tell the two apart.
+    A handler that dedupes on `content.comment.id` alone therefore drops the
+    type 17 as a repeat of the type 3 and loses the later recipient entirely
+    (docs/specs/adapter.md D10 accepts that cost deliberately).
 - Bulk operations from the issue list ("multi update") → one type 14
   `{ tx_id, comment{content}, link[{id,key_id,title,comment{id,content}}],
   changes[{field,new_value,type}] }`, not one type 2 per issue (measured
@@ -163,6 +176,51 @@ answer who was notified even when the original delivery could.
   change made this way never arrives as type 2.
 - Issue deleted → type 4 with `content: { id, key_id }`. Types 5–13, 15–16 and
   18–49 are wiki, file, git, pull-request, member and document events.
+
+## Type 2 `changes[]` field names and value notation
+
+One `PATCH /issues/:id` per field, on a development space, 2026-09-06. The
+`field` name is an internal name matching neither the API parameter nor the
+label a user sees, and only three fields carry an id:
+
+| API parameter | `field` | `new_value` | `type` |
+| --- | --- | --- | --- |
+| `priorityId` | `priority` | id string (`"2"`) | `standard` |
+| `statusId` | `status` | id string (`"2"`) | `standard` |
+| `resolutionId` | `resolution` | id string (`"0"`) | `standard` |
+| `categoryId[]` | **`component`** | display name | `standard` |
+| `milestoneId[]` | `milestone` | display name; several joined with `", "`, in an order that is not the display order | `standard` |
+| `versionId[]` | `version` | display name | `standard` |
+| `dueDate` | **`limitDate`** | a bare date, `"2026-12-31"` — no time part, no `Z` | `standard` |
+| `issueTypeId` | `issueType` | display name | `standard` |
+| `summary` | `summary` | the whole new summary | `standard` |
+| `assigneeId` | **`assigner`** | display name | `standard` |
+| `customField_<id>` | **the attribute's own name** | the value | **`custom`** |
+
+- `old_value` is present on every one of them, and is `""` when the field had
+  no previous value.
+- Only priority, status and resolution arrive as ids. Everything else is a
+  display name, a full text or a date, so `new_value` is not resolvable
+  against the API without knowing which field it belongs to.
+- Three `field` names are neither the API parameter nor the display label:
+  `component`, `limitDate`, `assigner`. Never derive a `field` name from an
+  API parameter name.
+- A custom attribute is the only entry with `type: "custom"`, and its `field`
+  is the attribute's name — so `field` is not drawn from a closed vocabulary
+  and `type` is what separates the two kinds. On a custom attribute the
+  activity-API form's extra `field_text` is not a localized label but the
+  **unresolved** i18n key — `lbl.changelog.` followed by the attribute name
+  (observed; the cause is Backlog's and is not established here).
+- `startDate`, `estimatedHours` and `actualHours` are **unmeasured**: on the
+  project used, a `PATCH` carrying only one of them was refused with
+  `code 7 "No comment content."`, and one sent together with a comment
+  produced a type 3 with `changes: []` and left the field `null`. The
+  notation they would use is therefore unknown; do not assume it from the
+  rows above.
+- Type 14 (multi update) carries `changes[]` under the same field names and
+  the same notation, with no `old_value` — see the type 14 entry above.
+- The REST comment `changeLog` returns priority and status as **display
+  names** where the webhook returns ids; see "Payload envelope".
 
 ## Mentions
 

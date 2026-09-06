@@ -169,7 +169,7 @@ the text carries no `@` at all; `notifications[]` is the only record that the co
 
 ## Type 2 — Issue Updated — status only
 
-`…:c<commentId>` with empty text; the change is in `changes[]`
+`…:c<commentId>` with empty text; the change is in `changes[]`. `status` is one of the three issue fields — with `priority` and `resolution` — whose `new_value` is an id string; every other field arrives as a display name, a full text or a bare date (`.claude/rules/backlog-webhook-facts.md`)
 
 ```json
 {

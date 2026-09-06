@@ -22,7 +22,7 @@ const rows: [string, string, string, unknown][] = [
   ['1', 'Issue Created', '`<host>:issue:<issueId>:r` — text is `summary` + blank line + `description`', issueCreated({ assignee: FIXTURE.bot })],
   ['3', 'Issue Commented', '`<host>:issue:<issueId>:c<commentId>` — a plain comment carries no changes', issueCommented()],
   ['3', 'Issue Commented — recipients chosen in the notification field', 'the text carries no `@` at all; `notifications[]` is the only record that the comment was addressed to the bot, and only a webhook carries it (`reason: 2`, Issue Commented)', issueCommented({ text: 'Please take a look when you get a chance.', notifications: [{ user: FIXTURE.bot, reason: 2 }] })],
-  ['2', 'Issue Updated — status only', '`…:c<commentId>` with empty text; the change is in `changes[]`', statusChanged()],
+  ['2', 'Issue Updated — status only', '`…:c<commentId>` with empty text; the change is in `changes[]`. `status` is one of the three issue fields — with `priority` and `resolution` — whose `new_value` is an id string; every other field arrives as a display name, a full text or a bare date (`.claude/rules/backlog-webhook-facts.md`)', statusChanged()],
   ['2', 'Issue Updated — assignee', '`changes[].field` is `assigner` and `new_value` is a display name', assigneeChanged()],
   ['2', 'Issue Updated — description', '`changes[]` carries both complete bodies', descriptionEdited()],
   ['2', 'Issue Updated — attachment added', 'a changelog comment; the change is visible only in the comment’s REST `changeLog`', attachmentAdded()],
