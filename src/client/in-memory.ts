@@ -194,6 +194,23 @@ export function createInMemoryBacklogApi(
     return project;
   }
 
+  /**
+   * Both rate-limit members answer with the same documented example figures.
+   * The fake models no consumption, so the distinction the real port draws —
+   * headers this instance observed versus what the server reports now — has
+   * nothing to be drawn from here, and inventing a divergence would let a test
+   * assert a difference no implementation guarantees.
+   */
+  function syntheticRateLimit(): RateLimitSnapshots {
+    const reset = new Date(now().getTime() + 60_000);
+    return {
+      read: { limit: 600, remaining: 599, reset },
+      update: { limit: 150, remaining: 149, reset },
+      search: { limit: 150, remaining: 149, reset },
+      icon: { limit: 60, remaining: 59, reset },
+    };
+  }
+
   function findIssue(issueId: number): BacklogIssue {
     const issue = issues.find((i) => i.id === issueId);
     if (issue === undefined) {
@@ -614,14 +631,12 @@ export function createInMemoryBacklogApi(
       };
     },
 
+    async getRateLimit(): Promise<RateLimitSnapshots> {
+      return syntheticRateLimit();
+    },
+
     rateLimit(): RateLimitSnapshots {
-      const reset = new Date(now().getTime() + 60_000);
-      return {
-        read: { limit: 600, remaining: 599, reset },
-        update: { limit: 150, remaining: 149, reset },
-        search: { limit: 150, remaining: 149, reset },
-        icon: { limit: 60, remaining: 59, reset },
-      };
+      return syntheticRateLimit();
     },
 
     state: {

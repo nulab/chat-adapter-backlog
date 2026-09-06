@@ -7,6 +7,14 @@ import type {
   RetryOptions,
 } from './port.js';
 
+/** The four buckets, in the order the rate-limit page lists them. */
+export const RATE_LIMIT_BUCKETS = [
+  'read',
+  'update',
+  'search',
+  'icon',
+] as const satisfies readonly RateLimitBucket[];
+
 const DEFAULT_MAX_RETRIES = 1;
 const DEFAULT_MAX_WAIT_MS = 60_000;
 

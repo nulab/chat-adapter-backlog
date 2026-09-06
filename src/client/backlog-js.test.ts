@@ -177,6 +177,43 @@ describe('createBacklogJsApi', () => {
     expect(snapshot.read).toBeUndefined();
   });
 
+  it("the rate-limit endpoint's reset is the epoch second it names, not that many milliseconds", async () => {
+    const server = createFakeBacklogServer({
+      rateLimitOverrides: {
+        read: { limit: 600, remaining: 42, reset: 1_603_881_873 },
+      },
+    });
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: server.fetch,
+    });
+
+    const snapshot = await api.getRateLimit();
+
+    expect(snapshot.read).toEqual({
+      limit: 600,
+      remaining: 42,
+      reset: new Date('2020-10-28T10:44:33.000Z'),
+    });
+  });
+
+  it('reading the rate-limit endpoint leaves the observed-header snapshot reporting only the bucket it spent', async () => {
+    const server = createFakeBacklogServer();
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: server.fetch,
+    });
+
+    const reported = await api.getRateLimit();
+    const observed = api.rateLimit();
+
+    expect(reported.update).toBeDefined();
+    expect(observed.read).toBeDefined();
+    expect(observed.update).toBeUndefined();
+  });
+
   it('error code 6 maps to ResourceNotFoundError even on a 400 status', async () => {
     const fetchStub: typeof globalThis.fetch = async () =>
       new Response(

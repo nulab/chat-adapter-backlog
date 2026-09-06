@@ -89,19 +89,45 @@ const {
   baseNotifications,
 } = conformanceFixture;
 
-function defaultRateLimitHeaders(
+function rateLimitFigures(
   bucket: 'read' | 'update' | 'search' | 'icon',
   overrides: FakeBacklogServerOptions['rateLimitOverrides']
-): Record<string, string> {
+): { limit: number; remaining: number; reset: number } {
   const defaults = { read: 600, update: 150, search: 150, icon: 60 } as const;
   const override = overrides?.[bucket];
   const limit = override?.limit ?? defaults[bucket];
   const remaining = override?.remaining ?? limit - 1;
   const reset = override?.reset ?? Math.floor(Date.now() / 1000) + 60;
+  return { limit, remaining, reset };
+}
+
+function defaultRateLimitHeaders(
+  bucket: 'read' | 'update' | 'search' | 'icon',
+  overrides: FakeBacklogServerOptions['rateLimitOverrides']
+): Record<string, string> {
+  const { limit, remaining, reset } = rateLimitFigures(bucket, overrides);
   return {
     'X-RateLimit-Limit': String(limit),
     'X-RateLimit-Remaining': String(remaining),
     'X-RateLimit-Reset': String(reset),
+  };
+}
+
+/**
+ * `GET /rateLimit`'s body. It reports every bucket from the same figures the
+ * headers carry, so a test can tell a body-sourced answer from a
+ * header-sourced one by which buckets are present rather than by their values.
+ */
+function rateLimitBody(
+  overrides: FakeBacklogServerOptions['rateLimitOverrides']
+): { rateLimit: Record<string, unknown> } {
+  return {
+    rateLimit: {
+      read: rateLimitFigures('read', overrides),
+      update: rateLimitFigures('update', overrides),
+      search: rateLimitFigures('search', overrides),
+      icon: rateLimitFigures('icon', overrides),
+    },
   };
 }
 
@@ -765,6 +791,14 @@ export function createFakeBacklogServer(
           }
         }
       }
+    }
+
+    if (
+      segments[0] === 'rateLimit' &&
+      segments.length === 1 &&
+      method === 'GET'
+    ) {
+      return respond(200, rateLimitBody(options.rateLimitOverrides));
     }
 
     if (segments[0] === 'priorities' && method === 'GET') {

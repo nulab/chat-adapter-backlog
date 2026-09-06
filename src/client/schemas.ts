@@ -221,6 +221,35 @@ export const uploadedFileSchema = z.object({
 
 export const userResponseSchema = userSchema;
 
+/**
+ * `reset` stays a `number` rather than the `z.coerce.date()` every other date
+ * field here uses: it is UTC epoch **seconds**, like the `X-RateLimit-Reset`
+ * header (`.claude/rules/backlog-api-facts.md`), and `new Date(1603881873)`
+ * reads that as milliseconds and lands in January 1970. The caller multiplies.
+ */
+const rateLimitBucketSchema = z.object({
+  limit: z.number(),
+  remaining: z.number(),
+  reset: z.number(),
+});
+
+/**
+ * Every bucket is optional although the documented example carries all four:
+ * the figures differ by plan
+ * (https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/), nothing
+ * promises a plan reports a bucket it does not apply, and requiring one would
+ * turn the whole call into an `AdapterError("SCHEMA")` rather than leaving
+ * that one bucket undefined.
+ */
+export const rateLimitResponseSchema = z.object({
+  rateLimit: z.object({
+    read: rateLimitBucketSchema.optional(),
+    update: rateLimitBucketSchema.optional(),
+    search: rateLimitBucketSchema.optional(),
+    icon: rateLimitBucketSchema.optional(),
+  }),
+});
+
 export const issueListSchema = z.array(issueSchema);
 export const commentListSchema = z.array(commentSchema);
 export const issueCommentListSchema = z.array(issueCommentSchema);

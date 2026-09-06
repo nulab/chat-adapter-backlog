@@ -19,7 +19,14 @@ export interface RateLimitSnapshot {
   reset: Date;
 }
 
-/** `rateLimit()` result: only the buckets a response has been observed for are present. */
+/**
+ * A per-bucket view of the rate limit, from either source below. It is partial
+ * on both: `rateLimit()` knows only the buckets a response has been observed
+ * for, and `getRateLimit()` reports only the buckets the endpoint names. The
+ * one type is deliberate — the two sources are interchangeable at a call site,
+ * so a caller can move from the cheap one to the accurate one without
+ * rewriting how it reads the figures.
+ */
 export type RateLimitSnapshots = Partial<
   Record<RateLimitBucket, RateLimitSnapshot>
 >;
@@ -395,6 +402,22 @@ export interface BacklogApi {
     issueId: number,
     attachmentId: number
   ): Promise<BacklogDownloadedFile>;
+  /**
+   * The limits Backlog reports for the credentialed user **now**
+   * (`GET /rateLimit`), covering every bucket whether or not this instance has
+   * spent it. Costs one request; the classifier puts that request in the
+   * `read` bucket, and whether Backlog counts it against a bucket at all is
+   * undocumented (`.claude/rules/backlog-api-facts.md`).
+   */
+  getRateLimit(): Promise<RateLimitSnapshots>;
+  /**
+   * The last `X-RateLimit-*` headers **this instance** happened to see, per
+   * bucket — free, but only ever as complete and as fresh as this instance's
+   * own traffic. A bucket no request has touched is absent, and a `reset` in
+   * the past means the window has since rolled over and `remaining` no longer
+   * describes the budget. Where an instance is short-lived — one per
+   * serverless invocation, say — prefer `getRateLimit()`.
+   */
   rateLimit(): RateLimitSnapshots;
 }
 
