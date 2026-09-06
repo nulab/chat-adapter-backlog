@@ -453,7 +453,7 @@ message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
 | Field | Type 1 | Type 2/3 | Type 4 | Type 18 | Type 19/20 |
 | --- | --- | --- | --- | --- | --- |
 | `content.summary`, `content.description` | read (`description` nullable) | ignored | — | read | ignored |
-| `content.assignee` | `{ id, name, … } \| null`; always sent on a webhook, `null` when unassigned (measured 2026-09-06), optional in the schema because the activity form omits it | sent, same shape; ignored (assignee changes arrive in `changes`) | — | not carried by the activity form (measured 2026-09-06); read if a webhook ever carries it | ignored |
+| `content.assignee` | `{ id, name, … } \| null`; always sent on a webhook, `null` when unassigned (measured 2026-09-06), optional in the schema because the activity form omits it | sent, same shape; ignored — the **current** assignee, repeated on every delivery, so an assignment is read from `changes` instead | — | `{ id, name, … } \| null`, webhook-only (measured 2026-09-06); the assignment at creation, read as a mention | sent, same shape; ignored — the **current** assignee, as on 2/3 |
 | `content.comment` | absent | `{ id: number, content: string \| null } \| null` | — | `null` | `{ id, content } \| null` |
 | `content.changes[]` | absent | `{ field: string, new_value?: string \| number \| null, old_value?: … }[]` optional | — | `[]` | same shape as 2/3 |
 | `content.attachments[]` | `{ id, name, size }[]` optional | same | — | optional (not measured on the activity form) | optional |
@@ -481,11 +481,23 @@ of length 1 as "really a type 2":
 | `content.individual_update` | boolean, webhook-only, `false` on all six measured deliveries; the bulk update screen has no per-issue value entry, so no known operation produces `true`; read as data, never branched on |
 | `notifications[]` (on the envelope, not `content`) | `[]` when the batch changed no assignee; one reason-1 entry **per issue** when it did, the same user repeated. An entry has `id`, `alreadyRead`, `reason`, `resourceAlreadyRead` and `user` and names **no issue** |
 
-The webhook form of types 18–20 also carries `content.base`, `content.branch`
-and `content.diff` (measured 2026-09-06; `diff` is named by no Backlog
-document). No schema names them and nothing reads them, which costs a consumer
-nothing: `raw.payload` is the parsed body, so an unnamed key is unread, not
-lost.
+The webhook form of types 18–20 is the activity form plus four keys —
+`assignee`, `base`, `branch` and `diff` — measured on both forms and diffed
+against each other by activity id (2026-09-07,
+`.claude/rules/backlog-pull-request-facts.md`). `base` and `branch` are the
+branch names; `diff` is a diff(1)-style body carried only by the type 19 that
+changed the description, and is named by no Backlog document. Two of the four
+are not pull-request-specific: issue types 2 and 3 carry `assignee` and `diff`
+with the same meanings. The schemas name all of them as the record of the
+measurement, and nothing reads `base`, `branch` or `diff`, which costs a
+consumer nothing either way: `raw.payload` is the parsed body, so an unread
+key is not a lost one.
+
+A pull-request webhook's top-level `notifications[]` **is populated** —
+reason 10 for an assignment, 11 for a comment mention — where an issue
+webhook's is always `[]` and the activity API returns `[]` for the same
+activities (measured 2026-09-07). Nothing reads it here; mention detection
+from `notifications[]` is D9 rule 6's, and covers both kinds when it lands.
 
 ### 5.3 Activity-type mapping
 
@@ -502,7 +514,7 @@ lost.
 | 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present | `changes[field="assignee"].new_value === botUserName` **or** text |
 | 19 | Pull Request Updated, no comment id | `…:u:<created>` | `""` | none | as above |
 | 20 | Comment Added on Pull Request | `…:c<commentId>` | `comment.content ?? ""` | `content.attachments[]` if present; a `changes[field="attachment"]` entry names the file but carries no id (§6.6) | text |
-| 21 | Pull Request Deleted (docs) / Merged (`backlog-js`) | — | — | — | 200 Ignored (D-PR5): not observed — merge and close arrive as 19 status changes and no delete operation exists in the UI or the API (measured 2026-09-06) |
+| 21 | Pull Request Deleted (docs) / Merged (`backlog-js`) | — | — | — | 200 Ignored (D-PR5): not observed on two attempts, the second with 21 in the webhook subscription — merge and close arrive as 19 status changes and no delete operation exists in the UI or the API (measured 2026-09-06, re-checked 2026-09-07) |
 | 12, 13 | Git Pushed, Git Repository Created | — | — | — | 200 Ignored: no thread meaning |
 | other | wiki, document, … | — | — | — | 200 Ignored |
 
@@ -609,9 +621,18 @@ Behavioural consequences of measured facts (details and dates in
   announces**, so `fetchMessages` returns an entry the webhook path never
   delivered. Editing a pull-request comment fires no activity, as for issues.
 - **The webhook form of 18–20 adds four keys** the activity form has none of:
-  `assignee`, `base`, `branch` and `diff` (measured 2026-09-06; §5.2). Only
-  `assignee` changes behaviour, and it means two different things — the
-  assignment on 18, the standing assignee on 19 and 20 (§5.4 rule 4).
+  `assignee`, `base`, `branch` and `diff` (measured on both forms and diffed
+  by activity id, 2026-09-07; §5.2). Only `assignee` changes behaviour, and
+  only on 18, where it is the assignment; on 19 and 20 it is the standing
+  assignee and is not read, exactly as on issue types 2 and 3, which carry the
+  same key (§5.4 rule 4).
+- **A pull-request operation can produce an issue-thread message.** Linking an
+  issue to a pull request emits a **type 3 on that issue** whose comment is a
+  localized system sentence naming the pull request and whose `changes[]` is
+  empty (measured 2026-09-07), alongside the type 19 on the pull request. It
+  is delivered as an ordinary issue comment; nothing in the payload marks it
+  as machine-generated, so a consumer that acts on every comment acts on this
+  one.
 
 ### 5.4 Mention detection (D9)
 
@@ -637,25 +658,27 @@ no notification:
 4. Type 19: as rule 3 with `field === "assignee"` (the pull-request field
    name, measured 2026-09-06). Type 18: `content.assignee?.id === botUserId`,
    as rule 2 — the webhook body carries the assignee the activity form omits
-   (measured 2026-09-06), so opening a pull request assigned to the bot and
+   (measured 2026-09-07), so opening a pull request assigned to the bot and
    mentioning nobody in its text is a mention.
 
-   On 19 and 20 the same `content.assignee` is **not** an assignment. It is
-   whoever the pull request is assigned to right now, repeated on every
-   delivery, so reading it there would make every comment on a bot-assigned
-   pull request a mention — which the issue side cannot do at all, no measured
-   type-2 or type-3 body carrying an `assignee` key (2026-08-28), so the two
-   kinds would disagree about the same operation. It is therefore read on 19
-   only as a **fallback for the one shape `changes[]` was measured to
-   under-report**: a `PATCH` that set `assigneeId` alongside another field
-   emitted a 19 with no `assignee` entry while still notifying the new
-   assignee. That shape is a type 19 whose `changes[]` names a `PATCH`-able
-   field (`summary`, `description`, `issue`) and no assignment field; a
-   status-only 19 is excluded because `statusId` is not a `PATCH` parameter
-   (400 `error.unknownParameter`, measured 2026-09-06), and a type-20 comment
-   is excluded outright. The accepted cost is a false mention when someone
-   edits the summary or description of a pull request the bot is already
-   assigned to.
+   On 2, 3, 19 and 20 the same `content.assignee` is **not** an assignment and
+   is not read. It is whoever the subject is assigned to right now, repeated
+   on every delivery of both kinds (measured 2026-09-07), so reading it would
+   make every comment on a bot-assigned subject a mention. The evidence that
+   an assignment happened is the `changes[]` entry rules 3 and 4 read, and
+   nothing else in the body: a `summary` + `description` + `issue` `PATCH` on
+   a pull request assigned to the bot carried the bot in `content.assignee`,
+   named no assignment in `changes[]`, and notified nobody (measured
+   2026-09-07).
+
+   One shape is therefore under-reported and accepted as such: a `PATCH` that
+   set `assigneeId` alongside another field was once measured to emit a 19
+   with no `assignee` entry while still notifying the new assignee (2026-09-06,
+   never reproduced — two later multi-field `PATCH`es reported every field they
+   changed). A fallback that read `content.assignee` on such a 19 would turn
+   that unreproduced miss into a false mention on every plain multi-field edit,
+   which is the reproducible case; the miss stays. `notifications[]` reason 10
+   is the evidence that settles it, and rule 6 is where it belongs.
 5. A pull request's **summary carries mention notation unrewritten** — in
    storage, in the activity body and in the webhook body alike, while
    `description` and comments are rewritten to `@<display name>` everywhere
@@ -1563,9 +1586,10 @@ for one scratch space is worse than requiring the two to share it.
   cannot disagree (`sample-messages.test.ts` fails otherwise). Vocabulary: host
   `example.backlog.com`, bot `Chatbot` (999), users `Alice` (100) and `Bob`
   (101), project 500, issue 8001, repository 700 (`example-repo`), pull request
-  12. The pull-request payloads are the **activity API** form and the file says
-  so: the webhook form of types 18–20 is unmeasured
-  (`.claude/rules/backlog-pull-request-facts.md` "Unmeasured").
+  12. The pull-request payloads are the **webhook** form, which the fixtures
+  model since it was measured (2026-09-07): the activity API form plus
+  `assignee`, `base`, `branch` and `diff`
+  (`.claude/rules/backlog-pull-request-facts.md`).
 - **DEVELOPMENT.md**: credentials table gains `BACKLOG_BOT_USER_ID`,
   `BACKLOG_BOT_USER_NAME`, `BACKLOG_WEBHOOK_SECRET`, `BACKLOG_ACCESS_TOKEN`,
   `BACKLOG_LIVE_ISSUE_ID`; `.env.example` likewise; live-suite section names
@@ -1693,21 +1717,32 @@ for one scratch space is worse than requiring the two to share it.
 16. ~~**Webhook form of types 18–20**: the activity API form is measured; if a
     webhook body turns out to add `content.assignee` (as type 1 does), rule 4
     of §5.4 gains an assignment-at-creation mention.~~ **Settled**: it does.
-    The measurement waived before P3 (2026-09-06 — it needs a receiver
-    Backlog's servers can reach) was taken afterwards on a deployed receiver
-    (2026-09-06): the webhook `content` is the activity key set plus
-    `assignee`, `base`, `branch` and `diff`. Rule 4 gained the
-    assignment-at-creation mention on 18 as predicted, and gained something
-    the question did not anticipate — the same key is on 19 and 20 as the
-    **standing** assignee, where reading it would make every comment on a
-    bot-assigned pull request a mention, so it is read there only as the
-    fallback for the under-reporting multi-field `PATCH` (§5.4 rule 4).
-    `base`, `branch` and `diff` change nothing and stay unnamed by any schema
-    (§5.2). What remains unmeasured is narrower and recorded as such in
-    `.claude/rules/backlog-pull-request-facts.md`: the webhook deliveries for
-    a merge, a close, a comment with `attachmentId[]` and a linked-issue
-    change, whose `changes[]` shapes are activity-form measurements
-    (docs/plans/pull-request-support.md §4 P3, §5 M1).
+    The measurement waived before P3 (it needs a receiver Backlog's servers
+    can reach) was taken afterwards on a deployed receiver, with every
+    delivery matched to the same activity by activity id and diffed in both
+    directions (measured on a development space, 2026-09-06). The webhook
+    `content` is the activity key set plus `assignee`, `base`, `branch` and
+    `diff`, on all three types, and the keys the two forms share hold equal
+    values.
+
+    Rule 4 gained the assignment-at-creation mention on 18 as predicted. What
+    the question did not anticipate is that the same key is on 19 and 20 as
+    the **standing** assignee, and on issue types 2 and 3 as well — repeated
+    on every delivery whether or not the assignment changed. It is therefore
+    read on 18 alone: a multi-field `PATCH` that changed no assignee carried
+    the bot in `content.assignee` and notified nobody, so reading it on 19
+    would make every edit of a bot-assigned pull request a mention. An
+    assignment on any other type reports itself in `changes[]`, and one
+    `changes[]` leaves out is covered by rule 6, which reads whom Backlog
+    notified.
+
+    `base`, `branch` and `diff` change no behaviour; the schemas name them as
+    the record of the measurement (§5.2). What remains unmeasured is narrower
+    and recorded as such in `.claude/rules/backlog-pull-request-facts.md`:
+    the webhook deliveries for a merge, a close and a comment with
+    `attachmentId[]`, whose `changes[]` shapes are still activity-form
+    measurements. A merge and a close have no API, so capturing them needs a
+    git push or the UI (docs/plans/pull-request-support.md §4 P3, §5 M1).
 17. ~~**D9 rule 6 accepts any `reason`** — confirm, or name the reason codes
     to exclude.~~ **Settled**: any `reason` stands, and the candidate false
     positive has been measured away. A second account watching an issue it

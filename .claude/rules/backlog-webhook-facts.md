@@ -245,6 +245,10 @@ answer who was notified even when the original delivery could.
   `content.comment.content` and into every `link[].comment.content`.
 - Issue deleted → type 4 with `content: { id, key_id }`. Types 5–13, 15–16 and
   18–49 are wiki, file, git, pull-request, member and document events.
+- Linking an issue to a pull request → **type 3 on the issue**, with a system
+  `comment.content` naming the pull request and `changes: []` (measured
+  2026-09-07). A pull-request operation can therefore produce an issue-thread
+  message; see `backlog-pull-request-facts.md`.
 
 ## Type 2 `changes[]` field names and value notation
 
