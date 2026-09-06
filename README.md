@@ -387,10 +387,31 @@ the **webhook** only; the same activity fetched from the activities API reports
 none. The reason code is not filtered: anything Backlog notified the bot about
 counts as a mention.
 
-One asymmetry is worth knowing: a pull request's **summary keeps mention
-notation raw**. `<@U999>` is stored literally there, while a description or a
-comment is rewritten to `@<display name>` on save — so a new pull request's text
-is matched against both forms.
+Through `chat`, the effective check is looser than that: the core runs its own
+`@<userName>` regex **case-insensitively** and ORs the result in, so `@chatbot`
+reaches your handler with `isMention` true even though this adapter answered
+false. The core can only add mentions, never remove one, and it compares
+`userName` — the first installation's name — so on every other space the
+case-sensitive rule above is the whole story.
+
+Two asymmetries are worth knowing.
+
+A pull request's **summary keeps mention notation raw**: `<@U999>` stays
+literal there — in storage, in the API and in the webhook body — while a
+description or a comment is rewritten to `@<display name>` on save. A new pull
+request's text is matched against both forms, so **read `message.isMention`
+rather than re-matching the text yourself**; a handler looking for `@Chatbot`
+finds nothing in a summary that says `<@U999>`.
+
+Being the **standing assignee** of a pull request is not a mention. Assignment
+is: opening a pull request assigned to the bot, or changing the assignee to it,
+both count. But once the bot is the assignee, later comments and merges on that
+pull request are ordinary messages — otherwise every review comment would
+address the bot. The one exception is a single `PATCH` that changes the assignee
+together with another field, which Backlog was measured to report without the
+assignee change; an edit to a bot-assigned pull request's summary, description
+or linked issue is therefore treated as a mention, because it is
+indistinguishable from that case.
 
 To mention someone outbound, use the helpers — writing `<@U…>` notifies the
 user even without `notifiedUserId`:
