@@ -1577,11 +1577,12 @@ for one scratch space is worse than requiring the two to share it.
     watching it — carried that user with `reason: 2` (measured on a
     development space, 2026-09-06). Watching is a separate mechanism end to
     end: it creates no entry in the watcher's own `GET /notifications`
-    either, and `POST /watchings` fires no webhook at all. So
-    `notifications[]` names only users somebody addressed, and every
-    `reason` observed on a delivery is an explicit act — 1 and 10 an
-    assignment (issue, pull request), 2 and 11 a comment's notification field
-    or a mention in its text. `<@project>` is not a counter-example: it
-    addresses every project member deliberately, so a bot that is a project
-    member is being spoken to by the same definition rule 1 already uses for
-    a hand-typed `@Chatbot`.
+    either, and `POST /watchings` produced no delivery on a hook registered
+    for types 1, 2, 3, 4, 14 and 17 — the issue types; no other type was
+    subscribed. So `notifications[]` names only users somebody addressed, as
+    far as the acts measured here, and every `reason` observed on a delivery
+    is an explicit act — 1 and 10 an assignment (issue, pull request), 2 and
+    11 a comment's notification field or a mention in its text. `<@project>`
+    is not a counter-example: it addresses every project member deliberately,
+    so a bot that is a project member is being spoken to by the same
+    definition rule 1 already uses for a hand-typed `@Chatbot`.

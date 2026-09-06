@@ -779,7 +779,7 @@ describe('mention detection from notifications[] (§5.4 rule 6)', () => {
     expect(fields.isMention).toBe(true);
   });
 
-  it('a bot that only watches the issue is not mentioned: the delivery names nobody', () => {
+  it('a delivery that notified nobody is not a mention, comment or field-only update alike', () => {
     const comment = commented(
       issueCommented({ text: 'no @ here', notifications: [] })
     );

@@ -110,8 +110,12 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
   (measured 2026-09-03). Text placed by editing reaches nobody via webhooks.
 - Add Comment Notification (`POST /issues/:id/comments/:commentId/
   notifications`) → type 17 with `content.comment` = the target comment (`id`,
-  and `content` as of the call); `notifications` still `[]` (measured
-  2026-09-03). The docs give no `content` shape for type 17.
+  and `content` as of the call). Top-level `notifications` is populated like
+  any other delivery, with `reason: 2`, and names **only the recipients that
+  call added** — a comment that had already notified someone else produced a
+  type 17 naming the added user alone (measured 2026-09-06; this supersedes a
+  2026-09-03 note that recorded `[]` here). The docs give no `content` shape
+  for type 17.
 - Bulk operations from the issue list ("multi update") → one type 14
   `{ tx_id, comment{content}, link[{id,key_id,title,comment{id,content}}],
   changes[{field,new_value,type}] }`, not one type 2 per issue (measured
@@ -155,13 +159,16 @@ no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
   a plain comment, a priority-only `PATCH` and a description-only `PATCH`
   arrived with `notifications: []`. The control on the same issue — the same
   kind of comment addressing a user who was *not* watching — carried that
-  user with `reason: 2` (measured 2026-09-06). `notifications[]` therefore
-  reports explicit addressing only.
+  user with `reason: 2` (measured 2026-09-06). So far `notifications[]`
+  reports explicit addressing only: every act measured here that put a user
+  in it was one somebody performed on that user.
 - Watching is a separate mechanism from notifications end to end: the watcher
   got no entry in its own `GET /notifications` either, only
   `resourceAlreadyRead` and `lastContentUpdated` moving on its
-  `GET /users/:id/watchings` record, and `POST /watchings` fires no webhook
-  of any type (measured 2026-09-06, against types 1, 2, 3, 4, 14 and 17).
+  `GET /users/:id/watchings` record, and `POST /watchings` produced no
+  delivery on a hook registered for types 1, 2, 3, 4, 14 and 17 (measured
+  2026-09-06). No other type was subscribed, so that is an absence across the
+  issue types, not across all 49.
 - `reason` codes observed on a delivery, all of them explicit acts: **1**
   assigned on an issue, **2** a comment's notification field or a `<@U…>` in
   its text, **10** assigned on a pull request, **11** a pull-request

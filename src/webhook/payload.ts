@@ -12,10 +12,11 @@ import type { BacklogSubjectRef } from '../types';
  * Every schema here validates only the fields the adapter reads. `z.object`
  * strips fields it does not know about rather than rejecting the input, so a
  * real payload's extra keys (`field_text`, `type` inside `changes[]`,
- * `shared_files`, `status`, `priority`, …) pass validation without being named — the tolerance §5.2 requires is zod's default
- * behaviour, not something added on top of it. `raw.payload` is built from
- * the parsed JSON directly, never from a schema's output, so those unnamed
- * keys still reach the message as received.
+ * `shared_files`, `status`, `priority`, …) pass validation without being
+ * named — the tolerance §5.2 requires is zod's default behaviour, not
+ * something added on top of it. `raw.payload` is built from the parsed JSON
+ * directly, never from a schema's output, so those unnamed keys still reach
+ * the message as received.
  */
 
 const envelopeSchema = z.object({

@@ -162,17 +162,24 @@ interface MentionEvidence {
  * unaddressed comment.
  */
 function detectMention(evidence: MentionEvidence): boolean {
-  const { botUserName, botUserId, text, assigneeId, changes } = evidence;
+  const {
+    botUserName,
+    botUserId,
+    text,
+    assigneeId,
+    changes,
+    notifications,
+    rawMentionNotationSurvives,
+  } = evidence;
 
   // Not narrowed to `reason: 2` (Issue Commented). An assignment (reason 1)
   // is already a mention through the rules below, so a reason allowlist
   // could only ever drop a directed notification whose code this adapter has
-  // not measured — the pull-request reasons 10-13 among them — while adding
-  // a second place that has to be kept in step with Backlog's reason table.
+  // not measured — the pull-request codes 12-13 and the document ones among
+  // them — while adding a second place that has to be kept in step with
+  // Backlog's reason table.
   if (
-    evidence.notifications.some(
-      (notification) => notification.user.id === botUserId
-    )
+    notifications.some((notification) => notification.user.id === botUserId)
   ) {
     return true;
   }
@@ -183,10 +190,7 @@ function detectMention(evidence: MentionEvidence): boolean {
   // server has already rewritten the notation, so a literal `<@U999>` there is
   // an unresolvable mention that notified nobody (§5.4 rule 1's negative case)
   // rather than a mention of the bot.
-  if (
-    evidence.rawMentionNotationSurvives &&
-    text.includes(mentionUser(botUserId))
-  ) {
+  if (rawMentionNotationSurvives && text.includes(mentionUser(botUserId))) {
     return true;
   }
   if (assigneeId === botUserId) {
