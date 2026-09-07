@@ -578,6 +578,7 @@ describe('createBacklogJsApi', () => {
         host,
         credentials: { apiKey: () => 'test-api-key' },
         fetch: fetchStub,
+        random: () => 0,
       });
 
       const resultPromise = api.getIssue(issueId);
@@ -704,6 +705,7 @@ describe('createBacklogJsApi', () => {
         host,
         credentials: { apiKey: () => 'test-api-key' },
         fetch: fetchStub,
+        random: () => 0,
         logger: () => logger,
       });
 
@@ -732,6 +734,7 @@ describe('createBacklogJsApi', () => {
         host,
         credentials: { apiKey: () => 'test-api-key' },
         fetch: fetchStub,
+        random: () => 0,
         logger: () => logger,
       });
 

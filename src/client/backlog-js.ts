@@ -83,6 +83,8 @@ export interface CreateBacklogJsApiOptions {
   /** Request timeout via `AbortSignal`, in milliseconds. Default 30 000 (docs/specs/adapter.md §8.2). */
   timeoutMs?: number;
   retry?: RetryOptions;
+  /** Random source for bounded retry jitter; injectable so timing tests stay deterministic. */
+  random?: () => number;
   /**
    * Sink for the two rate-limit lines (docs/specs/adapter.md §8.4, §10).
    * Taken as an accessor rather than a `Logger`, because `BacklogAdapter`
@@ -129,6 +131,7 @@ export function createBacklogJsApi(
     fetch = globalThis.fetch,
     timeoutMs = 30_000,
     retry,
+    random,
     logger,
   } = options;
   const tracker = new RateLimitTracker();
@@ -218,7 +221,8 @@ export function createBacklogJsApi(
             attempt,
             cause.response.headers.get('X-RateLimit-Reset'),
             Date.now(),
-            retry
+            retry,
+            random
           );
           if (decision.shouldRetry) {
             logRateLimit(

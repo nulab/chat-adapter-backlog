@@ -1233,11 +1233,16 @@ example figures, so either is testable without modelling consumption.
   **seconds**, as the header does. The four buckets it reports are not folded
   into `rateLimit()`, which stays a record of observation; only the response's
   own headers are, in the `read` bucket the request spends.
-- On HTTP 429 or error code 13: compute `waitMs = reset*1000 - now`; if
-  `waitMs > maxWaitMs` (default 60 000) or retries are exhausted
-  (`maxRetries`, default 1), throw `AdapterRateLimitError("backlog", ceil(waitMs/1000))`;
-  otherwise wait `max(waitMs, 0)` and retry the same request. Backlog sends no
-  `Retry-After`; when `X-RateLimit-Reset` is missing, wait `maxWaitMs`.
+- On HTTP 429 or error code 13: trim and parse `X-RateLimit-Reset`; an empty or
+  non-finite value is missing, not epoch zero. For a usable reset compute
+  `waitMs = max(reset*1000 - now, 1000) + jitter`, where jitter is uniformly
+  drawn from `[0, 250)` ms so callers released by the same epoch-second header
+  do not all retry together. The one-second floor prevents a past reset from
+  causing an immediate retry or an error with `retryAfter = 0`. When the header
+  is missing, `waitMs = maxWaitMs` with no jitter. If `waitMs > maxWaitMs`
+  (default 60 000) or retries are exhausted (`maxRetries`, default 1), throw
+  `AdapterRateLimitError("backlog", ceil(waitMs/1000))`; otherwise wait and
+  retry the same request. Backlog sends no `Retry-After`.
 - No other status is retried; the adapter is idempotency-agnostic and a
   repeated `POST` would duplicate a comment.
 - Each of the two outcomes emits exactly one `warn` (§10) — nothing else about
@@ -1547,7 +1552,9 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   which reaches no request at all; a 2xx non-JSON or empty body, a binary body
   read failure, and a stalled body stream all stay inside the mapped
   error/timeout boundary; an error body without an `errors[]` array still maps
-  by status and records its headers; query string stripped from `cause.url`.
+  by status and records its headers; past reset has a one-second floor, empty
+  reset is missing, retry jitter stays in `[0, 250)` ms under an injected
+  random source; query string stripped from `cause.url`.
 - **wiring**: real `Chat` + memory state: mention → `onNewMention` →
   `thread.post` → comment; redelivery within TTL deduped; subscribed follow-up
   → `onSubscribedMessage`; bot's own comment not delivered; assignment to the
