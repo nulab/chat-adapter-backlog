@@ -119,7 +119,7 @@ describe('createBacklogJsApi', () => {
     );
   });
 
-  it('a resolver-produced API key containing CR/LF becomes a mapped error', async () => {
+  it('a resolver-produced API key containing CR/LF is an authentication failure, not a transport one', async () => {
     const fetchStub = vi.fn<typeof globalThis.fetch>();
     const api = createBacklogJsApi({
       host,
@@ -127,7 +127,11 @@ describe('createBacklogJsApi', () => {
       fetch: fetchStub,
     });
 
-    await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(NetworkError);
+    // The same class a throwing resolver produces: no request was made, and
+    // no retry makes this value acceptable (§8.5).
+    await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(
+      AuthenticationError
+    );
     expect(fetchStub).not.toHaveBeenCalled();
   });
 

@@ -155,8 +155,9 @@ export function createBacklogJsApi(
    * retry. Credentials are resolved again on every call (including the retry
    * attempt) — see class doc — and a fresh `Backlog` client is constructed
    * per attempt because `backlog-js` takes credentials at construction time,
-   * not per call. `consume` reads the successful `Response` and must run
-   * inside this function's own try/catch/finally: it shares the request's
+   * not per call — construction validates the credential, so it is guarded
+   * separately just below. `consume` reads the successful `Response` and must
+   * run inside this function's own try/catch/finally: it shares the request's
    * abort timer and error mapping, so a stalled or malformed body is
    * cancelled by the timeout and mapped to an adapter error like any other
    * transport failure.
@@ -168,21 +169,33 @@ export function createBacklogJsApi(
   ): Promise<T> {
     const resolved = await resolveCredentials();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const wrappedFetch: Fetch = (input, init) =>
       fetch(input, { ...init, signal: controller.signal });
 
-    const bucket = classifyBucket(args.method, args.path);
-
+    // Construction is guarded, and guarded on its own rather than inside the
+    // request's `try` below: `backlog-js` validates the credential in its own
+    // constructor (a control character in `apiKey` or `accessToken` throws a
+    // plain `Error` there, before any request exists), so sweeping it into the
+    // request's mapping would report a credential a resolver produced but the
+    // transport will never accept as a `NetworkError` — a class that invites
+    // the caller to retry a value no retry can fix. It is the same failure as
+    // a resolver that throws, and takes the same mapping. No timer covers it:
+    // the constructor is synchronous validation and cannot hang.
+    let client: Backlog;
     try {
-      // Construction belongs inside the mapping boundary too. A credential
-      // resolver can return a string that the Fetch headers reject (CR/LF is
-      // the common case), and no implementation error may escape the port.
-      const client = new Backlog({
+      client = new Backlog({
         host,
         ...resolved,
         fetch: wrappedFetch,
       });
+    } catch (cause) {
+      throw mapCredentialResolverError(cause);
+    }
+
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const bucket = classifyBucket(args.method, args.path);
+
+    try {
       const response = await client.request({
         method: args.method,
         path: args.path,
