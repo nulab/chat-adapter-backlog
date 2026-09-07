@@ -45,6 +45,10 @@ export async function POST(request: Request) {
 Every field falls back to an environment variable, so
 `createBacklogAdapter()` with no argument works when the environment is set.
 
+For a whole bot rather than a fragment — a Vercel project with the webhook
+wired up, environment variables and a handler that does something useful — see
+[examples/](./examples).
+
 ## Environment variables
 
 Fallbacks apply only to the single-space shape, and only when the field is
@@ -572,6 +576,8 @@ comments, stars, uploads, notifications and recorded inputs for assertions.
 
 ## Links
 
+- [examples/](./examples) — deployable bots built on this adapter, in order of
+  how much they ask of you
 - [Chat SDK documentation](https://chat-sdk.dev/docs)
 - [Backlog API v2](https://developer.nulab.com/docs/backlog/)
 - [sample-messages.md](./sample-messages.md) — a payload per activity type

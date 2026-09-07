@@ -143,8 +143,8 @@ later ones.
 | `pnpm test:coverage` | `vitest run --coverage`                          | V8 coverage into `coverage/` (text, json, html, lcov).                                                |
 | `pnpm lint`          | `oxlint --max-warnings 0`                        | Lint. Warnings are failures, so `no-console` warnings block CI too.                                   |
 | `pnpm lint:fix`      | `oxlint --fix`                                   | Apply the auto-fixable lint results.                                                                  |
-| `pnpm format`        | `oxfmt src tsdown.config.ts vitest.config.ts`    | Format the files the formatter owns.                                                                  |
-| `pnpm format:check`  | `oxfmt --check src tsdown.config.ts vitest.config.ts` | Verify formatting without writing. This is what CI runs.                                         |
+| `pnpm format`        | `oxfmt src examples tsdown.config.ts vitest.config.ts` | Format the files the formatter owns.                                                            |
+| `pnpm format:check`  | `oxfmt --check src examples tsdown.config.ts vitest.config.ts` | Verify formatting without writing. This is what CI runs.                                  |
 | `pnpm typecheck`     | `tsc --noEmit`                                   | Type check. `tsconfig.json` never emits; tsdown builds.                                               |
 
 Before declaring a change done, run all five gates CI enforces:
@@ -153,10 +153,22 @@ Before declaring a change done, run all five gates CI enforces:
 pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
 ```
 
-Note the scope of `format`/`format:check`: they cover `src`, `tsdown.config.ts`
-and `vitest.config.ts` only. Root-level JSON and YAML are formatted by the
-pre-commit hook but are not checked in CI, so reformatting them by hand is not
-required.
+Note the scope of `format`/`format:check`: they cover `src`, `examples`,
+`tsdown.config.ts` and `vitest.config.ts` only. Root-level JSON and YAML are
+formatted by the pre-commit hook but are not checked in CI, so reformatting
+them by hand is not required.
+
+`examples` is in that list because three example READMEs written by three
+people should not drift in style, and oxfmt formats Markdown as well as
+TypeScript — it aligns tables and normalises bullets to `-`, though it never
+reflows prose. Two consequences: write a README and let `pnpm format` settle
+it rather than hand-aligning a table, and do not remove `examples/` without
+removing it from these two scripts, because oxfmt exits 2 on a path that does
+not exist.
+
+`pnpm lint` needs no equivalent change and never did: it passes no path, so
+oxlint covers the whole working tree minus `ignorePatterns`, `examples/`
+included.
 
 ## Pre-commit hook
 
@@ -337,7 +349,7 @@ form you get in the PR form.
 
 `.github/workflows/ci.yml` runs on pushes to `main`, on **every** pull request
 whatever branch it is based on — so a stacked PR is checked before its parent
-merges — and as a reusable workflow called by the release. Four jobs:
+merges — and as a reusable workflow called by the release. Five jobs:
 
 | Job          | What it does                                                                       |
 | ------------ | ---------------------------------------------------------------------------------- |
@@ -345,6 +357,7 @@ merges — and as a reusable workflow called by the release. Four jobs:
 | `typecheck`  | `pnpm typecheck`.                                                                  |
 | `build`      | `pnpm build`, then imports `dist/index.js` in a real Node process and asserts the entry loads and `dist/index.d.ts` exists. |
 | `test`       | Matrix over Node 20, 22, 24 and 26. Asserts the running Node is the major the job asked for, then `pnpm test`. |
+| `examples`   | `pnpm build`, then `typecheck` and `test` for every package under `examples/`. |
 
 Every job provisions pnpm with `pnpm/action-setup` and `standalone: true`,
 which installs the pnpm build with Node.js linked in and reads the version from
@@ -352,9 +365,9 @@ which installs the pnpm build with Node.js linked in and reads the version from
 that `pnpm install` provisions, so nothing in CI may assume a Node on PATH
 before pnpm has run.
 
-`lint`, `typecheck` and `build` then run `pnpm install --frozen-lockfile` and
-get the runtime the lockfile pins, exactly like a contributor — no job carries
-a Node version of its own.
+`lint`, `typecheck`, `build` and `examples` then run
+`pnpm install --frozen-lockfile` and get the runtime the lockfile pins, exactly
+like a contributor — no job carries a Node version of its own.
 
 `test` is the exception, and the only job that names Node versions.
 `actions/setup-node` puts the major under test on PATH and the install adds
@@ -386,6 +399,26 @@ committed alongside any `package.json` change.
 The build job's smoke test asserts on the value the entry point exports today.
 If you change the public entry, the smoke test in `ci.yml` has to change with
 it.
+
+The `examples` job builds before it type checks, and that ordering is the whole
+reason it is a separate job rather than two more steps on `typecheck`. An
+example depends on the adapter as `workspace:*`, which resolves to the root
+`package.json`, whose `types` is `./dist/index.d.ts` — and `dist/` is
+gitignored. Without a build first, every example fails with TS2307 on its
+adapter import.
+
+Pointing the examples at `src/` with a `paths` mapping would avoid the build
+and was rejected: type checking against source would let an example compile
+against a declaration the published package does not ship. Building means each
+example is checked against the exact `.d.ts` a consumer installs, and it is
+also what each example's `vercel.json` does
+(`buildCommand: cd ../.. && pnpm build`), so CI and the deploy agree.
+
+The job selects packages by directory (`--filter './examples/**'`), so adding
+an example needs no change here. A filter that matches nothing is a no-op that
+exits 0, which is why the job is green while `examples/` holds only its index
+README — unlike `--filter <name>` on a package that does not exist, which
+fails.
 
 ## Releasing
 
