@@ -135,7 +135,7 @@ subject on `main`: `feat(webhook): 401 a request with no path secret`.
 Types used here: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `ci`,
 `chore`, `revert`. Two are deliberately absent: `style`, because oxfmt owns
 formatting and a formatting-only change is a `chore` on the scope it touched;
-and `build`, because `build` is a *scope* here — the toolchain change that
+and `build`, because `build` is a _scope_ here — the toolchain change that
 would be `build:` elsewhere is `chore(build)` or `fix(build)`.
 
 | Scope       | Covers                                                                                                                    |
@@ -150,7 +150,7 @@ would be `build:` elsewhere is `chore(build)` or `fix(build)`.
 | `release`   | `.github/workflows/release.yml`, `.github/release.yml`, publishing, versioning                                            |
 | `deps`      | dependency and lockfile bumps — what Dependabot opens                                                                     |
 | `docs`      | README, DEVELOPMENT.md, CLAUDE.md/AGENTS.md, the PR template, `docs/`, `.claude/rules/`                                   |
-| `examples`  | `examples/*` — the deployable sample bots, their index README, and the workspace wiring that carries them                 |
+| `examples`  | `examples/*` — the deployable sample bots and their index README                                                          |
 
 Tests take the scope of the code they cover, not a scope of their own:
 `test(client)`, never `test(test)`.
@@ -216,7 +216,7 @@ held to the same standard as one, and a PR body that says "see the commits"
 leaves nothing behind on `main` at all.
 
 A non-squash merge would need a case where the separation of the commits is
-itself the value on `main` *and* each commit passes all five gates alone —
+itself the value on `main` _and_ each commit passes all five gates alone —
 importing external history, say. That has not come up, only squash is enabled,
 and anything else is the maintainer's call, not yours.
 
@@ -259,7 +259,7 @@ them fixes the child's branch:
    were closed outright
    ([changelog](https://github.blog/changelog/2020-05-19-pull-request-retargeting/)).
    Retargeting moves the PR's base pointer and nothing else. If the branch is
-   *not* deleted, not even that happens: the child keeps a base branch that is
+   _not_ deleted, not even that happens: the child keeps a base branch that is
    now a dead end.
 2. The child's branch still carries the parent's commits, while `main` has that
    content only inside the squash commit, under a different SHA — so the
@@ -399,12 +399,12 @@ all-or-nothing.
 [Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/))
 Limits are **per user, per minute**, in four independent buckets:
 
-| Bucket | Covers                                                            | Documented example |
-| ------ | ----------------------------------------------------------------- | ------------------ |
-| read   | GET, excluding the Search and Icon endpoints                      | 600                |
-| update | POST, PATCH, DELETE                                               | 150                |
-| search | Issue List, Count Issue, Wiki Page List, Count Wiki Page          | 150                |
-| icon   | Space Logo, User Icon, Project Icon, Group Icon, Team Icon        | 60                 |
+| Bucket | Covers                                                     | Documented example |
+| ------ | ---------------------------------------------------------- | ------------------ |
+| read   | GET, excluding the Search and Icon endpoints               | 600                |
+| update | POST, PATCH, DELETE                                        | 150                |
+| search | Issue List, Count Issue, Wiki Page List, Count Wiki Page   | 150                |
+| icon   | Space Logo, User Icon, Project Icon, Group Icon, Team Icon | 60                 |
 
 Traps, in order of how easily they are missed:
 
@@ -414,8 +414,7 @@ Traps, in order of how easily they are missed:
    states limits differ between Free and Paid plans and tells you to call
    `GET /api/v2/rateLimit`. Read the real figures from that endpoint or from the
    response headers; do not hard-code 600/150/150/60 as invariants.
-3. **Backlog sends no `Retry-After`.** Over limit is HTTP 429 with error code
-   13. Compute the backoff from `X-RateLimit-Reset`, which is **UTC epoch
+3. **Backlog sends no `Retry-After`.** Over limit is HTTP 429 with error code 13. Compute the backoff from `X-RateLimit-Reset`, which is **UTC epoch
    seconds**, alongside `X-RateLimit-Limit` and `X-RateLimit-Remaining`. Track
    the headers per bucket — one bucket's remaining count says nothing about
    another's.
@@ -528,12 +527,20 @@ is no longer a change invisible to consumers (docs/specs/adapter.md §3.1,
   DEVELOPMENT.md. Keep it lean; the 150/min update bucket will 429 a chatty
   suite.
 
-## The `examples/` workspace
+## `examples/`
 
-`examples/*` are pnpm workspace members: small bots that deploy to Vercel as
-they are, ordered by how much they ask of the reader. `examples/README.md` is
-the index and carries the setup all of them share; an example's own README does
-not repeat it.
+`examples/*` are **standalone projects**, not workspace members: each one
+depends on the published adapter (`"@nulab/chat-adapter-backlog": "^0"`),
+installs on its own, and deploys from its own directory. Copying one out of
+this repository has to leave it working, which is the rule that settles most
+questions about them. `pnpm-workspace.yaml` names no packages, and nothing in
+CI installs, type checks or tests an example — only the root `lint` and
+`format:check` reach into `examples/` (oxfmt formats the Markdown too: it
+aligns tables and normalises bullets, though it never reflows prose, so write
+a README and let `pnpm format` settle it).
+
+`examples/README.md` is the index and carries the setup all of them share; an
+example's own README does not repeat it.
 
 Each example is one PR and touches nothing outside its own directory. An
 adapter bug or gap found while writing one goes in that PR's description under
@@ -544,52 +551,50 @@ The layout is the same in every example, and is the convention rather than a
 suggestion:
 
 ```
-examples/<NN>-<name>/
+examples/<name>/
   README.md  package.json  vercel.json  .env.example  tsconfig.json
   api/webhooks/backlog.ts   # the Vercel function, nothing else
   src/bot.ts                # Chat + adapter + handler registration; the only side effects
   src/<logic>.ts            # the decision, as a pure function
-  src/<logic>.test.ts       # what that function is specified to do
 ```
 
-`src/bot.ts` holding the only side effects is what makes the example testable
-without a webhook or a network: the rule it demonstrates is a pure function,
-and `src/<logic>.test.ts` states that rule. Package name
-`@nulab/chat-adapter-backlog-example-<name>`, `private: true`, and the four
-scripts `typecheck` / `test` / `deploy` / `deploy:prod`. The adapter comes in
-as `workspace:*`. State is `@chat-adapter/state-memory`, and no example
-subscribes to a thread.
+No numbering on the directory, and **no tests**: an example is small enough to
+read end to end, and it earns its keep by being copied rather than verified.
+That is also why `src/bot.ts` keeps the side effects and `src/<logic>.ts` keeps
+the rule — the thing a reader came for should not be tangled in the wiring.
+
+Package name `chat-adapter-backlog-example-<name>`, `private: true`, and the
+three scripts `typecheck` / `deploy` / `deploy:prod`. `vercel.json` sets
+`framework: null` and orchestrates nothing.
+
+Two rules about what an example may do, both load-bearing:
+
+- **Parse `unknown` with zod, never assert.** `message.raw` reaches a handler
+  as `unknown`, and parsing is also the only honest way to read a key the
+  adapter's own schema does not name (`raw.payload` keeps everything Backlog
+  sent). The same goes for `process.env`: one schema at module load, so a
+  missing variable or a non-numeric id fails the first cold start rather than
+  sending `NaN` to Backlog later.
+- **Reach Backlog through `backlog.client(host)`.** That is the `backlog-js`
+  client the adapter hands out for the endpoints its port does not name, and it
+  carries the adapter's rate-limit accounting, its bounded 429 retry and its
+  error classes. An example must not build a Backlog client of its own, and
+  must not depend on `backlog-js` directly.
+
+State is `@chat-adapter/state-memory`, and no example subscribes to a thread.
 
 Environment variable names are shared across examples, not invented per
 example: the five the adapter reads (`BACKLOG_HOST`, `BACKLOG_API_KEY`,
 `BACKLOG_BOT_USER_ID`, `BACKLOG_BOT_USER_NAME`, `BACKLOG_WEBHOOK_SECRET`) plus
 meaningful names for the rest — `DONE_STATUS_ID`, `REQUIRED_CUSTOM_FIELD_ID`,
 `BUG_ISSUE_TYPE_NAME`, `INTAKE_CONTACT_USER_ID`, `AI_MODEL`,
-`AI_GATEWAY_API_KEY`. No `EXAMPLE_` prefix. A numeric id read from the
-environment is validated with `Number()` at startup and throws there, so no
-`NaN` ever reaches the Backlog API.
+`AI_GATEWAY_API_KEY`. No `EXAMPLE_` prefix.
 
 Every README has the same five sections, in this order: **What it does**,
 **Try it**, **How it works**, **Deploy**, **Limits**. A measured Backlog
 behaviour cited in "How it works" is sourced as
 `measured on a development space, <date>` and names no space, project, issue,
 person or Vercel project.
-
-Two things about the gates are not visible from the config:
-
-- **An example cannot typecheck until the adapter is built.** `workspace:*`
-  resolves to the root `package.json`, whose `types` is `./dist/index.d.ts`,
-  and `dist/` is gitignored — so `tsc --noEmit` in an example fails with
-  TS2307 on a clean checkout. Run `pnpm build` first; the `examples` CI job
-  does, and so does each example's `vercel.json`. The examples are deliberately
-  *not* pointed at `src/` through `paths`: building means they are checked
-  against the declarations a consumer actually installs.
-- **`examples/` is covered by the root `lint` and `format:check`.** `pnpm lint`
-  passes no path, so oxlint has always linted it; `format:check` names
-  `examples` explicitly. oxfmt formats Markdown too — it aligns tables and
-  normalises bullets to `-`, though it never reflows prose — so write a README
-  and let `pnpm format` settle it rather than hand-aligning a table that will
-  fail CI later.
 
 ## Don't
 

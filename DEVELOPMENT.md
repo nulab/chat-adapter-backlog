@@ -158,7 +158,7 @@ Note the scope of `format`/`format:check`: they cover `src`, `examples`,
 formatted by the pre-commit hook but are not checked in CI, so reformatting
 them by hand is not required.
 
-`examples` is in that list because three example READMEs written by three
+`examples` is in that list because the example READMEs written by three
 people should not drift in style, and oxfmt formats Markdown as well as
 TypeScript — it aligns tables and normalises bullets to `-`, though it never
 reflows prose. Two consequences: write a README and let `pnpm format` settle
@@ -357,7 +357,6 @@ merges — and as a reusable workflow called by the release. Five jobs:
 | `typecheck`  | `pnpm typecheck`.                                                                  |
 | `build`      | `pnpm build`, then imports `dist/index.js` in a real Node process and asserts the entry loads and `dist/index.d.ts` exists. |
 | `test`       | Matrix over Node 20, 22, 24 and 26. Asserts the running Node is the major the job asked for, then `pnpm test`. |
-| `examples`   | `pnpm build`, then `typecheck` and `test` for every package under `examples/`. |
 
 Every job provisions pnpm with `pnpm/action-setup` and `standalone: true`,
 which installs the pnpm build with Node.js linked in and reads the version from
@@ -365,7 +364,7 @@ which installs the pnpm build with Node.js linked in and reads the version from
 that `pnpm install` provisions, so nothing in CI may assume a Node on PATH
 before pnpm has run.
 
-`lint`, `typecheck`, `build` and `examples` then run
+`lint`, `typecheck` and `build` then run
 `pnpm install --frozen-lockfile` and get the runtime the lockfile pins, exactly
 like a contributor — no job carries a Node version of its own.
 
@@ -400,25 +399,18 @@ The build job's smoke test asserts on the value the entry point exports today.
 If you change the public entry, the smoke test in `ci.yml` has to change with
 it.
 
-The `examples` job builds before it type checks, and that ordering is the whole
-reason it is a separate job rather than two more steps on `typecheck`. An
-example depends on the adapter as `workspace:*`, which resolves to the root
-`package.json`, whose `types` is `./dist/index.d.ts` — and `dist/` is
-gitignored. Without a build first, every example fails with TS2307 on its
-adapter import.
+`examples/` is not built, type checked or tested by CI, and that is a property
+of what an example is rather than an omission: each one is a standalone project
+that installs the published adapter from npm, so checking one here would mean
+either installing a version of this package that may not exist yet, or pointing
+it at `src/` — which would let an example compile against a declaration the
+published package does not ship, the exact thing the check would be for. The
+root `lint` and `format:check` do cover `examples/`, because those need no
+install.
 
-Pointing the examples at `src/` with a `paths` mapping would avoid the build
-and was rejected: type checking against source would let an example compile
-against a declaration the published package does not ship. Building means each
-example is checked against the exact `.d.ts` a consumer installs, and it is
-also what each example's `vercel.json` does
-(`buildCommand: cd ../.. && pnpm build`), so CI and the deploy agree.
-
-The job selects packages by directory (`--filter './examples/**'`), so adding
-an example needs no change here. A filter that matches nothing is a no-op that
-exits 0, which is why the job is green while `examples/` holds only its index
-README — unlike `--filter <name>` on a package that does not exist, which
-fails.
+The consequence is worth stating plainly: an example can break without CI
+saying so. It is checked by running `pnpm typecheck` inside its own directory
+after `pnpm install` there, which is what its README tells a reader to do.
 
 ## Releasing
 

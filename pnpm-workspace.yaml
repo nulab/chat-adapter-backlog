@@ -16,9 +16,8 @@ minimumReleaseAge: 4320
 allowBuilds:
   lefthook: true
 
-# The root package is a member implicitly, so this line only adds the
-# examples. `examples/*` is a one-level glob on purpose: an example is a
-# package directory directly under `examples/`, and nothing nested inside one
-# is a workspace member of its own.
-packages:
-  - 'examples/*'
+# No `packages`: the root package is a member implicitly and nothing else is.
+# `examples/*` are deliberately not members — each one is a standalone project
+# that installs the published adapter from npm and deploys from its own
+# directory, so pulling them in here would put a dependency on an unpublished
+# version into this repository's own install.
