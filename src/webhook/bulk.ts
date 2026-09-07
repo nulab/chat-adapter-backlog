@@ -1,11 +1,6 @@
 import { encodeMessageId, encodeThreadId } from '../ids';
 
-import {
-  buildAuthor,
-  detectMention,
-  normaliseChanges,
-  plainTextAst,
-} from './inbound';
+import { buildAuthor, detectMention, normaliseChanges } from './inbound';
 
 import { issueMultiUpdatedSchema } from './payload';
 
@@ -87,6 +82,7 @@ export interface BuildBulkUpdateMessageInput {
    * `raw` variant carries the unstripped one.
    */
   payload: BacklogBulkUpdatePayload;
+  format: (text: string) => MessageData['formatted'];
 }
 
 /**
@@ -200,7 +196,7 @@ export function buildBulkUpdateMessage(
       subject,
     }),
     text: target.text,
-    formatted: plainTextAst(target.text),
+    formatted: input.format(target.text),
     raw,
     author: buildAuthor(host, botUserId, activity.createdUser),
     metadata: { dateSent: new Date(activity.created), edited: false },

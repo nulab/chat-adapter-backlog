@@ -972,6 +972,11 @@ when `startsWithRoot` or when backward and `!hasMore` (oldest page reached).
 page; forward → newest comment id on the page, or `"0"` when the page held only
 the root (`limit: 1` forward).
 
+Before building the page, the adapter resolves the project's cached §9.1
+converter with one cached Get Project lookup. Both the root and every comment
+set `formatted` through that converter; `text` remains the original Backlog
+text.
+
 Guarantees (each is a test): pages are chronological; backward pages walk from
 newest to oldest; the union of all pages in either direction is root + every
 comment exactly once; a backward final page may contain only the root; forward
@@ -994,7 +999,9 @@ Pull-request thread: `:r` →
 route is 400/6 `Undefined resource`), and the exclusive bounds return exactly
 that comment or nothing (measured 2026-09-06); an empty page is `null`, and a
 returned element whose `id` differs is treated as not found rather than
-trusted. `ResourceNotFoundError` → `null`; other errors propagate.
+trusted. `ResourceNotFoundError` → `null`; other errors propagate. The
+project's cached §9.1 converter is resolved only once a message is going to
+be built, so the three `null` answers above still spend nothing.
 
 ### 7.3 `fetchThread(threadId)`
 
@@ -1520,7 +1527,9 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   `(limit ∈ {1,2,3,5,50,100}) × (comments ∈ {0,1,4,7,150}) × direction`
   asserting page size, chronology, union-once and `nextCursor` values;
   cursor validation; channel id → `ValidationError`; `fetchMessage`
-  cross-thread/`:u:`/404 → `null`; `fetchThread`, `fetchSubject`,
+  cross-thread/`:u:`/404 → `null`, and without resolving the converter;
+  `fetchMessages` and `fetchMessage` both set `formatted` through the
+  project's rule; `fetchThread`, `fetchSubject`,
   `fetchChannelInfo`, `listThreads` (offset, trailing empty page, clamp),
   `getUser` (round trip, bot, bare number rejected, null on 404),
   `markAsRead` (first page, third page, cap reached, already read, `:r`).

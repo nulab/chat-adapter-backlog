@@ -33,7 +33,16 @@ function messagesOf(payload: object) {
     buildBulkUpdateMessage(
       activity,
       target,
-      { ...input, payload: payload as BacklogBulkUpdatePayload },
+      {
+        ...input,
+        payload: payload as BacklogBulkUpdatePayload,
+        format: (text) => ({
+          type: 'root',
+          children: [
+            { type: 'paragraph', children: [{ type: 'text', value: text }] },
+          ],
+        }),
+      },
       MessageCtor
     )
   );

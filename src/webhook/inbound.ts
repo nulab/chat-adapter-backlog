@@ -1,5 +1,3 @@
-import { root, paragraph, text as textNode } from 'chat';
-
 import {
   encodeMessageId,
   encodeThreadId,
@@ -373,18 +371,7 @@ export function buildAuthor(
 
 export interface BuildMessageInput extends BuildInboundMessageInput {
   payload: BacklogWebhookPayload;
-}
-
-/**
- * A one-paragraph AST carrying `text` verbatim. `parseMessage` builds every
- * webhook message this way regardless of the project's cached formatting
- * rule (docs/plans/adapter-implementation.md P3 scope note: "parseMessage
- * uses the Markdown converter from `chat` directly in this phase; P4
- * replaces it with the rule-aware selection") — kept as its own function so
- * P4 has one call site to replace with `converterFor(rule, ...).toAst(text)`.
- */
-export function plainTextAst(text: string): MessageData['formatted'] {
-  return root([paragraph([textNode(text)])]);
+  format: (text: string) => MessageData['formatted'];
 }
 
 /**
@@ -420,7 +407,7 @@ export function buildInboundMessage(
       subject: input.subject.ref,
     }),
     text: fields.text,
-    formatted: plainTextAst(fields.text),
+    formatted: input.format(fields.text),
     raw,
     author,
     metadata: { dateSent: fields.dateSent, edited: false },

@@ -1966,6 +1966,37 @@ describe('BacklogAdapter.parseMessage', () => {
   });
 });
 
+describe('BacklogAdapter inbound formatting (§9.1)', () => {
+  it('a webhook factory parses Backlog notation with the looked-up project rule', async () => {
+    const project = {
+      ...conformanceFixture.baseProject(),
+      textFormattingRule: 'backlog' as const,
+    };
+    const adapter = createBacklogAdapter({
+      ...webhookAdapterConfig(),
+      createApi: () => createInMemoryBacklogApi({ projects: [project] }),
+    });
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    await adapter.handleWebhook(
+      webhookRequest(issueCommented({ text: "''urgent''" }))
+    );
+
+    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+    expect(dispatched[0]?.message.formatted).toEqual({
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [
+            { type: 'strong', children: [{ type: 'text', value: 'urgent' }] },
+          ],
+        },
+      ],
+    });
+  });
+});
+
 /** `BacklogUserRef` fixtures matching the project's vocabulary (Chatbot 999, Alice 100, Bob 101). */
 const ALICE_USER_REF = {
   id: FIXTURE.alice.id,
@@ -2539,6 +2570,108 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
     const comment = result.messages.find((m) => m.text === 'Edited content');
     expect(comment?.metadata.edited).toBe(true);
     expect(comment?.metadata.editedAt).toEqual(editedAt);
+  });
+
+  it('fetchMessage parses a comment with the project formatting rule', async () => {
+    const { adapter } = egressAdapter({
+      textFormattingRule: 'backlog',
+      seed: {
+        comments: [
+          {
+            id: 1,
+            issueId: FIXTURE.issueId,
+            content: "''urgent''",
+            changeLog: [],
+            createdUser: ALICE_USER_REF,
+            created: new Date('2026-01-01T00:01:00Z'),
+            updated: new Date('2026-01-01T00:01:00Z'),
+            stars: [],
+          },
+        ],
+      },
+    });
+
+    const message = await adapter.fetchMessage(
+      EGRESS_THREAD_ID,
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: ISSUE_SUBJECT,
+        part: 'comment',
+        commentId: 1,
+      })
+    );
+
+    expect(message?.formatted).toEqual({
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [
+            { type: 'strong', children: [{ type: 'text', value: 'urgent' }] },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('an id fetchMessage answers null for spends no project lookup', async () => {
+    const calls: string[] = [];
+    const { adapter } = egressAdapter({
+      wrapApi: (port) => recordPortCalls(port, calls),
+    });
+
+    const message = await adapter.fetchMessage(
+      EGRESS_THREAD_ID,
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: ISSUE_SUBJECT,
+        part: 'update',
+        created: '2026-01-01T00:00:00Z',
+      })
+    );
+
+    expect(message).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('fetchMessages parses comments with the project formatting rule', async () => {
+    const { adapter } = egressAdapter({
+      textFormattingRule: 'backlog',
+      seed: {
+        comments: [
+          {
+            id: 1,
+            issueId: FIXTURE.issueId,
+            content: "''urgent''",
+            changeLog: [],
+            createdUser: ALICE_USER_REF,
+            created: new Date('2026-01-01T00:01:00Z'),
+            updated: new Date('2026-01-01T00:01:00Z'),
+            stars: [],
+          },
+        ],
+      },
+    });
+
+    const result = await adapter.fetchMessages(EGRESS_THREAD_ID, {
+      limit: 2,
+      direction: 'backward',
+    });
+    const comment = result.messages.find(
+      (message) => message.text === "''urgent''"
+    );
+
+    expect(comment?.formatted).toEqual({
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [
+            { type: 'strong', children: [{ type: 'text', value: 'urgent' }] },
+          ],
+        },
+      ],
+    });
   });
 
   it('a channel id passed to fetchMessages is a validation error', async () => {

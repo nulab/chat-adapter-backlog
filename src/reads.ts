@@ -3,8 +3,6 @@ import {
   ResourceNotFoundError,
   ValidationError,
 } from '@chat-adapter/shared';
-import { paragraph, root as rootNode, text as textNode } from 'chat';
-
 import {
   decodeChannelId,
   decodeMessageId,
@@ -93,10 +91,6 @@ export function buildRestAuthor(
   };
 }
 
-function plainTextAst(value: string): MessageData['formatted'] {
-  return rootNode([paragraph([textNode(value)])]);
-}
-
 /**
  * Everything a `Message` needs beyond the record it is built from. `subject`
  * carries both the addressing (`subject.ref`) and every call the two kinds
@@ -108,6 +102,7 @@ export interface MessageBuilders {
   projectId: number;
   subject: SubjectClient;
   botUserId: number;
+  format: (text: string) => MessageData['formatted'];
   MessageCtor: new (
     data: MessageData<BacklogRawMessage>
   ) => Message<BacklogRawMessage>;
@@ -124,13 +119,13 @@ export function buildRootMessage(
   builders: MessageBuilders,
   root: SubjectRoot
 ): Message<BacklogRawMessage> {
-  const { host, projectId, subject, botUserId, MessageCtor } = builders;
+  const { host, projectId, subject, botUserId, format, MessageCtor } = builders;
   const text = [root.title, root.body].filter(Boolean).join('\n\n');
   return new MessageCtor({
     id: encodeMessageId({ host, subject: subject.ref, part: 'root' }),
     threadId: encodeThreadId({ host, projectId, subject: subject.ref }),
     text,
-    formatted: plainTextAst(text),
+    formatted: format(text),
     raw: subject.rootRaw(root),
     author: buildRestAuthor(host, botUserId, root.createdUser),
     metadata: { dateSent: root.created, edited: false },
@@ -157,7 +152,7 @@ export function buildCommentMessage(
   builders: MessageBuilders,
   comment: BacklogComment
 ): Message<BacklogRawMessage> {
-  const { host, projectId, subject, botUserId, MessageCtor } = builders;
+  const { host, projectId, subject, botUserId, format, MessageCtor } = builders;
   const text = comment.content ?? '';
   const edited = comment.updated.getTime() !== comment.created.getTime();
   const metadata: MessageData['metadata'] = edited
@@ -172,7 +167,7 @@ export function buildCommentMessage(
     }),
     threadId: encodeThreadId({ host, projectId, subject: subject.ref }),
     text,
-    formatted: plainTextAst(text),
+    formatted: format(text),
     raw: {
       kind: 'comment',
       host,
@@ -298,7 +293,14 @@ export interface FetchMessageInput {
   threadId: string;
   messageId: string;
   subject: SubjectClient;
-  builders: Omit<MessageBuilders, 'projectId' | 'subject'>;
+  /**
+   * Deferred rather than passed as a value, because completing it resolves
+   * the project's §9.1 converter and that costs a cached Get Project. §7.2
+   * answers `null` without an API call for an id that cannot name a message
+   * in this thread; taking the builders up front would spend a call on
+   * exactly the ids that guarantee exists to keep free.
+   */
+  builders: () => Promise<Omit<MessageBuilders, 'projectId' | 'subject'>>;
 }
 
 /**
@@ -329,7 +331,7 @@ export async function fetchMessage(
   }
 
   const messageBuilders: MessageBuilders = {
-    ...builders,
+    ...(await builders()),
     projectId: thread.projectId,
     subject,
   };
