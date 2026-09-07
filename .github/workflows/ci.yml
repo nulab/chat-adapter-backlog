@@ -179,3 +179,43 @@ jobs:
       # selected instead of the one pnpm would relink.
       - name: Test
         run: node node_modules/vitest/vitest.mjs run
+
+  examples:
+    runs-on: ubuntu-latest
+    name: Examples
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          standalone: true
+
+      - run: pnpm install --frozen-lockfile
+
+      # An example reaches the adapter through `workspace:*`, so it resolves to
+      # the root package.json, whose `types` is `./dist/index.d.ts`. `dist/` is
+      # gitignored, so without this step every example fails to typecheck with
+      # TS2307 on the adapter import.
+      #
+      # Building rather than pointing the examples at `src/` via `paths` is the
+      # deliberate choice: it type checks each example against the exact
+      # declarations a consumer installs from npm, so an example cannot compile
+      # against a type the published package does not ship. It is also the
+      # order each example's own vercel.json uses
+      # (`buildCommand: cd ../.. && pnpm build`).
+      - name: Build the adapter the examples resolve to
+        run: pnpm run build
+
+      # `--filter './examples/**'` selects by directory, so a new example is
+      # covered by the glob alone and nothing here has to name it.
+      #
+      # No existence guard: a filter that matches no package is a no-op that
+      # exits 0 ("Scope: 0 of 1 workspace projects"), so this job is green
+      # while `examples/` holds only its index README. That is unlike
+      # `--filter <name>` on a package that does not exist, which does fail.
+      - name: Type check the examples
+        run: pnpm -r --filter './examples/**' run typecheck
+
+      - name: Test the examples
+        run: pnpm -r --filter './examples/**' run test
