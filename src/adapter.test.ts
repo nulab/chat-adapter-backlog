@@ -2572,6 +2572,68 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
     expect(comment?.metadata.editedAt).toEqual(editedAt);
   });
 
+  it('fetchMessage parses a comment with the project formatting rule', async () => {
+    const { adapter } = egressAdapter({
+      textFormattingRule: 'backlog',
+      seed: {
+        comments: [
+          {
+            id: 1,
+            issueId: FIXTURE.issueId,
+            content: "''urgent''",
+            changeLog: [],
+            createdUser: ALICE_USER_REF,
+            created: new Date('2026-01-01T00:01:00Z'),
+            updated: new Date('2026-01-01T00:01:00Z'),
+            stars: [],
+          },
+        ],
+      },
+    });
+
+    const message = await adapter.fetchMessage(
+      EGRESS_THREAD_ID,
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: ISSUE_SUBJECT,
+        part: 'comment',
+        commentId: 1,
+      })
+    );
+
+    expect(message?.formatted).toEqual({
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [
+            { type: 'strong', children: [{ type: 'text', value: 'urgent' }] },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('an id fetchMessage answers null for spends no project lookup', async () => {
+    const calls: string[] = [];
+    const { adapter } = egressAdapter({
+      wrapApi: (port) => recordPortCalls(port, calls),
+    });
+
+    const message = await adapter.fetchMessage(
+      EGRESS_THREAD_ID,
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: ISSUE_SUBJECT,
+        part: 'update',
+        created: '2026-01-01T00:00:00Z',
+      })
+    );
+
+    expect(message).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
   it('fetchMessages parses comments with the project formatting rule', async () => {
     const { adapter } = egressAdapter({
       textFormattingRule: 'backlog',

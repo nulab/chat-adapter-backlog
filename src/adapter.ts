@@ -859,7 +859,12 @@ export class BacklogAdapter implements Adapter<
     return converterFor(rule, this.logger, { host, projectId });
   }
 
-  /** Synchronous converter selection for `parseMessage` and cache-only reads. */
+  /**
+   * Synchronous converter selection, for the one caller that cannot await:
+   * `parseMessage` is a synchronous member of the `Adapter` interface, so a
+   * cold cache is a warning and the §9.2 markdown default rather than the Get
+   * Project a read would spend. Every read resolves through `getConverter`.
+   */
   private cachedConverter(
     host: string,
     projectId: number
@@ -895,14 +900,12 @@ export class BacklogAdapter implements Adapter<
    */
   private messageBuilders(
     host: string,
-    projectId: number,
-    converter?: FallbackFormatConverter
+    converter: FallbackFormatConverter
   ): Omit<MessageBuilders, 'projectId' | 'subject'> {
     return {
       host,
       botUserId: this.resolveInstallation(host).botUserId,
-      format: (text) =>
-        (converter ?? this.cachedConverter(host, projectId)).toAst(text),
+      format: (text) => converter.toAst(text),
       MessageCtor,
     };
   }
@@ -1563,7 +1566,7 @@ export class BacklogAdapter implements Adapter<
       threadId,
       options,
       subject,
-      builders: this.messageBuilders(host, projectId, converter),
+      builders: this.messageBuilders(host, converter),
     });
   }
 
@@ -1576,7 +1579,11 @@ export class BacklogAdapter implements Adapter<
       threadId,
       messageId,
       subject,
-      builders: this.messageBuilders(host, projectId),
+      // Deferred so an id §7.2 answers `null` for still costs nothing: this
+      // resolves the project's formatting rule, and `fetchMessageRead` only
+      // calls it once it is going to build a message.
+      builders: async () =>
+        this.messageBuilders(host, await this.getConverter(host, projectId)),
     });
   }
 
@@ -1641,7 +1648,7 @@ export class BacklogAdapter implements Adapter<
       channelId,
       options,
       api: this.api(host),
-      builders: this.messageBuilders(host, projectId, converter),
+      builders: this.messageBuilders(host, converter),
       // Every thread this lists is an issue: a pull-request list is per
       // repository, a coordinate a channel id does not carry (D-PR7), so the
       // subject of each row is known before the row is read.

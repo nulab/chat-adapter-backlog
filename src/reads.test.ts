@@ -1,6 +1,6 @@
 import { ValidationError } from '@chat-adapter/shared';
 import { Message as MessageCtor } from 'chat';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createInMemoryBacklogApi } from './client/in-memory';
 import { encodeMessageId } from './ids';
@@ -507,7 +507,7 @@ describe('fetchMessage', () => {
       threadId: THREAD_ID,
       messageId: ISSUE_FIXTURE.rootMessageId,
       subject: subjectOf(api, ISSUE_REF),
-      builders: builders(),
+      builders: async () => builders(),
     });
     expect(message?.text).toContain('Deploy fails on the staging space');
   });
@@ -518,13 +518,15 @@ describe('fetchMessage', () => {
       threadId: THREAD_ID,
       messageId: ISSUE_FIXTURE.commentMessageId(1),
       subject: subjectOf(api, ISSUE_REF),
-      builders: builders(),
+      builders: async () => builders(),
     });
     expect(message?.text).toBe('Comment 1');
   });
 
-  it('a message id from another issue is null without an API call', async () => {
+  it('a message id from another issue is null without an API call, the formatting rule included', async () => {
     const api = apiWith(2);
+    const resolveBuilders = vi.fn(async () => builders());
+
     const message = await fetchMessage({
       threadId: THREAD_ID,
       messageId: encodeMessageId({
@@ -534,9 +536,11 @@ describe('fetchMessage', () => {
         commentId: 1,
       }),
       subject: subjectOf(api, ISSUE_REF),
-      builders: builders(),
+      builders: resolveBuilders,
     });
+
     expect(message).toBeNull();
+    expect(resolveBuilders).not.toHaveBeenCalled();
   });
 
   it('a :u: id is null (no single-fetch API exists for it)', async () => {
@@ -550,7 +554,7 @@ describe('fetchMessage', () => {
         created: '2026-09-03T04:05:06Z',
       }),
       subject: subjectOf(api, ISSUE_REF),
-      builders: builders(),
+      builders: async () => builders(),
     });
     expect(message).toBeNull();
   });
@@ -561,7 +565,7 @@ describe('fetchMessage', () => {
       threadId: THREAD_ID,
       messageId: ISSUE_FIXTURE.commentMessageId(999),
       subject: subjectOf(api, ISSUE_REF),
-      builders: builders(),
+      builders: async () => builders(),
     });
     expect(message).toBeNull();
   });
@@ -582,7 +586,7 @@ describe('fetchMessage', () => {
       threadId: PULL_REQUEST_THREAD_ID,
       messageId: PULL_REQUEST_FIXTURE.commentMessageId(commentId),
       subject: subjectOf(recording, PULL_REQUEST_REF),
-      builders: builders(),
+      builders: async () => builders(),
     });
 
     expect(message?.text).toBe('Comment 2');
@@ -623,7 +627,7 @@ describe('fetchSubject', () => {
       threadId: PULL_REQUEST_THREAD_ID,
       messageId: PULL_REQUEST_FIXTURE.commentMessageId(commentId),
       subject,
-      builders: builders(),
+      builders: async () => builders(),
     });
     if (message === null) {
       throw new Error('the pull request comment was not returned');
