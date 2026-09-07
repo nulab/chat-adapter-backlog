@@ -11,9 +11,7 @@ pnpm add @nulab/chat-adapter-backlog chat
 ```
 
 `chat` is a peer dependency at `^4.39.0` — a caret range, so upgrading the core
-does not require a matching adapter release. Node 20 or newer. Release numbers
-track `chat`, so the adapter built against `chat@4.39.x` carries a `4.39.x`
-number of its own.
+does not require a matching adapter release. Node 20 or newer.
 
 ## Quick start
 
