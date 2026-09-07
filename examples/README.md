@@ -19,8 +19,8 @@ links above are dead until the PR that adds that example merges.
 
 ## Shared setup
 
-All three examples need the same four things from Backlog and the same shape of
-Vercel project. Do this once.
+All three examples want the same things from Backlog and the same shape of
+Vercel project. Do this once; an example's own README picks up from here.
 
 ### 1. A bot user, its API key, and its numeric id
 
@@ -120,8 +120,8 @@ in full.
 
 ## What every example looks like
 
-The same seven files, in the same places, so that reading a second example
-costs nothing:
+The same files, in the same places, so that reading a second example costs
+nothing:
 
 ```
 examples/<NN>-<name>/
@@ -147,11 +147,18 @@ From the repository root:
 
 ```sh
 pnpm install
+pnpm build   # required, see below
 pnpm --filter @nulab/chat-adapter-backlog-example-<name> typecheck
 pnpm --filter @nulab/chat-adapter-backlog-example-<name> test
 ```
 
-CI runs `typecheck` and `test` for every example on every pull request, and the
+`pnpm build` first, because an example depends on the adapter as `workspace:*`
+and so resolves it through the root `package.json`, whose types are
+`./dist/index.d.ts` — and `dist/` is not committed. Skip the build and every
+example fails to typecheck with `TS2307` on its adapter import. That is also
+why each `vercel.json` builds at the repository root.
+
+CI runs the same three steps for every example on every pull request, and the
 root `pnpm lint` and `pnpm format:check` cover `examples/` too.
 
 ## Limits they share
