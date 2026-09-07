@@ -17,6 +17,16 @@ export const RATE_LIMIT_BUCKETS = [
 
 const DEFAULT_MAX_RETRIES = 1;
 const DEFAULT_MAX_WAIT_MS = 60_000;
+const MIN_RETRY_WAIT_MS = 1_000;
+const MAX_RETRY_JITTER_MS = 250;
+
+function finiteHeaderNumber(header: string | null): number | undefined {
+  if (header === null || header.trim().length === 0) {
+    return undefined;
+  }
+  const value = Number(header);
+  return Number.isFinite(value) ? value : undefined;
+}
 
 /**
  * Classifies a request into one of the four buckets from
@@ -89,13 +99,13 @@ export class RateLimitTracker {
     ) {
       return;
     }
-    const limit = Number(limitHeader);
-    const remaining = Number(remainingHeader);
-    const resetSeconds = Number(resetHeader);
+    const limit = finiteHeaderNumber(limitHeader);
+    const remaining = finiteHeaderNumber(remainingHeader);
+    const resetSeconds = finiteHeaderNumber(resetHeader);
     if (
-      Number.isNaN(limit) ||
-      Number.isNaN(remaining) ||
-      Number.isNaN(resetSeconds)
+      limit === undefined ||
+      remaining === undefined ||
+      resetSeconds === undefined
     ) {
       return;
     }
@@ -141,21 +151,25 @@ export function decideRetry(
   attempt: number,
   resetHeader: string | null,
   now: number,
-  options: RetryOptions | undefined
+  options: RetryOptions | undefined,
+  random: () => number = Math.random
 ): RetryDecision {
   const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
   const maxWaitMs = options?.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
 
-  const resetSeconds =
-    resetHeader === null || Number.isNaN(Number(resetHeader))
-      ? undefined
-      : Number(resetHeader);
+  const resetSeconds = finiteHeaderNumber(resetHeader);
   const resetAt =
     resetSeconds === undefined ? undefined : new Date(resetSeconds * 1000);
+  // A past reset can mean clock skew or that the next server window has not
+  // become observable yet. Never retry in the same instant, and spread
+  // callers that received the same epoch-second header across a bounded
+  // quarter-second window. A missing header still uses exactly maxWaitMs: an
+  // added jitter would exceed the caller's declared ceiling by construction.
   const waitMs =
     resetSeconds === undefined
       ? maxWaitMs
-      : Math.max(resetSeconds * 1000 - now, 0);
+      : Math.max(resetSeconds * 1000 - now, MIN_RETRY_WAIT_MS) +
+        retryJitterMs(random());
   const retryAfterSeconds = Math.ceil(waitMs / 1000);
 
   if (attempt >= maxRetries || waitMs > maxWaitMs) {
@@ -163,6 +177,13 @@ export function decideRetry(
   }
 
   return { shouldRetry: true, waitMs, retryAfterSeconds, resetAt };
+}
+
+function retryJitterMs(sample: number): number {
+  const normalizedRandom = Number.isFinite(sample)
+    ? Math.min(Math.max(sample, 0), 1 - Number.EPSILON)
+    : 0;
+  return Math.floor(normalizedRandom * MAX_RETRY_JITTER_MS);
 }
 
 /** Builds the error thrown when a 429 cannot be retried further. */

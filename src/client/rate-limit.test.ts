@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { classifyBucket, decideRetry, RateLimitTracker } from './rate-limit.js';
 
@@ -124,6 +124,21 @@ describe('RateLimitTracker', () => {
     );
     expect(tracker.snapshot('example.backlog.com').read).toBeUndefined();
   });
+
+  it('treats an empty rate-limit header as missing rather than numeric zero', () => {
+    const tracker = new RateLimitTracker();
+    tracker.record(
+      'example.backlog.com',
+      'read',
+      new Headers({
+        'X-RateLimit-Limit': '600',
+        'X-RateLimit-Remaining': '599',
+        'X-RateLimit-Reset': '',
+      })
+    );
+
+    expect(tracker.snapshot('example.backlog.com').read).toBeUndefined();
+  });
 });
 
 describe('decideRetry', () => {
@@ -131,7 +146,7 @@ describe('decideRetry', () => {
     const now = 1_000_000_000_000;
     const resetSeconds = String(now / 1000 + 2);
 
-    const decision = decideRetry(0, resetSeconds, now, undefined);
+    const decision = decideRetry(0, resetSeconds, now, undefined, () => 0);
 
     expect(decision.shouldRetry).toBe(true);
     expect(decision.waitMs).toBe(2000);
@@ -141,7 +156,13 @@ describe('decideRetry', () => {
     const now = 1_000_000_000_000;
     const resetSeconds = String(now / 1000 + 300);
 
-    const decision = decideRetry(0, resetSeconds, now, { maxWaitMs: 60_000 });
+    const decision = decideRetry(
+      0,
+      resetSeconds,
+      now,
+      { maxWaitMs: 60_000 },
+      () => 0
+    );
 
     expect(decision.shouldRetry).toBe(false);
     expect(decision.retryAfterSeconds).toBe(300);
@@ -151,7 +172,13 @@ describe('decideRetry', () => {
     const now = 1_000_000_000_000;
     const resetSeconds = String(now / 1000 + 1);
 
-    const decision = decideRetry(1, resetSeconds, now, { maxRetries: 1 });
+    const decision = decideRetry(
+      1,
+      resetSeconds,
+      now,
+      { maxRetries: 1 },
+      () => 0
+    );
 
     expect(decision.shouldRetry).toBe(false);
   });
@@ -160,7 +187,13 @@ describe('decideRetry', () => {
     const now = 1_000_000_000_000;
     const resetSeconds = String(now / 1000 + 1);
 
-    const decision = decideRetry(0, resetSeconds, now, { maxRetries: 0 });
+    const decision = decideRetry(
+      0,
+      resetSeconds,
+      now,
+      { maxRetries: 0 },
+      () => 0
+    );
 
     expect(decision.shouldRetry).toBe(false);
   });
@@ -175,5 +208,54 @@ describe('decideRetry', () => {
 
     expect(decision.waitMs).toBe(60_000);
     expect(decision.shouldRetry).toBe(true);
+  });
+
+  it('waits at least one second and reports retryAfter 1 for a past reset', () => {
+    const now = 1_000_000_000_000;
+
+    const decision = decideRetry(
+      0,
+      String(now / 1000 - 10),
+      now,
+      undefined,
+      () => 0
+    );
+
+    expect(decision.shouldRetry).toBe(true);
+    expect(decision.waitMs).toBe(1_000);
+    expect(decision.retryAfterSeconds).toBe(1);
+  });
+
+  it('treats an empty reset header as missing and waits maxWaitMs', () => {
+    const decision = decideRetry(
+      0,
+      '   ',
+      1_000_000_000_000,
+      { maxWaitMs: 12_345 },
+      () => 0.5
+    );
+
+    expect(decision.resetAt).toBeUndefined();
+    expect(decision.waitMs).toBe(12_345);
+    expect(decision.retryAfterSeconds).toBe(13);
+  });
+
+  it('adds jitter from zero up to but not including 250 milliseconds', () => {
+    const now = 1_000_000_000_000;
+    const resetSeconds = String(now / 1000 + 2);
+
+    const lower = decideRetry(0, resetSeconds, now, undefined, () => 0);
+    const upper = decideRetry(0, resetSeconds, now, undefined, () => 1);
+
+    expect(lower.waitMs).toBe(2_000);
+    expect(upper.waitMs).toBe(2_249);
+  });
+
+  it('does not sample jitter when the reset header is missing', () => {
+    const random = vi.fn(() => 0.5);
+
+    decideRetry(0, null, 1_000_000_000_000, undefined, random);
+
+    expect(random).not.toHaveBeenCalled();
   });
 });
