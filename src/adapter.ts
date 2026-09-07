@@ -1286,32 +1286,42 @@ export class BacklogAdapter implements Adapter<
 
     const { host, payload } = raw;
     const installation = this.resolveInstallation(host);
-    const channelId = `backlog:${host}:${payload.project.id}`;
+
+    // Re-validated rather than read through its declared type, for the reason
+    // `parseBulkUpdatePayload` re-parses a bulk delivery: `raw.payload` is the
+    // body as received (§5.2 "not a stripped copy") and that type is reached
+    // by a cast, so nothing the schema decided has reached this value. Reading
+    // it directly made `notifications`' `[]` fallback unreachable at run time
+    // — a delivery without the key threw inside the dispatched factory, after
+    // the 200 had been sent, and the message was lost rather than falling back
+    // to the textual and assignment rules (§5.4 rule 6).
+    const parsed = parseActivity(payload.type, payload);
+    if ('issuePaths' in parsed) {
+      throw new ValidationError(
+        'backlog',
+        `parseMessage: raw.payload is not a valid type ${payload.type} activity`
+      );
+    }
+    const { activity } = parsed;
+    // Stated as "not a deletion, not a bulk update" rather than as the list of
+    // types §5.3 does map, although either form narrows: a positive list
+    // silently drops a type added to `ParsedActivity` later, while excluding
+    // these two lets it through to `buildInboundMessage` below, where it is a
+    // compile error until §5.3 has a mapping row for it.
+    if (activity.type === 4 || activity.type === 14) {
+      throw new ValidationError(
+        'backlog',
+        `parseMessage: activity type ${activity.type} produces no message`
+      );
+    }
+
+    const channelId = `backlog:${host}:${activity.project.id}`;
     if (!this.projectCache.has(channelId)) {
       this.logger.warn('textFormattingRule uncached; assuming markdown', {
         host,
-        projectId: payload.project.id,
+        projectId: activity.project.id,
       });
     }
-
-    // Listed positively rather than as "not a deletion" so a type that is
-    // added to `RecognisedActivity` without a §5.3 mapping row fails here
-    // instead of reaching a builder that has no shape for it. The chain also
-    // narrows `payload` to `InboundActivity` without naming the type.
-    if (
-      payload.type !== 1 &&
-      payload.type !== 2 &&
-      payload.type !== 3 &&
-      payload.type !== 18 &&
-      payload.type !== 19 &&
-      payload.type !== 20
-    ) {
-      throw new ValidationError(
-        'backlog',
-        `parseMessage: activity type ${payload.type} produces no message`
-      );
-    }
-    const activity = payload;
 
     return buildInboundMessage(
       activity,
@@ -1321,8 +1331,8 @@ export class BacklogAdapter implements Adapter<
         botUserName: installation.botUserName,
         subject: this.subjectClient(
           host,
-          payload.project.id,
-          subjectOfActivity(payload)
+          activity.project.id,
+          subjectOfActivity(activity)
         ),
         payload,
       },
@@ -1344,13 +1354,6 @@ export class BacklogAdapter implements Adapter<
   ): Message<BacklogRawMessage> {
     const { host, payload, issueId } = raw;
     const installation = this.resolveInstallation(host);
-    const channelId = `backlog:${host}:${payload.project.id}`;
-    if (!this.projectCache.has(channelId)) {
-      this.logger.warn('textFormattingRule uncached; assuming markdown', {
-        host,
-        projectId: payload.project.id,
-      });
-    }
 
     const activity = parseBulkUpdatePayload(payload);
     if (activity === null) {
@@ -1358,6 +1361,14 @@ export class BacklogAdapter implements Adapter<
         'backlog',
         'parseMessage: raw.payload is not a type 14 activity'
       );
+    }
+
+    const channelId = `backlog:${host}:${activity.project.id}`;
+    if (!this.projectCache.has(channelId)) {
+      this.logger.warn('textFormattingRule uncached; assuming markdown', {
+        host,
+        projectId: activity.project.id,
+      });
     }
 
     const target = bulkUpdateTargets(activity).find(

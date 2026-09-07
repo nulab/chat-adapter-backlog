@@ -281,11 +281,19 @@ type BacklogRawMessage =
 
 `BacklogWebhookPayload` is the union of the recognised issue **and**
 pull-request activities (§5.2), the ones that name one subject; `payload.type`
-tells them apart. `BacklogBulkUpdatePayload` is the type-14 body instead — it
-names as many issues as `content.link[]` holds, so `bulkUpdate` carries its
-own `issueId` naming which entry this message is (§5.3, D22); `payload` is the
-whole delivery, unstripped, reachable again from every message the batch
-produced — and it is the schema's **input** type, because a delivery writes
+tells them apart. As with the bulk variant below, `payload` is the delivery as
+received — but the type declared here is the schemas' **output**, not their
+input, so it claims a validation the value has not had. `parseMessage`
+therefore parses again before reading a field off `raw.payload`, whatever the
+kind, and throws `ValidationError` when it does not parse. Reading through the
+declaration instead is what makes §5.2's `notifications[]` fallback
+unreachable at run time: the schema's `[]` never touches the value a handler
+is given.
+`BacklogBulkUpdatePayload` is the type-14 body instead — it names as many
+issues as `content.link[]` holds, so `bulkUpdate` carries its own `issueId`
+naming which entry this message is (§5.3, D22); `payload` is the whole
+delivery, unstripped, reachable again from every message the batch produced —
+and it is the schema's **input** type, because a delivery writes
 `content.link[].id` and `key_id` as decimal strings (§5.2) and only the
 adapter's own re-parse turns them into numbers; a consumer reading them off
 `raw.payload` gets `string | number`. The `comment` variant names its `subject` explicitly because a
@@ -1482,10 +1490,13 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   status change, type 2 assignee change (`content: null`), type 2 description
   edit, type 2 attachment add via changelog comment, type 2 without comment
   (`:u:`), type 3 with attachments, type 4 deletion, comment+status in one
-  event; unknown keys preserved in `raw.payload`; `isMention` for every §5.4
-  rule including the negative cases; same payload to two hosts yields two
-  threads and two distinct message ids; processing runs after the 200 and a
-  throwing factory is logged, not thrown.
+  event; unknown keys preserved in `raw.payload`; a `notifications[]` that is
+  absent or in a shape the schema replaces still dispatches, on an issue
+  **and** a pull-request type, with detection falling back to the text and to
+  `changes[]`; a `raw.payload` that does not parse → `ValidationError` instead
+  of a message; `isMention` for every §5.4 rule including the negative cases;
+  same payload to two hosts yields two threads and two distinct message ids;
+  processing runs after the 200 and a throwing factory is logged, not thrown.
 - **format**: every row of §9.4 and §9.5; single-line `{code}x{/code}`;
   unclosed `{code}`; unclosed `{quote}`; a list whose first marker is the
   deepest, a marker changing kind mid-run, a depth jump, a marker between two
