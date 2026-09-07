@@ -63,10 +63,9 @@ let declarations;
 try {
   declarations = readFileSync(path.join(ROOT, entry), 'utf8');
 } catch {
-  console.error(
+  throw new Error(
     `${entry} does not exist, so tsdown emitted no declarations for the published entry.`
   );
-  process.exit(1);
 }
 
 const leaked = [...specifiersIn(declarations)]
@@ -74,7 +73,7 @@ const leaked = [...specifiersIn(declarations)]
   .sort();
 
 if (leaked.length > 0) {
-  console.error(
+  throw new Error(
     `${entry} imports from ${leaked.map((s) => `"${s}"`).join(', ')}, ` +
       `but a consumer only installs ${[...ALLOWED_SPECIFIERS].map((s) => `"${s}"`).join(', ')}.\n` +
       'An exported type is reaching an implementation type. Declare the ' +
@@ -83,5 +82,4 @@ if (leaked.length > 0) {
       'published contract, add it to ALLOWED_SPECIFIERS here and to §3.1 in ' +
       'the same commit.'
   );
-  process.exit(1);
 }
