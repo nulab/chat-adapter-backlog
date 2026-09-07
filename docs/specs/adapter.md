@@ -555,6 +555,10 @@ Behavioural consequences of measured facts (details and dates in
   changelog, and `fetchMessages` returns that comment like any other. Ingress
   therefore expands one delivery into one `chat.processMessage` per entry,
   each into its own thread, each carrying a copy of the batch's `changes[]`.
+  The type-specific schema runs once before dispatch and `link[]` is projected
+  once; each lazy message factory closes over its validated target. A factory
+  does not re-parse the full payload or search `link[]` again. `parseMessage`
+  still revalidates a serialised `raw` supplied independently of ingress.
   Three shape details differ from every other type and are load-bearing:
   `content.link[].id` and `key_id` are decimal **strings** over the webhook
   (numbers from `GET /space/activities`); `changes[]` carries `field`,
