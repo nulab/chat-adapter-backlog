@@ -8,7 +8,7 @@ import {
   strong,
   text,
 } from 'chat';
-import type { Content, Root as RootNode } from 'chat';
+import type { Content, List, ListItem, Root as RootNode } from 'chat';
 import { describe, expect, it } from 'vitest';
 
 import { BacklogNotationConverter } from './notation';
@@ -17,6 +17,20 @@ function heading1(children: Content[]): Content {
   // `chat` does not export a `heading` builder, so tests construct the node
   // literally — this mirrors what `BacklogNotationConverter.toAst` produces.
   return { type: 'heading', depth: 1, children } as Content;
+}
+
+// `chat` exports no list builders either, and the tests below are about depth,
+// so the nesting reads better as calls than as node literals.
+function listItem(children: ListItem['children']): ListItem {
+  return { type: 'listItem', children };
+}
+
+function textItem(value: string): ListItem {
+  return listItem([paragraph([text(value)])]);
+}
+
+function list(ordered: boolean, children: ListItem[]): List {
+  return { type: 'list', ordered, children };
 }
 
 const converter = new BacklogNotationConverter();
@@ -232,6 +246,14 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
     ]);
   });
 
+  it('closes an unclosed quote macro at end of input', () => {
+    const ast = converter.toAst('{quote}\nquoted text');
+
+    expect(ast.children).toEqual([
+      blockquote([paragraph([text('quoted text')])]),
+    ]);
+  });
+
   it('translates > prefixed lines to a blockquote', () => {
     const ast = converter.toAst('> quoted text');
 
@@ -295,6 +317,107 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
     ]);
   });
 
+  it('keeps the deeper first item when a later marker is shallower', () => {
+    const ast = converter.toAst('--- deep first\n- shallow');
+
+    expect(ast.children).toEqual([
+      list(false, [textItem('deep first')]),
+      list(false, [textItem('shallow')]),
+    ]);
+  });
+
+  it('leaves markers at two depths as two lists, not one list of two items', () => {
+    const ast = converter.toAst('-- indented\n- back');
+
+    // §9.5: joining them would read better here and cost the depth in every
+    // other case, so a shallower marker always starts its own list. Do not
+    // "simplify" this to one two-item list.
+    expect(ast.children).toEqual([
+      list(false, [textItem('indented')]),
+      list(false, [textItem('back')]),
+    ]);
+  });
+
+  it('nests a marker between two open depths as a second list in the same item', () => {
+    const ast = converter.toAst('- a\n--- c\n-- b');
+
+    expect(ast.children).toEqual([
+      list(false, [
+        listItem([
+          paragraph([text('a')]),
+          list(false, [textItem('c')]),
+          list(false, [textItem('b')]),
+        ]),
+      ]),
+    ]);
+  });
+
+  it('closes the nested list when the marker returns to the outer depth', () => {
+    const ast = converter.toAst('- one\n-- nested\n- two');
+
+    expect(ast.children).toEqual([
+      list(false, [
+        listItem([paragraph([text('one')]), list(false, [textItem('nested')])]),
+        textItem('two'),
+      ]),
+    ]);
+  });
+
+  it('opens a single nested list for a depth jump of more than one', () => {
+    const ast = converter.toAst('- one\n--- three');
+
+    expect(ast.children).toEqual([
+      list(false, [
+        listItem([paragraph([text('one')]), list(false, [textItem('three')])]),
+      ]),
+    ]);
+  });
+
+  it('starts a second list when the marker changes kind at the same depth', () => {
+    const ast = converter.toAst('+ one\n- two');
+
+    expect(ast.children).toEqual([
+      list(true, [textItem('one')]),
+      list(false, [textItem('two')]),
+    ]);
+  });
+
+  it('nests a deeper marker of the other kind as an ordered child list', () => {
+    const ast = converter.toAst('- outer\n++ inner');
+
+    expect(ast.children).toEqual([
+      list(false, [
+        listItem([paragraph([text('outer')]), list(true, [textItem('inner')])]),
+      ]),
+    ]);
+  });
+
+  it('a marker followed by nothing ends the list and stays a paragraph', () => {
+    const ast = converter.toAst('- one\n-\n- two');
+
+    expect(ast.children).toEqual([
+      list(false, [textItem('one')]),
+      paragraph([text('-')]),
+      list(false, [textItem('two')]),
+    ]);
+  });
+
+  it('a CRLF line ending neither ends the list nor reaches the item text', () => {
+    const ast = converter.toAst('- one\r\n-- two');
+
+    expect(ast.children).toEqual([
+      list(false, [
+        listItem([paragraph([text('one')]), list(false, [textItem('two')])]),
+      ]),
+    ]);
+  });
+
+  it('takes the item text from after a tab separating it from the marker', () => {
+    const ast = converter.toAst('-\tone');
+
+    expect(ast.children).toEqual([list(false, [textItem('one')])]);
+  });
+
   it('a header row suffixed with h becomes a table header', () => {
     const ast = converter.toAst('|Name|Value|h\n|a|1|');
 
@@ -333,6 +456,31 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
             children: [
               { type: 'tableCell', children: [text('Header')] },
               { type: 'tableCell', children: [text('data')] },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('splits a row at every |, a link url included', () => {
+    const ast = converter.toAst('|[[a>https://example.backlog.com/?x=1|y]]|b|');
+
+    // §9.5 gives `|` no escape, so a cell ends at the next one wherever it
+    // falls; the halves of the split link are left as the text they now are.
+    expect(ast.children).toEqual([
+      {
+        type: 'table',
+        children: [
+          {
+            type: 'tableRow',
+            children: [
+              {
+                type: 'tableCell',
+                children: [text('[[a>https://example.backlog.com/?x=1')],
+              },
+              { type: 'tableCell', children: [text('y]]')] },
+              { type: 'tableCell', children: [text('b')] },
             ],
           },
         ],
@@ -399,6 +547,44 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
 
     expect(ast.children).toEqual([paragraph(expected)]);
   });
+
+  it('nests bold inside italic', () => {
+    const ast = converter.toAst("'''italic ''bold'' italic'''");
+
+    expect(ast.children).toEqual([
+      paragraph([
+        {
+          type: 'emphasis',
+          children: [text('italic '), strong([text('bold')]), text(' italic')],
+        },
+      ]),
+    ]);
+  });
+
+  it('ends bold at the quote pair that opens a nested italic', () => {
+    const ast = converter.toAst("''bold '''both''' bold''");
+
+    // The longer marker only wins where it opens a span, not where it closes
+    // one: `''` ends at the next `''`, which here is the first two quotes of
+    // the inner `'''`. Pinned so the loss stays visible — italic outside bold
+    // (above) is the nesting that survives.
+    expect(ast.children).toEqual([
+      paragraph([
+        strong([text('bold ')]),
+        text("'both"),
+        strong([text("' bold")]),
+      ]),
+    ]);
+  });
+
+  it.each(["''bold", "'''italic", '%%gone', '[[https://example.backlog.com'])(
+    'leaves the unterminated marker in %s as plain text',
+    (notation) => {
+      const ast = converter.toAst(notation);
+
+      expect(ast.children).toEqual([paragraph([text(notation)])]);
+    }
+  );
 
   it.each([
     '&color(red) { text }',

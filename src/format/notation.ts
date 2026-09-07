@@ -12,7 +12,7 @@ import {
   strong,
   text,
 } from 'chat';
-import type { Content, List, MdastTable, Root } from 'chat';
+import type { Content, List, ListItem, MdastTable, Root } from 'chat';
 
 /**
  * The subset of `Content` that inline notation parsing can ever produce.
@@ -167,7 +167,9 @@ export class BacklogNotationConverter extends BaseFormatConverter {
  * issue-key auto-links) as plain text.
  */
 function parseNotationBlocks(input: string): Content[] {
-  const lines = input.split('\n');
+  // `\r?\n`, not `\n`: a line-based matcher anchored at `$` (a list marker,
+  // a heading) never matches a line a CRLF body left a trailing `\r` on.
+  const lines = input.split(/\r?\n/);
   const blocks: Content[] = [];
   let paragraphLines: string[] = [];
 
@@ -230,8 +232,8 @@ function parseNotationBlocks(input: string): Content[] {
     const listMarker = matchListMarker(line);
     if (listMarker) {
       flushParagraph();
-      const { node, nextIndex } = parseList(lines, i);
-      blocks.push(node);
+      const { list, nextIndex } = parseList(lines, i, listMarker);
+      blocks.push(list);
       i = nextIndex;
       continue;
     }
@@ -365,92 +367,74 @@ function matchHeading(
   return { depth, text: match[2] ?? '' };
 }
 
-function matchListMarker(
-  line: string
-): { ordered: boolean; depth: number } | null {
-  const match = /^([+-]+)\s+/.exec(line);
+type ListMarker = { ordered: boolean; depth: number; text: string };
+
+function matchListMarker(line: string): ListMarker | null {
+  const match = /^([+-]+)\s+(.*)$/.exec(line);
   if (!match) {
     return null;
   }
   const marker = match[1] ?? '';
-  return { ordered: marker[0] === '+', depth: marker.length };
-}
-
-/**
- * `+`/`-` lists with depth expressed by marker repetition
- * (docs/specs/adapter.md §9.5). Backlog has no single-list nesting model
- * documented beyond "repeat the marker", so each depth transition opens or
- * closes a nested `list` node to match.
- */
-function parseList(
-  lines: string[],
-  startIndex: number
-): { node: Content; nextIndex: number } {
-  type StackFrame = { list: List; depth: number };
-  const stack: StackFrame[] = [];
-
-  let i = startIndex;
-  while (i < lines.length) {
-    const current = lines[i] ?? '';
-    const marker = matchListMarker(current);
-    if (!marker) {
-      break;
-    }
-    const itemText = current
-      .slice(current.indexOf(' ', marker.depth - 1) + 1)
-      .trimStart();
-
-    while (
-      stack.length > 0 &&
-      (stack[stack.length - 1]?.depth ?? 0) > marker.depth
-    ) {
-      stack.pop();
-    }
-
-    if (
-      stack.length === 0 ||
-      (stack[stack.length - 1]?.depth ?? 0) < marker.depth
-    ) {
-      const nested: List = {
-        type: 'list',
-        ordered: marker.ordered,
-        children: [],
-      };
-      const parent = stack[stack.length - 1];
-      if (parent) {
-        const parentItem =
-          parent.list.children[parent.list.children.length - 1];
-        if (parentItem) {
-          parentItem.children.push(nested);
-        }
-      }
-      stack.push({ list: nested, depth: marker.depth });
-    }
-
-    const top = stack[stack.length - 1];
-    if (top) {
-      top.list.ordered = marker.ordered;
-      top.list.children.push({
-        type: 'listItem',
-        children: toListItemChildren(inlineToNodes(itemText)),
-      });
-    }
-    i += 1;
-  }
-
-  const outermost = stack[0];
   return {
-    node: outermost
-      ? outermost.list
-      : { type: 'list', ordered: false, children: [] },
-    nextIndex: i,
+    ordered: marker[0] === '+',
+    depth: marker.length,
+    text: match[2] ?? '',
   };
 }
 
-function toListItemChildren(
-  nodes: PhrasingNode[]
-): [Extract<Content, { type: 'paragraph' }>] {
-  return [paragraph(nodes)];
+/**
+ * One list: the items sharing `marker`'s depth and kind, plus everything
+ * nested under them (`+`/`-` with depth by marker repetition,
+ * docs/specs/adapter.md §9.5). Each depth transition opens one nested `list`,
+ * however far the marker jumps, and the list ends at the first marker it
+ * cannot contain — shallower than its own, or of the other kind at its own
+ * depth. The caller resumes there: `parseNotationBlocks` for the outermost
+ * list, the enclosing list for a nested one.
+ *
+ * Neither marker can be absorbed instead: mdast hangs a nested `list` off a
+ * `listItem`, so a list shallower than this one has no item above it to hang
+ * from, and reopening this list with the other kind would put its `ordered`
+ * in the hands of whichever marker came last.
+ */
+function parseList(
+  lines: string[],
+  startIndex: number,
+  marker: ListMarker
+): { list: List; nextIndex: number } {
+  const list: List = {
+    type: 'list',
+    ordered: marker.ordered,
+    children: [],
+  };
+  let currentItem = listItemOf(marker.text);
+  list.children.push(currentItem);
+
+  let i = startIndex + 1;
+  while (i < lines.length) {
+    const next = matchListMarker(lines[i] ?? '');
+    if (!next || next.depth < marker.depth) {
+      break;
+    }
+    if (next.depth === marker.depth) {
+      if (next.ordered !== marker.ordered) {
+        break;
+      }
+      currentItem = listItemOf(next.text);
+      list.children.push(currentItem);
+      i += 1;
+      continue;
+    }
+
+    const nested = parseList(lines, i, next);
+    currentItem.children.push(nested.list);
+    i = nested.nextIndex;
+  }
+
+  return { list, nextIndex: i };
+}
+
+function listItemOf(itemText: string): ListItem {
+  return { type: 'listItem', children: [paragraph(inlineToNodes(itemText))] };
 }
 
 function matchTableRow(line: string): boolean {
