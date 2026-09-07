@@ -1,0 +1,23 @@
+{
+  "name": "chat-adapter-backlog-example-bug-intake",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "deploy": "npx vercel deploy",
+    "deploy:prod": "npx vercel deploy --prod"
+  },
+  "dependencies": {
+    "@chat-adapter/state-memory": "^4.39.0",
+    "@nulab/chat-adapter-backlog": "^0",
+    "@vercel/functions": "^3.9.5",
+    "ai": "^6.0.276",
+    "chat": "^4.39.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "typescript": "^7.0.2"
+  }
+}
