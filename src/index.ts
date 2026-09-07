@@ -30,9 +30,17 @@
  * surface; a consumer addresses a subject through `BacklogSubjectRef` and the
  * id codec instead.
  *
- * Also not exported, per §3.1: the `backlog-js` client wrapper, the zod
- * schemas, the plain-text fallback converter and the fixtures. Nothing from
- * `backlog-js` or `zod` appears in an exported type.
+ * Also not exported, per §3.1: the port's `backlog-js` wrapper factory, the
+ * zod schemas, the plain-text fallback converter and the fixtures. Nothing
+ * from `zod` appears in an exported type.
+ *
+ * `backlog-js` does, and deliberately: `BacklogAdapter.client(host)` hands
+ * out the very client the port speaks through, so a consumer needing an
+ * endpoint the port does not name spends the adapter's own rate-limit
+ * accounting, retries and error mapping instead of standing up a second
+ * client beside it. The cost is that this package's public types move with
+ * `backlog-js`'s — a trade taken knowingly, since it is the library this
+ * adapter is built on and the one the same vendor ships.
  */
 
 export { BacklogAdapter, createBacklogAdapter } from './adapter';
@@ -110,6 +118,12 @@ export type {
   StarTarget,
   TextFormattingRule,
 } from './client/port';
+
+/**
+ * The client `BacklogAdapter.client(host)` returns, re-exported so a consumer
+ * can name it without depending on `backlog-js` directly.
+ */
+export type { Backlog } from 'backlog-js';
 
 export type {
   InMemoryBacklogApi,

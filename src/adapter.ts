@@ -1,4 +1,5 @@
 import {
+  AdapterError,
   AuthenticationError,
   ResourceNotFoundError,
   toBuffer,
@@ -6,7 +7,8 @@ import {
 } from '@chat-adapter/shared';
 import { ConsoleLogger, Message as MessageCtor } from 'chat';
 
-import { createBacklogJsApi } from './client/backlog-js';
+import { createBacklogJsTransport } from './client/backlog-js';
+import type { Backlog } from 'backlog-js';
 import type {
   BacklogApi,
   BacklogCredentials,
@@ -115,17 +117,29 @@ import type {
  * port built before it, so a resolved `Logger` would send the rate-limit lines
  * to the construction-time `ConsoleLogger` forever.
  */
-function defaultCreateApi(
+function defaultCreateTransport(
   retry: RetryOptions,
   logger: () => Logger
-): (installation: ResolvedInstallation) => BacklogApi {
+): (installation: ResolvedInstallation) => AdapterTransport {
   return (installation) =>
-    createBacklogJsApi({
+    createBacklogJsTransport({
       host: installation.host,
       credentials: toCredentials(installation),
       retry,
       logger,
     });
+}
+
+/**
+ * What one host's traffic goes through. `client` is absent exactly when the
+ * `createApi` seam replaced the port with something that is not
+ * `backlog-js`-backed — an in-memory double, typically — because there is then
+ * no client to hand out and inventing one would talk to the network from a
+ * test.
+ */
+interface AdapterTransport {
+  api: BacklogApi;
+  client?: Backlog;
 }
 
 function toCredentials(installation: ResolvedInstallation): BacklogCredentials {
@@ -518,9 +532,9 @@ export class BacklogAdapter implements Adapter<
   readonly userName: string;
 
   private readonly installations: Map<string, ResolvedInstallation>;
-  private readonly createApi: (
+  private readonly createTransport: (
     installation: ResolvedInstallation
-  ) => BacklogApi;
+  ) => AdapterTransport;
   /**
    * `rateLimit`/`maxWebhookBodyBytes`/`webhookVerifier` are validated in the
    * constructor (docs/specs/adapter.md §3.2) and read by `handleWebhook` and
@@ -532,7 +546,7 @@ export class BacklogAdapter implements Adapter<
     maxWebhookBodyBytes: number;
     webhookVerifier: BacklogAdapterConfig['webhookVerifier'];
   };
-  private readonly apiCache = new Map<string, BacklogApi>();
+  private readonly apiCache = new Map<string, AdapterTransport>();
   /**
    * `channelId -> { projectKey, textFormattingRule }` (docs/specs/adapter.md
    * §9.1, §7.3, D14): populated by one Get Project per channel and cached
@@ -626,9 +640,14 @@ export class BacklogAdapter implements Adapter<
       webhookVerifier: config.webhookVerifier,
     };
     this.logger = config.logger ?? new ConsoleLogger('info').child('backlog');
-    this.createApi =
-      config.createApi ??
-      defaultCreateApi(this.ingressConfig.rateLimit, () => this.logger);
+    const createApi = config.createApi;
+    this.createTransport =
+      createApi === undefined
+        ? defaultCreateTransport(
+            this.ingressConfig.rateLimit,
+            () => this.logger
+          )
+        : (installation) => ({ api: createApi(installation) });
   }
 
   /**
@@ -722,13 +741,43 @@ export class BacklogAdapter implements Adapter<
   }
 
   api(host: string): BacklogApi {
-    const installation = this.resolveInstallation(host);
-    let api = this.apiCache.get(host);
-    if (api === undefined) {
-      api = this.createApi(installation);
-      this.apiCache.set(host, api);
+    return this.transport(host).api;
+  }
+
+  /**
+   * The `backlog-js` client this adapter's own traffic goes through, for the
+   * Backlog endpoints the port does not name — changing an assignee, reading
+   * an issue's custom fields, anything else a bot needs and the adapter does
+   * not.
+   *
+   * It is handed out rather than left to the caller to construct because a
+   * second client would spend the same per-user rate limit without counting
+   * it: this one carries the adapter's bucket accounting, its bounded 429
+   * retry, its `@chat-adapter/shared` error mapping and its per-call
+   * credential resolution (docs/specs/adapter.md §3.1, §8.2). It holds no
+   * credential of its own, so it is safe to keep past the call that asked for
+   * it.
+   */
+  client(host: string): Backlog {
+    const { client } = this.transport(host);
+    if (client === undefined) {
+      throw new AdapterError(
+        'no Backlog client: this adapter was constructed with a custom `createApi`, which replaces the `backlog-js`-backed port',
+        'backlog',
+        'NO_CLIENT'
+      );
     }
-    return api;
+    return client;
+  }
+
+  private transport(host: string): AdapterTransport {
+    const installation = this.resolveInstallation(host);
+    let transport = this.apiCache.get(host);
+    if (transport === undefined) {
+      transport = this.createTransport(installation);
+      this.apiCache.set(host, transport);
+    }
+    return transport;
   }
 
   /**

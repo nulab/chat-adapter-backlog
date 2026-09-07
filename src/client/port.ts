@@ -1,9 +1,14 @@
 /**
  * The Backlog API port: every domain type and the `BacklogApi` interface
- * itself are owned here so the rest of the adapter never sees a `backlog-js`
- * or `zod` type. `src/client/backlog-js.ts` and `src/client/in-memory.ts`
- * both implement this interface; swapping the former for a plain `fetch`
- * client later touches neither this file's consumers nor its shape.
+ * itself are owned here so the modules written against it — egress, reads,
+ * the subject layer — never see a `backlog-js` or `zod` type.
+ * `src/client/backlog-js.ts` and `src/client/in-memory.ts` both implement
+ * this interface, and either can back any of them.
+ *
+ * The adapter as a whole is not `backlog-js`-free, and stopped being so on
+ * purpose: `BacklogAdapter.client(host)` hands out the client the
+ * `backlog-js` implementation speaks through, for the endpoints this
+ * interface does not name (docs/specs/adapter.md §3.1).
  *
  * Method-to-endpoint-to-bucket mapping: docs/specs/adapter.md §8.1.
  */

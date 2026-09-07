@@ -144,19 +144,39 @@ types it references (`BacklogIssue`, `BacklogPullRequest`,
 `StarTarget`, `PullRequestRef`, `BacklogNotification`,
 `BacklogAttachmentInfo`, `TextFormattingRule`, request/query input types),
 `RateLimitSnapshot` and `RateLimitSnapshots`, `BacklogApiErrorDetail`,
-`InMemoryBacklogSeed`.
+`InMemoryBacklogSeed`, and `Backlog` — `backlog-js`'s own client class,
+re-exported so a consumer can name what `client(host)` returns without
+depending on `backlog-js` itself.
 
 Not exported: the internal subject layer (`SubjectClient`,
 `subjectClientFor`) that selects the issue or pull-request endpoint family
 for a thread — it is the seam egress and reads are written against
 (docs/plans/pull-request-support.md §3.4), not a consumer surface.
 
-Not exported: the `backlog-js` client wrapper, zod schemas, the plain-text
-fallback converter, fixtures. Nothing from `backlog-js` or `zod` appears in an
-exported type, and `chat` is the only module `dist/index.d.ts` may import —
-`scripts/check-published-types.mjs` fails `pnpm build` on any other, so
-`BacklogWebhookPayload` and `BacklogBulkUpdatePayload` are declared by hand in
-`src/types.ts` rather than aliased to a `z.infer`.
+Not exported: the port's `backlog-js` wrapper factory, zod schemas, the
+plain-text fallback converter, fixtures. Nothing from `zod` appears in an
+exported type, and `chat` and `backlog-js` are the only modules
+`dist/index.d.ts` may import — `scripts/check-published-types.mjs` fails
+`pnpm build` on any other, so `BacklogWebhookPayload` and
+`BacklogBulkUpdatePayload` are declared by hand in `src/types.ts` rather than
+aliased to a `z.infer`.
+
+`backlog-js` does appear in one, and the exception is deliberate:
+`BacklogAdapter.client(host)` returns the configured `Backlog` client the port
+itself speaks through, for the endpoints the port does not name — changing an
+assignee, reading an issue's custom fields, anything else a bot needs and this
+adapter does not. Handing it out rather than leaving a caller to construct one
+is what keeps the guarantees: the client carries the adapter's bucket
+accounting, its bounded 429 retry, its `@chat-adapter/shared` error mapping
+and its per-call credential resolution (§8.2), while a second client beside it
+would spend the same per-user budget uncounted. The cost is that this
+package's public types move with `backlog-js`'s, which is accepted because it
+is the library the adapter is built on and the same vendor ships both.
+
+`client(host)` throws `AdapterError` (`code: 'NO_CLIENT'`) when the adapter
+was constructed with a `createApi` seam, because the port is then not
+`backlog-js`-backed and there is no client to hand out. An unknown host is
+`ResourceNotFoundError`, as it is for `api(host)`.
 
 ### 3.2 `createBacklogAdapter(config?)`
 
@@ -1181,16 +1201,26 @@ naming the endpoint and the failing path, never a `ZodError`.
 Wraps `backlog-js@^0.20.1`. Two constraints shape it:
 
 - **Headers.** `backlog-js` entity methods return parsed bodies and discard
-  the `Response`; only `backlog.request({ method, path, params })` (public,
-  returns the raw `Response` after status checking) and the error objects
-  (`err.response`) expose headers. The implementation therefore goes through
-  `request()` (or a thin `fetch` wrapper) so `X-RateLimit-*` is read on
-  **every** response, success or failure; uploads/downloads use the
-  multipart/stream paths and still capture headers.
-- **Per-call credentials.** The resolver is awaited before each request and
-  placed in the `Backlog-API-Key` header or `Authorization: Bearer` header
+  the `Response`, so headers cannot be read off a return value. They are read
+  in the **injected `fetch`** instead, which is the one seam every method
+  reaches the network through (`request()` ends in
+  `this.fetch(url, init).then(this.checkStatus)`, 0.20.1). Bucket accounting,
+  the 429 retry (§8.4) and the error mapping (§8.5) all live there, so
+  `X-RateLimit-*` is read on **every** response, success or failure, whether
+  the call came from this port's own `request()` or from a consumer holding
+  `client(host)` (§3.1). A non-2xx throws from the injected `fetch`, before
+  `checkStatus` can turn it into a `backlog-js` error, so a mapped
+  `@chat-adapter/shared` error is what escapes either route.
+- **Per-call credentials.** The client is constructed carrying **no**
+  credential — `request()` sets an auth header only for a credential it was
+  configured with — and the resolver is awaited on every attempt, its result
+  placed on the `Backlog-API-Key` or `Authorization: Bearer` header
   ([Authentication](https://developer.nulab.com/docs/backlog/auth/)); the
   query-string `apiKey` form is never used (it leaks into logs and proxies).
+  That is also what makes the client safe to hand out: it holds no secret of
+  its own, and a token refreshed between calls is picked up by both routes.
+  A resolved credential the header rejects — one carrying CR/LF — is an
+  `AuthenticationError`, not a transport failure (§8.5).
 
 Timeouts: `backlog-js`'s `timeout` option is not a real fetch timeout; the
 implementation uses an `AbortSignal` (default 30 s) and maps aborts to
@@ -1551,10 +1581,17 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   `AuthenticationError`, and so is a resolved credential containing CR/LF,
   which reaches no request at all; a 2xx non-JSON or empty body, a binary body
   read failure, and a stalled body stream all stay inside the mapped
-  error/timeout boundary; an error body without an `errors[]` array still maps
+  error/timeout boundary, the stalled-stream case on the error path as well as
+  the success path; an error body without an `errors[]` array still maps
   by status and records its headers; past reset has a one-second floor, empty
   reset is missing, retry jitter stays in `[0, 250)` ms under an injected
-  random source; query string stripped from `cause.url`.
+  random source; query string stripped from `cause.url`. The client
+  `client(host)` hands out is held to the same list where it can be: a call
+  through it lands in the port's own snapshot, an issue list through it spends
+  `search`, its credential is resolved per call and never reaches the URL, a
+  CR/LF credential is an `AuthenticationError`, a failure is a
+  `@chat-adapter/shared` error rather than a `backlog-js` one, and a 429 is
+  retried once and then given up as `AdapterRateLimitError`.
 - **wiring**: real `Chat` + memory state: mention → `onNewMention` →
   `thread.post` → comment; redelivery within TTL deduped; subscribed follow-up
   → `onSubscribedMessage`; bot's own comment not delivered; assignment to the

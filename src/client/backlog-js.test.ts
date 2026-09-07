@@ -8,7 +8,7 @@ import {
 import { createMockLogger } from '@chat-adapter/tests';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createBacklogJsApi } from './backlog-js.js';
+import { createBacklogJsApi, createBacklogJsTransport } from './backlog-js.js';
 import { createFakeBacklogServer } from './backlog-js.fake-fetch.js';
 import {
   conformanceFixture,
@@ -390,6 +390,51 @@ describe('createBacklogJsApi', () => {
 
       const rejection = api.getIssue(issueId);
       const assertion = expect(rejection).rejects.toBeInstanceOf(NetworkError);
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(25);
+
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a stalled error body read inside the request timeout', async () => {
+    // The twin of the test above, on the failure path: the error body is what
+    // names the Backlog error code, so it is read before the status is
+    // mapped — and a 502 from in front of Backlog can answer its headers and
+    // then stall the stream just as a 200 can.
+    vi.useFakeTimers();
+    try {
+      let requestSignal: AbortSignal | null = null;
+      const response = new Response('', {
+        status: 502,
+        headers: rateLimitHeaders,
+      });
+      vi.spyOn(response, 'json').mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            requestSignal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('Aborted', 'AbortError')),
+              { once: true }
+            );
+          })
+      );
+      const fetchStub: typeof globalThis.fetch = async (_input, init) => {
+        requestSignal = init?.signal ?? null;
+        return response;
+      };
+      const api = createBacklogJsApi({
+        host,
+        credentials: { apiKey: () => 'test-api-key' },
+        fetch: fetchStub,
+        timeoutMs: 25,
+      });
+
+      const rejection = api.getIssue(issueId);
+      const assertion = expect(rejection).rejects.toBeInstanceOf(AdapterError);
       await Promise.resolve();
       await Promise.resolve();
       await vi.advanceTimersByTimeAsync(25);
@@ -820,6 +865,202 @@ describe('createBacklogJsApi', () => {
       expect(logger.warn).not.toHaveBeenCalled();
       expect(logger.info).not.toHaveBeenCalled();
       expect(logger.debug).not.toHaveBeenCalled();
+    });
+  });
+});
+
+/**
+ * The client the port speaks through is handed out as `transport.client`, so
+ * these state what a caller reaching past the port still gets: the same
+ * accounting, the same retry, the same errors and a credential resolved as
+ * late as the port's own.
+ */
+describe('createBacklogJsTransport', () => {
+  it('a call made through the client is counted in the port’s rate-limit snapshot', async () => {
+    const server = createFakeBacklogServer();
+    const { api, client } = createBacklogJsTransport({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: server.fetch,
+    });
+
+    await client.getIssue(issueId);
+
+    expect(api.rateLimit().read).toBeDefined();
+  });
+
+  it('an issue-list call through the client spends the search bucket, as it does through the port', async () => {
+    const server = createFakeBacklogServer();
+    const { api, client } = createBacklogJsTransport({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: server.fetch,
+    });
+
+    await client.getIssues({ projectId: [projectId], count: 10 });
+
+    expect(api.rateLimit().search).toBeDefined();
+    expect(api.rateLimit().read).toBeUndefined();
+  });
+
+  it('the client carries the credential the resolver returns, resolved again on every call', async () => {
+    const keys = ['first-key', 'second-key'];
+    const sent: string[] = [];
+    const server = createFakeBacklogServer({
+      validApiKeys: keys,
+      onRequest: ({ headers }) =>
+        sent.push(headers.get('Backlog-API-Key') ?? ''),
+    });
+    const { client } = createBacklogJsTransport({
+      host,
+      credentials: { apiKey: () => keys[sent.length] ?? 'first-key' },
+      fetch: server.fetch,
+    });
+
+    await client.getIssue(issueId);
+    await client.getIssue(issueId);
+
+    expect(sent).toEqual(keys);
+  });
+
+  it('the API key never reaches the URL, whichever way the request was made', async () => {
+    const urls: URL[] = [];
+    const server = createFakeBacklogServer({
+      validApiKeys: ['secret-key'],
+      onRequest: ({ url }) => urls.push(url),
+    });
+    const { client } = createBacklogJsTransport({
+      host,
+      credentials: { apiKey: () => 'secret-key' },
+      fetch: server.fetch,
+    });
+
+    await client.getIssue(issueId);
+
+    expect(urls.length).toBeGreaterThan(0);
+    for (const url of urls) {
+      expect(url.search).not.toContain('apiKey');
+    }
+  });
+
+  it('a failure through the client is an adapter error, not a backlog-js one', async () => {
+    const server = createFakeBacklogServer();
+    const { client } = createBacklogJsTransport({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: server.fetch,
+    });
+
+    await expect(client.getIssue(999_999)).rejects.toBeInstanceOf(
+      ResourceNotFoundError
+    );
+  });
+
+  it('a credential resolver that throws fails the call as an authentication error', async () => {
+    const server = createFakeBacklogServer();
+    const { client } = createBacklogJsTransport({
+      host,
+      credentials: {
+        apiKey: () => {
+          throw new Error('the vault is down');
+        },
+      },
+      fetch: server.fetch,
+    });
+
+    await expect(client.getIssue(issueId)).rejects.toBeInstanceOf(
+      AuthenticationError
+    );
+  });
+
+  it('a credential the header rejects is an authentication failure, not a transport one', async () => {
+    const server = createFakeBacklogServer();
+    const { client } = createBacklogJsTransport({
+      host,
+      credentials: { apiKey: () => 'key-with\r\nheader-injection' },
+      fetch: server.fetch,
+    });
+
+    await expect(client.getIssue(issueId)).rejects.toBeInstanceOf(
+      AuthenticationError
+    );
+  });
+
+  describe('429 through the client', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('is retried once, like a 429 through the port', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      let attempt = 0;
+      const fetchStub: typeof globalThis.fetch = async () => {
+        attempt += 1;
+        if (attempt === 1) {
+          return new Response(
+            JSON.stringify({
+              errors: [{ message: 'Too many requests', code: 13 }],
+            }),
+            {
+              status: 429,
+              headers: {
+                ...rateLimitHeaders,
+                'X-RateLimit-Reset': String(now + 2),
+              },
+            }
+          );
+        }
+        return new Response(JSON.stringify({ id: issueId }), {
+          status: 200,
+          headers: rateLimitHeaders,
+        });
+      };
+      const { client } = createBacklogJsTransport({
+        host,
+        credentials: { apiKey: () => 'test-api-key' },
+        fetch: fetchStub,
+        // Pinned like the port's own retry tests: the wait carries jitter, so
+        // a real `Math.random` would decide how far the timers must advance.
+        random: () => 0,
+      });
+
+      const resultPromise = client.getIssue(issueId);
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(resultPromise).resolves.toMatchObject({ id: issueId });
+      expect(attempt).toBe(2);
+    });
+
+    it('gives up as a rate-limit error once the reset is further off than maxWaitMs', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      const fetchStub: typeof globalThis.fetch = async () =>
+        new Response(
+          JSON.stringify({
+            errors: [{ message: 'Too many requests', code: 13 }],
+          }),
+          {
+            status: 429,
+            headers: {
+              ...rateLimitHeaders,
+              'X-RateLimit-Reset': String(now + 3_600),
+            },
+          }
+        );
+      const { client } = createBacklogJsTransport({
+        host,
+        credentials: { apiKey: () => 'test-api-key' },
+        fetch: fetchStub,
+        retry: { maxWaitMs: 1_000 },
+        random: () => 0,
+      });
+
+      await expect(client.getIssue(issueId)).rejects.toBeInstanceOf(
+        AdapterRateLimitError
+      );
     });
   });
 });

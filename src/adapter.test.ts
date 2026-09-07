@@ -16,6 +16,7 @@ import { Chat } from 'chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BacklogAdapter, createBacklogAdapter } from './adapter';
+import { createFakeBacklogServer } from './client/backlog-js.fake-fetch';
 import { createInMemoryBacklogApi } from './client/in-memory';
 import { conformanceFixture } from './client/conformance';
 import { encodeMessageId } from './ids';
@@ -598,6 +599,12 @@ threadIdContract<BacklogThreadId>({
 });
 
 describe('BacklogAdapter port wiring', () => {
+  // One test below replaces the global `fetch` so a handed-out client can
+  // answer without a network; nothing in this file restores spies globally.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   const base = {
     host: 'example.backlog.com',
     botUserId: 999,
@@ -630,6 +637,45 @@ describe('BacklogAdapter port wiring', () => {
   it('reports no rate-limit buckets before any request', () => {
     const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
     expect(adapter.rateLimit('example.backlog.com')).toEqual({});
+  });
+
+  it('hands out one client per host, and it is the one the port speaks through', async () => {
+    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
+    const client = adapter.client('example.backlog.com');
+
+    expect(client).toBe(adapter.client('example.backlog.com'));
+  });
+
+  it('a call through the handed-out client is counted in the adapter’s own rate-limit snapshot', async () => {
+    // The point of handing the client out rather than letting a consumer
+    // construct one: a second client would spend the same per-user budget
+    // without the adapter ever seeing it.
+    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
+    const server = createFakeBacklogServer();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(server.fetch);
+
+    await adapter
+      .client('example.backlog.com')
+      .getIssue(conformanceFixture.issueId);
+
+    expect(adapter.rateLimit('example.backlog.com').read).toBeDefined();
+  });
+
+  it('reports an unknown host as a missing installation when asked for a client', () => {
+    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
+    expect(() => adapter.client('other.backlog.com')).toThrow(
+      ResourceNotFoundError
+    );
+  });
+
+  it('has no client to hand out when a custom createApi replaced the port', () => {
+    const adapter = createBacklogAdapter({
+      ...base,
+      apiKey: 'key',
+      createApi: () => createInMemoryBacklogApi(),
+    });
+
+    expect(() => adapter.client('example.backlog.com')).toThrow(AdapterError);
   });
 
   it('passes the resolved installation to a supplied createApi', () => {
