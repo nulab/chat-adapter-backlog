@@ -20,6 +20,15 @@ const DEFAULT_MAX_WAIT_MS = 60_000;
 const MIN_RETRY_WAIT_MS = 1_000;
 const MAX_RETRY_JITTER_MS = 250;
 
+/**
+ * An `X-RateLimit-*` header as a number, or `undefined` when there is no
+ * number in it.
+ *
+ * The emptiness check is not redundant with `Number.isFinite`: `Number('')`
+ * and `Number('  ')` are `0`, so a header present but blank used to read as
+ * epoch zero — a reset in 1970, which is `waitMs` clamped to its floor
+ * forever rather than the missing header it is.
+ */
 function finiteHeaderNumber(header: string | null): number | undefined {
   if (header === null || header.trim().length === 0) {
     return undefined;
@@ -141,11 +150,21 @@ export interface RetryDecision {
 
 /**
  * Decides whether a 429 (or error code 13) should be retried.
- * docs/specs/adapter.md §8.4: wait `reset*1000 - now`; give up without
+ * docs/specs/adapter.md §8.4: wait `max(reset*1000 - now, 1000)` plus jitter,
+ * or the full `maxWaitMs` when `X-RateLimit-Reset` is missing; give up without
  * waiting once `waitMs` exceeds `maxWaitMs` or retries are exhausted, because
  * Backlog sends no `Retry-After` and a repeated POST could duplicate a
  * comment — retrying past one attempt risks that duplication for no benefit.
- * A missing `X-RateLimit-Reset` waits the full `maxWaitMs`.
+ *
+ * The one-second floor is not a rounding convenience: a reset already in the
+ * past is what a clock skewed against Backlog's, or a window that has not
+ * become observable yet, looks like from here, and the unfloored
+ * `max(…, 0)` turned both into an immediate retry into the same full bucket
+ * and an `AdapterRateLimitError` telling the caller to wait zero seconds.
+ * Jitter, drawn per call from `random`, spreads the callers a single
+ * epoch-second header released in lockstep; a missing header takes exactly
+ * `maxWaitMs` without it, since adding jitter there would exceed the ceiling
+ * the caller declared by construction.
  */
 export function decideRetry(
   attempt: number,
@@ -160,11 +179,6 @@ export function decideRetry(
   const resetSeconds = finiteHeaderNumber(resetHeader);
   const resetAt =
     resetSeconds === undefined ? undefined : new Date(resetSeconds * 1000);
-  // A past reset can mean clock skew or that the next server window has not
-  // become observable yet. Never retry in the same instant, and spread
-  // callers that received the same epoch-second header across a bounded
-  // quarter-second window. A missing header still uses exactly maxWaitMs: an
-  // added jitter would exceed the caller's declared ceiling by construction.
   const waitMs =
     resetSeconds === undefined
       ? maxWaitMs
