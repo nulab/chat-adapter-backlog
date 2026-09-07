@@ -155,7 +155,11 @@ export function createBacklogJsApi(
    * retry. Credentials are resolved again on every call (including the retry
    * attempt) — see class doc — and a fresh `Backlog` client is constructed
    * per attempt because `backlog-js` takes credentials at construction time,
-   * not per call.
+   * not per call. `consume` reads the successful `Response` and must run
+   * inside this function's own try/catch/finally: it shares the request's
+   * abort timer and error mapping, so a stalled or malformed body is
+   * cancelled by the timeout and mapped to an adapter error like any other
+   * transport failure.
    */
   async function call<T>(
     args: RequestArgs,
