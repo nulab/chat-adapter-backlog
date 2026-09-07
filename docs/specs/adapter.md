@@ -1367,6 +1367,17 @@ one line and an unclosed block closed at EOF (contents not inline-converted);
 `[[url]]`, `&br;`. Not converted (left as text): `&color(...)`, `#rev`,
 `#contents`, `#attach`, `#thumbnail`, wiki links, issue-key auto-links.
 
+"Repeat the marker" is the whole of the upstream syntax, so one rule settles
+what a run of markers becomes: **a list ends at the first marker it cannot
+contain** — one shallower than its own depth, or one of the other kind at that
+depth — and the next list starts there. So `--- deep` then `- shallow` is two
+lists rather than one item lost; `-- indented` then `- back` is two lists
+rather than one list of two items, because those markers sit at different
+depths; and `+ a` then `- b` is an ordered list followed by an unordered one,
+never one list whose `ordered` the last marker decided. A jump of more than one
+level opens a single nested list, and a marker between two open depths becomes
+a second child list of the same item.
+
 ### 9.6 Known lossy conversions
 
 Inline code and table alignment outbound to notation; colour, revision links,
@@ -1476,10 +1487,13 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   threads and two distinct message ids; processing runs after the 200 and a
   throwing factory is logged, not thrown.
 - **format**: every row of §9.4 and §9.5; single-line `{code}x{/code}`;
-  unclosed `{code}`; `toAst` throwing → plain paragraph + warn; rule cache
-  primed by webhook path, replaced by `fetchChannelInfo`, lookup failure not
-  cached; `renderFormatted`/`parseMessage` honour a cached `backlog` rule and
-  warn when uncached.
+  unclosed `{code}`; unclosed `{quote}`; a list whose first marker is the
+  deepest, a marker changing kind mid-run, a depth jump, a marker between two
+  open depths and a CRLF line ending; an unterminated
+  `''`/`'''`/`%%`/`[[`; a `|` inside a table cell's link; `toAst` throwing →
+  plain paragraph + warn; rule cache primed by webhook path, replaced by
+  `fetchChannelInfo`, lookup failure not cached; `renderFormatted`/
+  `parseMessage` honour a cached `backlog` rule and warn when uncached.
 - **egress**: `postMessage` markdown/raw/card/files/`notifiedUserId`;
   mistyped extra → `ValidationError`; `editMessage` with files → error;
   `:r`/`:u:` rejected for edit/delete/star; `stream` buffers into one comment
