@@ -26,7 +26,12 @@ import type {
 import type { MessageBuilders } from './reads';
 import type { SubjectClient } from './subject/client';
 import type { BacklogRawMessage, BacklogSubjectRef } from './types';
-import type { Attachment, FetchDirection, FetchOptions } from 'chat';
+import type {
+  Attachment,
+  FetchDirection,
+  FetchOptions,
+  MessageData,
+} from 'chat';
 
 const HOST = 'example.backlog.com';
 const OTHER_HOST = 'other.backlog.jp';
@@ -195,6 +200,10 @@ function builders(): Omit<MessageBuilders, 'projectId' | 'subject'> {
   return {
     host: HOST,
     botUserId: 999,
+    format: (value): MessageData['formatted'] => ({
+      type: 'root',
+      children: [{ type: 'paragraph', children: [{ type: 'text', value }] }],
+    }),
     MessageCtor,
   };
 }

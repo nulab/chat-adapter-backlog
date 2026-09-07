@@ -972,6 +972,11 @@ when `startsWithRoot` or when backward and `!hasMore` (oldest page reached).
 page; forward → newest comment id on the page, or `"0"` when the page held only
 the root (`limit: 1` forward).
 
+Before building the page, the adapter resolves the project's cached §9.1
+converter with one cached Get Project lookup. Both the root and every comment
+set `formatted` through that converter; `text` remains the original Backlog
+text.
+
 Guarantees (each is a test): pages are chronological; backward pages walk from
 newest to oldest; the union of all pages in either direction is root + every
 comment exactly once; a backward final page may contain only the root; forward

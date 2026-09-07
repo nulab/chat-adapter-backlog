@@ -859,6 +859,22 @@ export class BacklogAdapter implements Adapter<
     return converterFor(rule, this.logger, { host, projectId });
   }
 
+  /** Synchronous converter selection for `parseMessage` and cache-only reads. */
+  private cachedConverter(
+    host: string,
+    projectId: number
+  ): FallbackFormatConverter {
+    const channelId = `backlog:${host}:${projectId}`;
+    const rule = this.projectCache.get(channelId)?.textFormattingRule;
+    if (rule === undefined) {
+      this.logger.warn('textFormattingRule uncached; assuming markdown', {
+        host,
+        projectId,
+      });
+    }
+    return converterFor(rule ?? 'markdown', this.logger, { host, projectId });
+  }
+
   /**
    * The seam every member goes through: one `SubjectClient` for the issue or
    * pull request an id names (docs/plans/pull-request-support.md §3.4). The
@@ -878,11 +894,15 @@ export class BacklogAdapter implements Adapter<
    * than per subject; each read completes it with the coordinates it decoded.
    */
   private messageBuilders(
-    host: string
+    host: string,
+    projectId: number,
+    converter?: FallbackFormatConverter
   ): Omit<MessageBuilders, 'projectId' | 'subject'> {
     return {
       host,
       botUserId: this.resolveInstallation(host).botUserId,
+      format: (text) =>
+        (converter ?? this.cachedConverter(host, projectId)).toAst(text),
       MessageCtor,
     };
   }
@@ -1314,13 +1334,7 @@ export class BacklogAdapter implements Adapter<
       );
     }
 
-    const channelId = `backlog:${host}:${activity.project.id}`;
-    if (!this.projectCache.has(channelId)) {
-      this.logger.warn('textFormattingRule uncached; assuming markdown', {
-        host,
-        projectId: activity.project.id,
-      });
-    }
+    const converter = this.cachedConverter(host, activity.project.id);
 
     return buildInboundMessage(
       activity,
@@ -1334,6 +1348,7 @@ export class BacklogAdapter implements Adapter<
           subjectOfActivity(activity)
         ),
         payload,
+        format: (text) => converter.toAst(text),
       },
       MessageCtor
     );
@@ -1392,13 +1407,7 @@ export class BacklogAdapter implements Adapter<
     payload: BacklogBulkUpdatePayload
   ): Message<BacklogRawMessage> {
     const installation = this.resolveInstallation(host);
-    const channelId = `backlog:${host}:${activity.project.id}`;
-    if (!this.projectCache.has(channelId)) {
-      this.logger.warn('textFormattingRule uncached; assuming markdown', {
-        host,
-        projectId: activity.project.id,
-      });
-    }
+    const converter = this.cachedConverter(host, activity.project.id);
 
     return buildBulkUpdateMessage(
       activity,
@@ -1408,6 +1417,7 @@ export class BacklogAdapter implements Adapter<
         botUserId: installation.botUserId,
         botUserName: installation.botUserName,
         payload,
+        format: (text) => converter.toAst(text),
       },
       MessageCtor
     );
@@ -1547,12 +1557,13 @@ export class BacklogAdapter implements Adapter<
     threadId: string,
     options?: FetchOptions
   ): Promise<FetchResult<BacklogRawMessage>> {
-    const { host, subject } = this.subjectFor(threadId);
+    const { host, projectId, subject } = this.subjectFor(threadId);
+    const converter = await this.getConverter(host, projectId);
     return fetchMessagesRead({
       threadId,
       options,
       subject,
-      builders: this.messageBuilders(host),
+      builders: this.messageBuilders(host, projectId, converter),
     });
   }
 
@@ -1560,12 +1571,12 @@ export class BacklogAdapter implements Adapter<
     threadId: string,
     messageId: string
   ): Promise<Message<BacklogRawMessage> | null> {
-    const { host, subject } = this.subjectFor(threadId);
+    const { host, projectId, subject } = this.subjectFor(threadId);
     return fetchMessageRead({
       threadId,
       messageId,
       subject,
-      builders: this.messageBuilders(host),
+      builders: this.messageBuilders(host, projectId),
     });
   }
 
@@ -1625,11 +1636,12 @@ export class BacklogAdapter implements Adapter<
     options?: ListThreadsOptions
   ): Promise<ListThreadsResult<BacklogRawMessage>> {
     const { host, projectId } = decodeChannelId(channelId);
+    const converter = await this.getConverter(host, projectId);
     return listThreadsRead({
       channelId,
       options,
       api: this.api(host),
-      builders: this.messageBuilders(host),
+      builders: this.messageBuilders(host, projectId, converter),
       // Every thread this lists is an issue: a pull-request list is per
       // repository, a coordinate a channel id does not carry (D-PR7), so the
       // subject of each row is known before the row is read.

@@ -3,8 +3,6 @@ import {
   ResourceNotFoundError,
   ValidationError,
 } from '@chat-adapter/shared';
-import { paragraph, root as rootNode, text as textNode } from 'chat';
-
 import {
   decodeChannelId,
   decodeMessageId,
@@ -93,10 +91,6 @@ export function buildRestAuthor(
   };
 }
 
-function plainTextAst(value: string): MessageData['formatted'] {
-  return rootNode([paragraph([textNode(value)])]);
-}
-
 /**
  * Everything a `Message` needs beyond the record it is built from. `subject`
  * carries both the addressing (`subject.ref`) and every call the two kinds
@@ -108,6 +102,7 @@ export interface MessageBuilders {
   projectId: number;
   subject: SubjectClient;
   botUserId: number;
+  format: (text: string) => MessageData['formatted'];
   MessageCtor: new (
     data: MessageData<BacklogRawMessage>
   ) => Message<BacklogRawMessage>;
@@ -124,13 +119,13 @@ export function buildRootMessage(
   builders: MessageBuilders,
   root: SubjectRoot
 ): Message<BacklogRawMessage> {
-  const { host, projectId, subject, botUserId, MessageCtor } = builders;
+  const { host, projectId, subject, botUserId, format, MessageCtor } = builders;
   const text = [root.title, root.body].filter(Boolean).join('\n\n');
   return new MessageCtor({
     id: encodeMessageId({ host, subject: subject.ref, part: 'root' }),
     threadId: encodeThreadId({ host, projectId, subject: subject.ref }),
     text,
-    formatted: plainTextAst(text),
+    formatted: format(text),
     raw: subject.rootRaw(root),
     author: buildRestAuthor(host, botUserId, root.createdUser),
     metadata: { dateSent: root.created, edited: false },
@@ -157,7 +152,7 @@ export function buildCommentMessage(
   builders: MessageBuilders,
   comment: BacklogComment
 ): Message<BacklogRawMessage> {
-  const { host, projectId, subject, botUserId, MessageCtor } = builders;
+  const { host, projectId, subject, botUserId, format, MessageCtor } = builders;
   const text = comment.content ?? '';
   const edited = comment.updated.getTime() !== comment.created.getTime();
   const metadata: MessageData['metadata'] = edited
@@ -172,7 +167,7 @@ export function buildCommentMessage(
     }),
     threadId: encodeThreadId({ host, projectId, subject: subject.ref }),
     text,
-    formatted: plainTextAst(text),
+    formatted: format(text),
     raw: {
       kind: 'comment',
       host,
