@@ -10,7 +10,7 @@
  * minor can break that resolution, and a zod major becomes a semver-major
  * here.
  *
- * An allowlist rather than a denylist of `zod` and `backlog-js`: the leak is
+ * An allowlist rather than a denylist of `zod`: the leak is
  * "the declarations reached for something only the implementation has", and
  * the next module to do that is not necessarily one of those two.
  *
@@ -28,13 +28,23 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
  * `chat` is the peer dependency the `Adapter` interface and `Logger` come
- * from, so a consumer already has it. Nothing else is installed on their
- * behalf: `zod`, `backlog-js` and `@chat-adapter/shared` are this package's
- * own dependencies, hoisted wherever the consumer's package manager decided,
- * and `docs/specs/adapter.md` §3.1 promises none of them appears in an
- * exported type.
+ * from, so a consumer already has it.
+ *
+ * `backlog-js` is here on purpose and is the one exception §3.1 records:
+ * `BacklogAdapter.client(host)` returns its `Backlog` client, so that a
+ * consumer needing an endpoint the port does not name spends the adapter's
+ * own rate-limit accounting, retries and error mapping instead of standing up
+ * a second client beside it. The price is exactly what this script otherwise
+ * prevents — a `backlog-js` major becomes a semver-major here — and it is
+ * accepted because it is the library this adapter is built on and the same
+ * vendor ships both.
+ *
+ * Nothing else is installed on a consumer's behalf: `zod` and
+ * `@chat-adapter/shared` are this package's own dependencies, hoisted
+ * wherever the consumer's package manager decided, and §3.1 promises neither
+ * appears in an exported type.
  */
-const ALLOWED_SPECIFIERS = new Set(['chat']);
+const ALLOWED_SPECIFIERS = new Set(['chat', 'backlog-js']);
 
 const SPECIFIER_PATTERN =
   /(?:\bfrom|\bimport\s*\(|\bdeclare\s+module|\brequire\s*\()\s*['"]([^'"]+)['"]/g;

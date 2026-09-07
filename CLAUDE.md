@@ -493,16 +493,21 @@ rules file; do not reason about them from the issue side.
 
 Build on [`backlog-js`](https://github.com/nulab/backlog-js) (v0.20.1, MIT,
 Nulab's own, tsdown-built, single runtime dependency `qs`), wrapped behind a
-narrow internal port so the adapter never leaks its types outward. It does not
-provide, and this repo must add:
+narrow internal port. It does not provide, and this repo must add:
 
 1. Rate-limit bucket awareness (classify each request into read/update/search/
    icon and track the headers per bucket).
 2. Typed errors derived from `errors[].code`.
 3. 429 retry with backoff computed from `X-RateLimit-Reset`.
 
-The port also keeps the option open to drop `backlog-js` for plain `fetch`
-without touching adapter code.
+All three live in the **`fetch` injected into the client**, not around the
+port's call sites, because that is the only seam every `backlog-js` method
+funnels through. That is what lets `adapter.client(host)` hand a consumer the
+very client the port speaks through — for the endpoints the port does not name
+— without any of the three being bypassed. The consequence, taken knowingly:
+`backlog-js` appears in the published types, so dropping it for plain `fetch`
+is no longer a change invisible to consumers (docs/specs/adapter.md §3.1,
+§8.2).
 
 ## Test strategy
 
