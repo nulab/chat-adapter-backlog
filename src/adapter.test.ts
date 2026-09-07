@@ -20,6 +20,7 @@ import { createInMemoryBacklogApi } from './client/in-memory';
 import { conformanceFixture } from './client/conformance';
 import { encodeMessageId } from './ids';
 import {
+  assigneeChanged,
   bulkFieldsChanged,
   bulkStatusChangedOnOneIssue,
   FIXTURE,
@@ -47,6 +48,7 @@ import type {
   BacklogRawMessage,
   BacklogSubjectRef,
   BacklogThreadId,
+  BacklogWebhookPayload,
   ResolvedInstallation,
 } from './types';
 import type { Adapter, ChatInstance, FormattedContent, Message } from 'chat';
@@ -1720,6 +1722,145 @@ describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () 
   });
 });
 
+/**
+ * The read side of a dispatched message, exercised through `handleWebhook` and
+ * the factory it dispatches rather than against the schema alone
+ * (docs/specs/adapter.md §5.2 `notifications[]`, §5.4 rule 6).
+ *
+ * `payload.test.ts` proves the schema falls back to `[]`; these prove the
+ * fallback is what the mapping reads, which is a different claim: `raw.payload`
+ * is the body as received, so a `notifications[]` the schema would have
+ * replaced is still on it when the message arrives, and a read side that
+ * trusted the declared type never saw the fallback at all.
+ */
+describe('BacklogAdapter.handleWebhook — a notifications[] the adapter cannot read', () => {
+  function withoutNotifications(
+    body: Record<string, unknown>
+  ): Record<string, unknown> {
+    return Object.fromEntries(
+      Object.entries(body).filter(([key]) => key !== 'notifications')
+    );
+  }
+
+  it('an issue comment with no notifications key is dispatched, with mention detection falling back to the text', async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(withoutNotifications(issueCommented({ commentId: 3001 })))
+    );
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+    expect(dispatched[0]?.message.id).toBe(
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: { kind: 'issue', issueId: FIXTURE.issueId },
+        part: 'comment',
+        commentId: 3001,
+      })
+    );
+    expect(dispatched[0]?.message.isMention).toBe(false);
+    // The body reaches the handler as Backlog sent it (§5.2 "not a stripped
+    // copy"), so the key the mapping read through a fallback is still absent.
+    const raw = dispatched[0]?.message.raw as {
+      payload: Record<string, unknown>;
+    };
+    expect('notifications' in raw.payload).toBe(false);
+  });
+
+  it('an issue comment whose notifications entry names no user is dispatched', async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest({
+        ...issueCommented({ text: `@${FIXTURE.bot.name} take a look` }),
+        notifications: [{ user: null }],
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+    expect(dispatched[0]?.message.text).toBe(
+      `@${FIXTURE.bot.name} take a look`
+    );
+    // The unreadable array costs the notification rule, not the message: the
+    // textual rule still sees the mention (§5.4 rule 6).
+    expect(dispatched[0]?.message.isMention).toBe(true);
+  });
+
+  it('an issue assignment with no notifications key is still a mention through changes[]', async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(
+        withoutNotifications(
+          assigneeChanged({ assigneeName: FIXTURE.bot.name })
+        )
+      )
+    );
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+    expect(dispatched[0]?.message.isMention).toBe(true);
+  });
+
+  it('a new pull request with no notifications key is dispatched as a root message', async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(
+        withoutNotifications(
+          pullRequestAdded({ summary: 'Retry the deploy step on a 5xx' })
+        )
+      )
+    );
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+    expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
+    expect(dispatched[0]?.message.id).toBe(
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: PULL_REQUEST_SUBJECT,
+        part: 'root',
+      })
+    );
+    expect(dispatched[0]?.message.isMention).toBe(false);
+  });
+
+  it('a pull-request comment whose notifications entry names no user is dispatched', async () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest({
+        ...pullRequestCommented({
+          commentId: 7000001,
+          text: 'Looks good, one question about the timeout.',
+        }),
+        notifications: [{ user: null }],
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+    expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
+    expect(dispatched[0]?.message.id).toBe(
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: PULL_REQUEST_SUBJECT,
+        part: 'comment',
+        commentId: 7000001,
+      })
+    );
+    expect(dispatched[0]?.message.isMention).toBe(false);
+  });
+});
+
 describe('BacklogAdapter.parseMessage', () => {
   it('rejects a non-webhook raw message kind as a defect, not a recoverable input', () => {
     const adapter = createBacklogAdapter(webhookAdapterConfig());
@@ -1767,6 +1908,23 @@ describe('BacklogAdapter.parseMessage', () => {
       `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.otherIssueId}`
     );
     expect(message.text).toBe('Moving these to done.');
+  });
+
+  it('rejects a webhook raw message whose payload does not parse as its activity type', () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const parse = () =>
+      adapter.parseMessage({
+        kind: 'webhook',
+        host: FIXTURE.host,
+        payload: {
+          ...issueCommented(),
+          content: { id: 0 },
+        } as unknown as BacklogWebhookPayload,
+        changes: [],
+      });
+
+    expect(parse).toThrow(ValidationError);
+    expect(parse).toThrow(/not a valid type 3 activity/);
   });
 
   it('rejects a bulk update raw message naming an issue the delivery does not cover', () => {

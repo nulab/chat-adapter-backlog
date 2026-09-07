@@ -98,9 +98,20 @@ export interface BacklogChange {
 }
 
 /**
- * A webhook body that has passed `src/webhook/payload.ts` validation: one of
- * the four dispatched activity types (docs/specs/adapter.md §5.1 step 8,
- * §5.2). Broadened from a P2-era placeholder `{ type: number; content:
+ * The recognised issue and pull-request activities: every dispatched activity
+ * type except the bulk update, which {@link BacklogBulkUpdatePayload} carries
+ * instead (docs/specs/adapter.md §5.1 step 8, §5.2).
+ *
+ * The schemas' **output** type, while the value on `raw.payload` is the
+ * delivery as received and reaches this type by a cast — §5.2 requires the
+ * body verbatim, not a stripped copy. The two are not interchangeable in the
+ * one field the schema repairs rather than requires: `notifications[]` is `[]`
+ * here whatever arrived, and on `raw.payload` it is whatever arrived,
+ * including absent. So a field read off `raw.payload` is unvalidated whatever
+ * this type says, and `parseMessage` parses again before reading one, as the
+ * bulk path does.
+ *
+ * Broadened from a P2-era placeholder `{ type: number; content:
  * Record<string, unknown> }` to the real discriminated union once P3 owned
  * the schema, per this phase's file list ("You may broaden
  * `BacklogWebhookPayload` to the full §5.2 shape; that was left to you

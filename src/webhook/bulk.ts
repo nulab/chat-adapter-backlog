@@ -93,14 +93,16 @@ export interface BuildBulkUpdateMessageInput {
  * Re-validates a `raw.payload` that arrived as a `bulkUpdate`, returning the
  * view the mapping reads.
  *
- * `raw.payload` is the body as received, and its declared type is reached by
- * a cast — accurate for every other activity type, but **not** for this one:
- * `content.link[].id` is a decimal string over the webhook (measured
- * 2026-09-06), so reading it through the cast would hand a string to a codec
- * that requires a number and build `backlog:<host>:<projectId>:issue:8001`
- * out of luck rather than out of a checked value. Parsing again is what makes
- * the ids ids; it costs one zod pass per message and cannot fail for a body
- * that already passed the §5.1 step 9 gate.
+ * `raw.payload` is the body as received and its declared type is reached by a
+ * cast, so no activity type may be read through it — `parseMessage` parses
+ * every kind again for that reason. What is peculiar to this one is only how
+ * loudly it fails: `content.link[].id` is a decimal string over the webhook
+ * (measured 2026-09-06), so reading it through the cast would hand a string
+ * to a codec that requires a number and build
+ * `backlog:<host>:<projectId>:issue:8001` out of luck rather than out of a
+ * checked value. Parsing again is what makes the ids ids; it costs one zod
+ * pass per message and cannot fail for a body that already passed the §5.1
+ * step 9 gate.
  */
 export function parseBulkUpdatePayload(
   payload: BacklogBulkUpdatePayload
