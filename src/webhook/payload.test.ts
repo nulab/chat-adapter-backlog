@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
   attachmentAdded,
@@ -30,7 +30,26 @@ import {
   subjectOfActivity,
 } from './payload';
 
-import type { IssueMultiUpdatedActivity, ParsedActivity } from './payload';
+import type {
+  BacklogBulkUpdatePayload,
+  BacklogIssueCreatedActivity,
+  BacklogIssueDeletedActivity,
+  BacklogIssueUpdatedOrCommentedActivity,
+  BacklogPullRequestAddedActivity,
+  BacklogPullRequestUpdatedOrCommentedActivity,
+  BacklogWebhookPayload,
+} from '../types';
+import type {
+  IssueCreatedActivity,
+  IssueDeletedActivity,
+  IssueMultiUpdatedActivity,
+  IssueMultiUpdatedBody,
+  IssueUpdatedOrCommentedActivity,
+  ParsedActivity,
+  PullRequestAddedActivity,
+  PullRequestUpdatedOrCommentedActivity,
+  RecognisedActivity,
+} from './payload';
 
 function parsed(type: number, payload: object): ParsedActivity {
   const result = parseActivity(type, payload);
@@ -421,5 +440,39 @@ describe('type 21', () => {
     expect((DISPATCHED_ACTIVITY_TYPES as readonly number[]).includes(21)).toBe(
       false
     );
+  });
+});
+
+/**
+ * The two payload types a consumer sees are declared by hand in
+ * `src/types.ts` so the published declarations do not import zod (#37,
+ * docs/specs/adapter.md §3.1). That leaves two descriptions of the same
+ * bodies in this repository, and these assertions are what keeps them one
+ * description: each pair is checked in both directions, so a schema edit the
+ * hand-written type does not follow — or a hand-written field no schema
+ * validates — fails `pnpm typecheck`.
+ *
+ * `vitest run` executes them as no-ops. Turning on vitest's own `typecheck`
+ * mode would run a second `tsc` over the same files for no extra coverage:
+ * `pnpm typecheck` already reads `src/**` and is one of the five gates.
+ */
+describe('the hand-written payload types and the schemas they mirror', () => {
+  it('describe every issue activity identically', () => {
+    expectTypeOf<BacklogIssueCreatedActivity>().toEqualTypeOf<IssueCreatedActivity>();
+    expectTypeOf<BacklogIssueUpdatedOrCommentedActivity>().toEqualTypeOf<IssueUpdatedOrCommentedActivity>();
+    expectTypeOf<BacklogIssueDeletedActivity>().toEqualTypeOf<IssueDeletedActivity>();
+  });
+
+  it('describe every pull-request activity identically', () => {
+    expectTypeOf<BacklogPullRequestAddedActivity>().toEqualTypeOf<PullRequestAddedActivity>();
+    expectTypeOf<BacklogPullRequestUpdatedOrCommentedActivity>().toEqualTypeOf<PullRequestUpdatedOrCommentedActivity>();
+  });
+
+  it('agree on which activities name a single subject', () => {
+    expectTypeOf<BacklogWebhookPayload>().toEqualTypeOf<RecognisedActivity>();
+  });
+
+  it('describe a bulk update as delivered, before the schema coerces its link ids', () => {
+    expectTypeOf<BacklogBulkUpdatePayload>().toEqualTypeOf<IssueMultiUpdatedBody>();
   });
 });

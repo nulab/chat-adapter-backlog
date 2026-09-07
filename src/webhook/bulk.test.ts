@@ -11,7 +11,7 @@ import { buildBulkUpdateMessage, bulkUpdateTargets } from './bulk';
 import { parseActivity } from './payload';
 
 import type { IssueMultiUpdatedActivity } from './payload';
-import type { BacklogBulkUpdatePayload } from '../types';
+import type { BacklogBulkUpdatePayload, BacklogRawMessage } from '../types';
 
 function bulkActivity(payload: object): IssueMultiUpdatedActivity {
   const result = parseActivity(14, payload);
@@ -168,8 +168,11 @@ describe('buildBulkUpdateMessage', () => {
     const messages = messagesOf(payload);
 
     for (const message of messages) {
-      const raw = message.raw as { payload: Record<string, unknown> };
-      expect(raw.payload['notifications']).toEqual(payload['notifications']);
+      const raw = message.raw as Extract<
+        BacklogRawMessage,
+        { kind: 'bulkUpdate' }
+      >;
+      expect(raw.payload.notifications).toEqual(payload['notifications']);
     }
   });
 

@@ -153,7 +153,10 @@ for a thread — it is the seam egress and reads are written against
 
 Not exported: the `backlog-js` client wrapper, zod schemas, the plain-text
 fallback converter, fixtures. Nothing from `backlog-js` or `zod` appears in an
-exported type.
+exported type, and `chat` is the only module `dist/index.d.ts` may import —
+`scripts/check-published-types.mjs` fails `pnpm build` on any other, so
+`BacklogWebhookPayload` and `BacklogBulkUpdatePayload` are declared by hand in
+`src/types.ts` rather than aliased to a `z.infer`.
 
 ### 3.2 `createBacklogAdapter(config?)`
 
@@ -1536,7 +1539,12 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   bot delivers as a mention; a status-change changelog comment reaches a
   subscribed handler with `raw.changes`.
 - **entry point**: `createBacklogAdapter` and `BacklogAdapter` exported;
-  `adapter.name === "backlog"`; absent optional members are `undefined`.
+  `adapter.name === "backlog"`; absent optional members are `undefined`; the
+  hand-written `BacklogWebhookPayload` and `BacklogBulkUpdatePayload` are
+  identical to their schemas' inferred types **in both directions**
+  (`src/webhook/payload.test.ts`, checked by `pnpm typecheck`), and the built
+  `dist/index.d.ts` imports nothing but `chat`
+  (`scripts/check-published-types.mjs`, run by `pnpm build`).
 - **pull requests** (each mirroring an issue-side test through the same
   table-driven suites where one exists): thread ids round-trip for both kinds
   with pinned encodings; every §2.2 rejection for the `pr:` keyword; type 18,
