@@ -4,18 +4,37 @@ Small, deployable bots built on `@nulab/chat-adapter-backlog`. Each one is a
 complete Vercel project you can point at your own space, not a snippet — and
 each one does a single job somebody would actually want done.
 
-They are ordered by how much they ask of you. Read `01` first: everything after
-it assumes you already have the [shared setup](#shared-setup) working.
+They are listed by how much they ask of you. Read the first one first:
+everything after it assumes you already have the [shared
+setup](#shared-setup) working.
 
-| Example                                                    | What it does                                                                                                             | Stage                                    |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| [`01-reassign-on-mention`](./01-reassign-on-mention)       | Mention the bot together with people, and it hands the issue to one of them at random.                                   | The minimum: read a webhook, act.        |
-| [`02-custom-field-done-gate`](./02-custom-field-done-gate) | Closing an issue with a required custom field still empty hands it back to whoever closed it.                            | A small exchange: check, then push back. |
-| [`03-bug-intake`](./03-bug-intake)                         | A bug report gets a first-response triage comment written by an AI, and is handed to the intake contact when it is done. | Applied: an AI writes the reply.         |
+| Example                                              | What it does                                                                                                             | Stage                                    |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
+| [`reassign-on-mention`](./reassign-on-mention)       | Mention the bot together with people, and it hands the issue to one of them at random.                                   | The minimum: read a webhook, act.        |
+| [`custom-field-done-gate`](./custom-field-done-gate) | Closing an issue with a required custom field still empty hands it back to whoever closed it.                            | A small exchange: check, then push back. |
+| [`bug-intake`](./bug-intake)                         | A bug report gets a first-response triage comment written by an AI, and is handed to the intake contact when it is done. | Applied: an AI writes the reply.         |
 
-**The directories are coming in separate PRs.** This index and the workspace
-wiring landed first so that each example arrives as one reviewable change; the
-links above are dead until the PR that adds that example merges.
+**The directories are coming in separate PRs**, so the links above are dead
+until the PR that adds that example merges.
+
+## Each example is a standalone project
+
+An example is **not** a workspace member of this repository. It depends on the
+published adapter (`@nulab/chat-adapter-backlog` from npm), installs on its
+own, and deploys from its own directory — so you can copy one out of here and
+it keeps working, and nothing you do to it can break this repository's install
+or its tests.
+
+That also sets what an example does _not_ have: no test runner, no lint or
+format hook of its own, no entry in `pnpm-lock.yaml`, and a `vercel.json` that
+orchestrates nothing.
+
+```sh
+cd examples/<name>
+pnpm install
+pnpm typecheck
+pnpm deploy      # npx vercel deploy
+```
 
 ## Shared setup
 
@@ -51,23 +70,11 @@ against the space you register it in.
 
 ### 3. A Vercel project whose Root Directory is the example
 
-Every example is a workspace member that depends on the adapter through
-`workspace:*`, so the install and the adapter build have to happen at the
-**repository root** — but the functions Vercel serves live in the example.
-That is why each example ships a `vercel.json` of this shape:
-
-```json
-{
-  "framework": null,
-  "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
-  "buildCommand": "cd ../.. && pnpm build"
-}
-```
-
-So, in the Vercel project settings:
-
-- **Root Directory** → `examples/<the example>`
-- Leave the install and build commands alone; `vercel.json` sets them.
+In the Vercel project settings, set **Root Directory** to
+`examples/<the example>` and leave the install and build commands alone —
+there is nothing to orchestrate, because the example installs the adapter from
+npm like any other dependency. (Copy the directory out of this repository and
+the Root Directory is simply the repository root.)
 
 One Vercel project per example. They are separate deployments with separate
 webhook URLs, and running two of them against the same project in Backlog is
@@ -89,22 +96,26 @@ example:
 Each example adds a few of its own on top, documented in its README and listed
 in its `.env.example`:
 
-| Example                     | Adds                                                                                                |
-| --------------------------- | --------------------------------------------------------------------------------------------------- |
-| `01-reassign-on-mention`    | nothing                                                                                             |
-| `02-custom-field-done-gate` | `DONE_STATUS_ID`, `REQUIRED_CUSTOM_FIELD_ID`                                                        |
-| `03-bug-intake`             | `DONE_STATUS_ID`, `BUG_ISSUE_TYPE_NAME`, `INTAKE_CONTACT_USER_ID`, `AI_MODEL`, `AI_GATEWAY_API_KEY` |
+| Example                  | Adds                                                                                                |
+| ------------------------ | --------------------------------------------------------------------------------------------------- |
+| `reassign-on-mention`    | nothing                                                                                             |
+| `custom-field-done-gate` | `DONE_STATUS_ID`, `REQUIRED_CUSTOM_FIELD_ID`                                                        |
+| `bug-intake`             | `DONE_STATUS_ID`, `BUG_ISSUE_TYPE_NAME`, `INTAKE_CONTACT_USER_ID`, `AI_MODEL`, `AI_GATEWAY_API_KEY` |
+
+Every variable is validated when the bot starts, so a missing one or a
+non-numeric id fails the deployment's first request rather than sending `NaN`
+to Backlog later.
 
 ### 5. Which activity types to register
 
 The webhook's activity-type checkboxes are the only switch for what reaches a
 handler, and each example needs a different set. Register exactly these:
 
-| Example                     | Activity types      | Why                                                                |
-| --------------------------- | ------------------- | ------------------------------------------------------------------ |
-| `01-reassign-on-mention`    | 1, 2, 3, 18, 19, 20 | Mentions arrive on issues and on pull requests alike.              |
-| `02-custom-field-done-gate` | 2, 14               | It reacts to a status change, from either screen it can come from. |
-| `03-bug-intake`             | 1, 2, 14            | A new issue to triage, plus the status change that closes it.      |
+| Example                  | Activity types      | Why                                                                |
+| ------------------------ | ------------------- | ------------------------------------------------------------------ |
+| `reassign-on-mention`    | 1, 2, 3, 18, 19, 20 | Mentions arrive on issues and on pull requests alike.              |
+| `custom-field-done-gate` | 2, 14               | It reacts to a status change, from either screen it can come from. |
+| `bug-intake`             | 1, 2, 14            | A new issue to triage, plus the status change that closes it.      |
 
 Never use **allEvent**: the range runs to 49 and includes git, wiki and
 document activity these examples have no meaning for.
@@ -124,7 +135,7 @@ The same files, in the same places, so that reading a second example costs
 nothing:
 
 ```
-examples/<NN>-<name>/
+examples/<name>/
   README.md                 # What it does / Try it / How it works / Deploy / Limits
   package.json
   vercel.json
@@ -132,34 +143,26 @@ examples/<NN>-<name>/
   tsconfig.json
   api/webhooks/backlog.ts   # the Vercel function
   src/bot.ts                # Chat + adapter, and the handler registrations
-  src/<logic>.ts            # the decision, as a pure function
-  src/<logic>.test.ts       # what that function is specified to do
+  src/<logic>.ts            # the decision the example exists to demonstrate
 ```
 
-The split between the last three is the point of the layout: `src/bot.ts` is
-the only file with side effects, and the rule the example exists to demonstrate
-lives in a pure function next to it, so the test can state the rule without a
-webhook, a network or a mock.
+`src/bot.ts` holds the side effects and `src/<logic>.ts` holds the rule, so the
+thing you came to read is separate from the wiring around it. Neither is
+tested: an example is small enough to read end to end, and it earns its keep by
+being copied rather than by being verified.
 
-## Running one locally
+Two things they all do the same way, and both are the interesting part rather
+than boilerplate:
 
-From the repository root:
-
-```sh
-pnpm install
-pnpm build   # required, see below
-pnpm --filter @nulab/chat-adapter-backlog-example-<name> typecheck
-pnpm --filter @nulab/chat-adapter-backlog-example-<name> test
-```
-
-`pnpm build` first, because an example depends on the adapter as `workspace:*`
-and so resolves it through the root `package.json`, whose types are
-`./dist/index.d.ts` — and `dist/` is not committed. Skip the build and every
-example fails to typecheck with `TS2307` on its adapter import. That is also
-why each `vercel.json` builds at the repository root.
-
-CI runs the same three steps for every example on every pull request, and the
-root `pnpm lint` and `pnpm format:check` cover `examples/` too.
+- **Anything typed `unknown` is parsed with zod**, never asserted.
+  `message.raw` reaches a handler as `unknown`, and parsing is also what makes
+  keys the adapter's own schema does not name readable at all — the payload is
+  the body Backlog sent, with its unknown keys intact.
+- **Backlog is called through `backlog.client(host)`**, the `backlog-js` client
+  the adapter hands out, for the endpoints its port does not name. It is the
+  same client the adapter makes its own calls with, so an example's requests
+  are counted in the same rate-limit budget, retried on a 429 by the same rule,
+  and fail with the same error classes.
 
 ## Limits they share
 
