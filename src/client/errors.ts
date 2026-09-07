@@ -161,7 +161,13 @@ export function mapTransportError(cause: unknown): NetworkError {
   );
 }
 
-/** Maps a credential resolver rejection (docs/specs/adapter.md §8.5). */
+/**
+ * Maps a credential the resolver did not produce usably
+ * (docs/specs/adapter.md §8.5): the resolver rejected, or it returned a value
+ * `backlog-js` refuses at construction. Both are `AuthenticationError` rather
+ * than `NetworkError`, because neither is a request that failed — no request
+ * was made — and neither becomes true on a retry.
+ */
 export function mapCredentialResolverError(
   cause: unknown
 ): AuthenticationError {

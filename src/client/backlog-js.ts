@@ -155,21 +155,44 @@ export function createBacklogJsApi(
    * retry. Credentials are resolved again on every call (including the retry
    * attempt) — see class doc — and a fresh `Backlog` client is constructed
    * per attempt because `backlog-js` takes credentials at construction time,
-   * not per call.
+   * not per call — construction validates the credential, so it is guarded
+   * separately just below. `consume` reads the successful `Response` and must
+   * run inside this function's own try/catch/finally: it shares the request's
+   * abort timer and error mapping, so a stalled or malformed body is
+   * cancelled by the timeout and mapped to an adapter error like any other
+   * transport failure.
    */
-  async function call(args: RequestArgs, attempt = 0): Promise<Response> {
+  async function call<T>(
+    args: RequestArgs,
+    consume: (response: Response) => Promise<T>,
+    attempt = 0
+  ): Promise<T> {
     const resolved = await resolveCredentials();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const wrappedFetch: Fetch = (input, init) =>
       fetch(input, { ...init, signal: controller.signal });
 
-    const client = new Backlog({
-      host,
-      ...resolved,
-      fetch: wrappedFetch,
-    });
+    // Construction is guarded, and guarded on its own rather than inside the
+    // request's `try` below: `backlog-js` validates the credential in its own
+    // constructor (a control character in `apiKey` or `accessToken` throws a
+    // plain `Error` there, before any request exists), so sweeping it into the
+    // request's mapping would report a credential a resolver produced but the
+    // transport will never accept as a `NetworkError` — a class that invites
+    // the caller to retry a value no retry can fix. It is the same failure as
+    // a resolver that throws, and takes the same mapping. No timer covers it:
+    // the constructor is synchronous validation and cannot hang.
+    let client: Backlog;
+    try {
+      client = new Backlog({
+        host,
+        ...resolved,
+        fetch: wrappedFetch,
+      });
+    } catch (cause) {
+      throw mapCredentialResolverError(cause);
+    }
 
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const bucket = classifyBucket(args.method, args.path);
 
     try {
@@ -179,7 +202,10 @@ export function createBacklogJsApi(
         ...(args.params !== undefined && { params: args.params as never }),
       });
       tracker.record(host, bucket, response.headers);
-      return response;
+      // Body consumption stays under the same AbortSignal timer as the
+      // request. A proxy can answer the headers and then stall the stream;
+      // clearing the timer before json()/arrayBuffer() would wait forever.
+      return await consume(response);
     } catch (cause) {
       if (isAbortError(cause)) {
         throw mapTransportError(cause);
@@ -203,7 +229,7 @@ export function createBacklogJsApi(
               attempt
             );
             await wait(decision.waitMs);
-            return call(args, attempt + 1);
+            return call(args, consume, attempt + 1);
           }
           logRateLimit(
             'rate limited; not retrying',
@@ -238,14 +264,24 @@ export function createBacklogJsApi(
   function firstBodyError(
     error: InstanceType<typeof BacklogJsError.BacklogError>
   ): BacklogErrorBodyEntry | undefined {
-    const entry = error.body?.errors[0];
-    if (entry === undefined) {
+    const errors = error.body?.errors;
+    if (!Array.isArray(errors)) {
       return undefined;
     }
+    const entry: unknown = errors[0];
+    if (typeof entry !== 'object' || entry === null) {
+      return undefined;
+    }
+    const message = 'message' in entry ? entry.message : undefined;
+    const code = 'code' in entry ? entry.code : undefined;
+    if (typeof message !== 'string' || typeof code !== 'number') {
+      return undefined;
+    }
+    const moreInfo = 'moreInfo' in entry ? entry.moreInfo : undefined;
     return {
-      message: entry.message,
-      code: entry.code,
-      moreInfo: entry.moreInfo,
+      message,
+      code,
+      ...(typeof moreInfo === 'string' && { moreInfo }),
     };
   }
 
@@ -290,9 +326,9 @@ export function createBacklogJsApi(
     schema: ZodType<T>,
     args: RequestArgs
   ): Promise<T> {
-    const response = await call(args);
-    const body: unknown =
-      response.status === 204 ? undefined : await response.json();
+    const body = await call(args, async (response): Promise<unknown> =>
+      response.status === 204 ? undefined : response.json()
+    );
     const result = schema.safeParse(body);
     if (!result.success) {
       throw mapSchemaError(endpoint, z.prettifyError(result.error));
@@ -563,11 +599,13 @@ export function createBacklogJsApi(
       ref: PullRequestRef,
       attachmentId
     ): Promise<BacklogDownloadedFile> {
-      const response = await call({
-        method: 'GET',
-        path: `${pullRequestPath(ref)}/attachments/${attachmentId}`,
-      });
-      return toDownloadedFile(response, attachmentId);
+      return call(
+        {
+          method: 'GET',
+          path: `${pullRequestPath(ref)}/attachments/${attachmentId}`,
+        },
+        (response) => toDownloadedFile(response, attachmentId)
+      );
     },
 
     async addStar(target: StarTarget) {
@@ -575,11 +613,17 @@ export function createBacklogJsApi(
         'commentId' in target
           ? { commentId: target.commentId }
           : { pullRequestCommentId: target.pullRequestCommentId };
-      await call({ method: 'POST', path: 'stars', params });
+      await call(
+        { method: 'POST', path: 'stars', params },
+        async () => undefined
+      );
     },
 
     async deleteStar(starId) {
-      await call({ method: 'DELETE', path: `stars/${starId}` });
+      await call(
+        { method: 'DELETE', path: `stars/${starId}` },
+        async () => undefined
+      );
     },
 
     async listNotifications(options: ListNotificationsOptions) {
@@ -597,7 +641,10 @@ export function createBacklogJsApi(
     },
 
     async markNotificationAsRead(id) {
-      await call({ method: 'POST', path: `notifications/${id}/markAsRead` });
+      await call(
+        { method: 'POST', path: `notifications/${id}/markAsRead` },
+        async () => undefined
+      );
     },
 
     async uploadAttachment(filename, data, mimeType) {
@@ -625,11 +672,13 @@ export function createBacklogJsApi(
       issueId,
       attachmentId
     ): Promise<BacklogDownloadedFile> {
-      const response = await call({
-        method: 'GET',
-        path: `issues/${issueId}/attachments/${attachmentId}`,
-      });
-      return toDownloadedFile(response, attachmentId);
+      return call(
+        {
+          method: 'GET',
+          path: `issues/${issueId}/attachments/${attachmentId}`,
+        },
+        (response) => toDownloadedFile(response, attachmentId)
+      );
     },
 
     async getRateLimit(): Promise<RateLimitSnapshots> {
