@@ -66,6 +66,7 @@ import {
   bulkUpdateTargets,
   parseBulkUpdatePayload,
 } from './webhook/bulk';
+import type { BulkUpdateTarget } from './webhook/bulk';
 import { buildInboundMessage } from './webhook/inbound';
 import type { IssueMultiUpdatedActivity } from './webhook/payload';
 import {
@@ -1232,16 +1233,14 @@ export class BacklogAdapter implements Adapter<
         projectId: activity.project.id,
         subject,
       });
-      const raw: BacklogRawMessage = {
-        kind: 'bulkUpdate',
-        host,
-        payload,
-        issueId: target.issueId,
-        changes: [],
-      };
       const factory = async (): Promise<Message<BacklogRawMessage>> => {
         await projectReady;
-        return this.parseMessage(raw);
+        return this.buildValidatedBulkUpdateMessage(
+          activity,
+          target,
+          host,
+          payload
+        );
       };
       // The same function the message itself is built with, so the id logged
       // for a failed dispatch is the id the handler would have seen.
@@ -1353,7 +1352,6 @@ export class BacklogAdapter implements Adapter<
     raw: Extract<BacklogRawMessage, { kind: 'bulkUpdate' }>
   ): Message<BacklogRawMessage> {
     const { host, payload, issueId } = raw;
-    const installation = this.resolveInstallation(host);
 
     const activity = parseBulkUpdatePayload(payload);
     if (activity === null) {
@@ -1361,14 +1359,6 @@ export class BacklogAdapter implements Adapter<
         'backlog',
         'parseMessage: raw.payload is not a type 14 activity'
       );
-    }
-
-    const channelId = `backlog:${host}:${activity.project.id}`;
-    if (!this.projectCache.has(channelId)) {
-      this.logger.warn('textFormattingRule uncached; assuming markdown', {
-        host,
-        projectId: activity.project.id,
-      });
     }
 
     const target = bulkUpdateTargets(activity).find(
@@ -1379,6 +1369,35 @@ export class BacklogAdapter implements Adapter<
         'backlog',
         `parseMessage: issue ${issueId} is not in this bulk update`
       );
+    }
+
+    return this.buildValidatedBulkUpdateMessage(
+      activity,
+      target,
+      host,
+      payload
+    );
+  }
+
+  /**
+   * Builds one type-14 message from the activity and target already validated
+   * by ingress. The webhook factories close over these values, so an N-item
+   * delivery pays one schema pass and one O(N) target projection in total;
+   * `parseMessage(raw)` still revalidates serialised or hand-built raw input.
+   */
+  private buildValidatedBulkUpdateMessage(
+    activity: IssueMultiUpdatedActivity,
+    target: BulkUpdateTarget,
+    host: string,
+    payload: BacklogBulkUpdatePayload
+  ): Message<BacklogRawMessage> {
+    const installation = this.resolveInstallation(host);
+    const channelId = `backlog:${host}:${activity.project.id}`;
+    if (!this.projectCache.has(channelId)) {
+      this.logger.warn('textFormattingRule uncached; assuming markdown', {
+        host,
+        projectId: activity.project.id,
+      });
     }
 
     return buildBulkUpdateMessage(

@@ -100,9 +100,10 @@ export interface BuildBulkUpdateMessageInput {
  * (measured 2026-09-06), so reading it through the cast would hand a string
  * to a codec that requires a number and build
  * `backlog:<host>:<projectId>:issue:8001` out of luck rather than out of a
- * checked value. Parsing again is what makes the ids ids; it costs one zod
- * pass per message and cannot fail for a body that already passed the §5.1
- * step 9 gate.
+ * checked value. `parseMessage(raw)` parses again to make those ids ids; the
+ * webhook dispatcher instead closes each factory over the activity and target
+ * already validated by the §5.1 step 9 gate, so ingress does not repeat this
+ * pass for every issue in the batch.
  */
 export function parseBulkUpdatePayload(
   payload: BacklogBulkUpdatePayload

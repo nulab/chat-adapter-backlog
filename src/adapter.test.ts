@@ -951,6 +951,16 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
     expect(getProject).toHaveBeenCalledTimes(1);
   });
 
+  it('bulk factories use their validated targets without re-entering parseMessage', async () => {
+    const { adapter, chat } = await webhookAdapter();
+    const parseMessage = vi.spyOn(adapter, 'parseMessage');
+
+    await adapter.handleWebhook(webhookRequest(bulkFieldsChanged()));
+    await Promise.all(messageFactoriesOf(chat).map((factory) => factory()));
+
+    expect(parseMessage).not.toHaveBeenCalled();
+  });
+
   it('each message of a bulk update carries the batch changes and its own comment', async () => {
     const { adapter, chat } = await webhookAdapter();
 
