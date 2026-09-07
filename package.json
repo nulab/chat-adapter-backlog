@@ -36,7 +36,7 @@
   "scripts": {
     "preinstall": "only-allow pnpm",
     "prepare": "lefthook install",
-    "build": "tsdown",
+    "build": "tsdown && node scripts/check-published-types.mjs",
     "dev": "tsdown --watch",
     "test": "vitest run",
     "test:watch": "vitest",

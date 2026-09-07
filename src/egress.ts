@@ -4,6 +4,7 @@ import {
   ValidationError,
 } from '@chat-adapter/shared';
 import { parseMarkdown, root, toPlainText } from 'chat';
+import { z } from 'zod';
 
 import {
   decodeMessageId,
@@ -13,10 +14,6 @@ import {
 } from './ids';
 import { addressesSameSubject } from './reads';
 import { toRawComment, toRawIssue } from './subject/raw';
-import {
-  backlogChannelPostableExtrasSchema,
-  backlogPostableExtrasSchema,
-} from './types';
 
 import type { FallbackFormatConverter } from './format/fallback';
 import type { SubjectClient } from './subject/client';
@@ -96,6 +93,45 @@ export function requireCommentInThread(
     commentId: decoded.commentId,
   };
 }
+
+/**
+ * Validates `notifiedUserId` strictly: a present-but-mistyped extra is a
+ * `ValidationError` rather than a value silently dropped
+ * (docs/specs/adapter.md §3.4). Membership is deliberately not checked here —
+ * Backlog itself drops a non-member or nonexistent id without failing the
+ * request (measured 2026-08-18, `.claude/rules/backlog-api-facts.md`
+ * "`notifiedUserId[]` fails open"), so pre-validating membership would reject
+ * requests Backlog would have accepted.
+ */
+const notifiedUserIdSchema = z.array(z.number().int().positive());
+
+/**
+ * The strict schema `postMessage`/`postChannelMessage` read
+ * `BacklogPostableExtras` through (docs/specs/adapter.md §3.4). Only
+ * `notifiedUserId` is defined for `postMessage`; `.strip()` would silently
+ * drop an unknown key, so `.strict()` is used instead to surface a typo as a
+ * `ValidationError` rather than a no-op.
+ */
+const backlogPostableExtrasSchema = z
+  .object({
+    notifiedUserId: notifiedUserIdSchema.optional(),
+  })
+  .strict();
+
+/**
+ * The strict schema `postChannelMessage` reads `BacklogChannelPostableExtras`
+ * through (docs/specs/adapter.md §3.4, §6.7). `.strict()` for the same reason
+ * as `backlogPostableExtrasSchema`: a typo'd extra must surface as a
+ * `ValidationError`, not a silently ignored field.
+ */
+const backlogChannelPostableExtrasSchema = z
+  .object({
+    notifiedUserId: notifiedUserIdSchema.optional(),
+    issueTypeId: z.number().int().positive().optional(),
+    priorityId: z.number().int().positive().optional(),
+    assigneeId: z.number().int().positive().optional(),
+  })
+  .strict();
 
 /**
  * Reads `BacklogPostableExtras` off a postable with the strict §3.4 schema: a
