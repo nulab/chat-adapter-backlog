@@ -1,6 +1,8 @@
 import {
+  AdapterError,
   AdapterRateLimitError,
   AuthenticationError,
+  NetworkError,
   ResourceNotFoundError,
 } from '@chat-adapter/shared';
 import { createMockLogger } from '@chat-adapter/tests';
@@ -115,6 +117,18 @@ describe('createBacklogJsApi', () => {
     await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(
       AuthenticationError
     );
+  });
+
+  it('a resolver-produced API key containing CR/LF becomes a mapped error', async () => {
+    const fetchStub = vi.fn<typeof globalThis.fetch>();
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'invalid\r\nkey' },
+      fetch: fetchStub,
+    });
+
+    await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(NetworkError);
+    expect(fetchStub).not.toHaveBeenCalled();
   });
 
   it('an array query parameter is sent once, not with doubled brackets', async () => {
@@ -262,6 +276,124 @@ describe('createBacklogJsApi', () => {
     await rejection.catch((error: unknown) => {
       expect(error).not.toHaveProperty('issues');
     });
+  });
+
+  it('a 2xx HTML body becomes a NetworkError instead of leaking SyntaxError', async () => {
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: async () =>
+        new Response('<html>sign in</html>', {
+          status: 200,
+          headers: rateLimitHeaders,
+        }),
+    });
+
+    await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(NetworkError);
+  });
+
+  it('a 2xx empty body becomes a NetworkError instead of leaking SyntaxError', async () => {
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: async () =>
+        new Response(null, { status: 200, headers: rateLimitHeaders }),
+    });
+
+    await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(NetworkError);
+  });
+
+  it('an attachment body read failure becomes a NetworkError', async () => {
+    const response = new Response('file bytes', {
+      status: 200,
+      headers: rateLimitHeaders,
+    });
+    vi.spyOn(response, 'arrayBuffer').mockRejectedValue(
+      new Error('body stream failed')
+    );
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: async () => response,
+    });
+
+    await expect(api.downloadAttachment(issueId, 55)).rejects.toBeInstanceOf(
+      NetworkError
+    );
+  });
+
+  it('an error body without errors[] still maps by status and records its headers', async () => {
+    const response = new Response(
+      JSON.stringify({ message: 'upstream timeout' }),
+      {
+        status: 502,
+        headers: rateLimitHeaders,
+      }
+    );
+    Object.defineProperty(response, 'url', {
+      value: `https://${host}/api/v2/issues/${issueId}`,
+    });
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => 'test-api-key' },
+      fetch: async () => response,
+    });
+
+    const rejection = api.getIssue(issueId);
+    await expect(rejection).rejects.toBeInstanceOf(AdapterError);
+    await expect(rejection).rejects.toMatchObject({
+      code: '502',
+      cause: {
+        status: 502,
+        url: `https://${host}/api/v2/issues/${issueId}`,
+      },
+    });
+    expect(api.rateLimit().read).toEqual({
+      limit: 600,
+      remaining: 599,
+      reset: new Date(Number(rateLimitHeaders['X-RateLimit-Reset']) * 1000),
+    });
+  });
+
+  it('keeps a stalled JSON body read inside the request timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      let requestSignal: AbortSignal | null = null;
+      const response = new Response(JSON.stringify(baseIssue()), {
+        status: 200,
+        headers: rateLimitHeaders,
+      });
+      vi.spyOn(response, 'json').mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            requestSignal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('Aborted', 'AbortError')),
+              { once: true }
+            );
+          })
+      );
+      const fetchStub: typeof globalThis.fetch = async (_input, init) => {
+        requestSignal = init?.signal ?? null;
+        return response;
+      };
+      const api = createBacklogJsApi({
+        host,
+        credentials: { apiKey: () => 'test-api-key' },
+        fetch: fetchStub,
+        timeoutMs: 25,
+      });
+
+      const rejection = api.getIssue(issueId);
+      const assertion = expect(rejection).rejects.toBeInstanceOf(NetworkError);
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(25);
+
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('uploading a file posts one multipart part named file', async () => {

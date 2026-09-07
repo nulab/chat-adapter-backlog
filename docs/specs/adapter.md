@@ -1194,7 +1194,9 @@ Wraps `backlog-js@^0.20.1`. Two constraints shape it:
 
 Timeouts: `backlog-js`'s `timeout` option is not a real fetch timeout; the
 implementation uses an `AbortSignal` (default 30 s) and maps aborts to
-`NetworkError`.
+`NetworkError`. The timer covers consuming the response body as JSON or an
+`ArrayBuffer`, not only receiving its headers, so a stalled body stream cannot
+outlive the request timeout.
 
 ### 8.3 In-memory implementation
 
@@ -1271,9 +1273,10 @@ then HTTP status when the body has no code, then transport.
 | code 1, 2, 3, 8, 9, 12 | `AdapterError(message, "backlog", String(code))` |
 | status 401 / 403 / 404 / 400 / 429 without a code | `AuthenticationError` / `PermissionError` / `ResourceNotFoundError` / `ValidationError` / `AdapterRateLimitError` |
 | other status | `AdapterError(message, "backlog", String(status))` |
-| `fetch` rejection, abort, DNS failure | `NetworkError(message, cause)` |
+| `fetch` rejection, abort, DNS failure; unreadable JSON or binary response body | `NetworkError(message, cause)` |
 | response fails the zod schema | `AdapterError(…, "SCHEMA")` |
 | credential resolver throws | `AuthenticationError` |
+| a resolved credential is rejected while constructing the request | `NetworkError(message, cause)` |
 
 Every mapped error sets `error.cause` to a plain
 `BacklogApiErrorDetail { status, code?, message, moreInfo?, url }` — never the
@@ -1541,7 +1544,11 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   with fake timers; one `warn` per rate-limit wait and per refusal to wait,
   none on an unlimited request, and the logger resolved per request; every row
   of §8.5; `cause` shape; no `ZodError`; resolver errors →
-  `AuthenticationError`; query string stripped from `cause.url`.
+  `AuthenticationError`; a resolved credential containing CR/LF, a 2xx
+  non-JSON or empty body, a binary body read failure, and a stalled body stream
+  all stay inside the mapped error/timeout boundary; an error body without an
+  `errors[]` array still maps by status and records its headers; query string
+  stripped from `cause.url`.
 - **wiring**: real `Chat` + memory state: mention → `onNewMention` →
   `thread.post` → comment; redelivery within TTL deduped; subscribed follow-up
   → `onSubscribedMessage`; bot's own comment not delivered; assignment to the
