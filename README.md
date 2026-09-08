@@ -86,16 +86,16 @@ not a request to fall back.
 | --- | --- | --- | --- |
 | `host` | `string` | — | Full hostname. Backlog spaces also live on `backlog.jp` and legacy `backlogtool.com`, so this is never a subdomain slug. |
 | `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | — | Exactly one per installation. The function form is resolved on **every** call and never cached, so an expiring token can be refreshed without reconstructing the adapter. |
-| `botUserId` | `number` | — | Positive integer. Recognises the adapter's own messages and assignment to the bot. |
+| `botUserId` | `number` | — | Positive integer, at most `Number.MAX_SAFE_INTEGER` — it is encoded into user ids. Recognises the adapter's own messages and assignment to the bot. |
 | `botUserName` | `string` | — | Non-empty. Mentions arrive as resolved text, so this is what the mention pattern matches. |
 | `webhookSecret` | `string` | — | Required on every installation unless `webhookVerifier` is set. **At least 16 bytes**, checked when the adapter is constructed — it is the only thing standing between the URL and your projects, so a short one is refused rather than warned about. |
 | `installations` | `BacklogInstallation[]` | — | Several spaces in one adapter. Mutually exclusive with the fields above. |
 | `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check entirely — for a reverse-proxy assertion, mTLS or an IP allowlist. |
 | `userName` | `string` | first installation's `botUserName` | Exposed to the core as `adapter.userName`. One string for the whole adapter; per space, read `adapter.botUserName(host)`. |
 | `logger` | `Logger` | `ConsoleLogger("info")` | Replaced by `chat.getLogger("backlog")` in `initialize`. |
-| `rateLimit.maxWaitMs` | `number` | `60_000` | Longest wait before a 429 retry. |
-| `rateLimit.maxRetries` | `number` | `1` | `0` disables retries. |
-| `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | Larger bodies get a 413. Description edits carry two full bodies. |
+| `rateLimit.maxWaitMs` | `number` | `60_000` | Longest wait before a 429 retry. Non-negative integer. |
+| `rateLimit.maxRetries` | `number` | `1` | Non-negative integer; `0` disables retries. |
+| `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | Positive integer. Larger bodies get a 413. Description edits carry two full bodies. |
 | `createApi` | `(installation: ResolvedInstallation) => BacklogApi` | the `backlog-js`-backed port | Test seam: replaces the port every Backlog call goes through, so a consumer's suite needs no network — see **Testing**. Replacing it also takes the rate-limit accounting, the 429 retry and `client()` with it. |
 
 ### Several spaces
@@ -263,6 +263,12 @@ appears wherever the id grammar's subject does: `fetchThread().metadata.kind`,
 the `raw.subject.kind` of a comment's raw message, and the `raw.kind` of a root
 message's. Only `subject.type` follows the ecosystem.
 
+Every timestamp in `fetchThread().metadata` — `created`, `updated` and a pull
+request's `closeAt`/`mergeAt` — is an **ISO string**, the same as in
+`message.raw`. A value read out of `metadata` is typed `unknown`, so a `Date`
+there would be invisible to the compiler and would quietly become a string the
+first time a `ThreadInfo` went through JSON.
+
 What a pull-request thread cannot do — delete a comment, get listed by
 `listThreads`, be merged, closed or created — is in the table below.
 
@@ -418,6 +424,14 @@ and raw data.
 The host is part of message and user ids because Backlog comment ids are unique
 only within one space. A pull request's channel is its **project**, not its
 repository.
+
+Every numeric segment is a positive integer of at most
+`Number.MAX_SAFE_INTEGER`, and the **encoders** enforce the grammar as well as
+the decoders: `encodeThreadId`, `encodeChannelId`, `encodeMessageId` and
+`encodeUserId` throw `ValidationError` for a value they could not read back —
+a host that is not lowercased or carries a scheme, path or port, a
+non-positive or non-integral id, an id past 2^53-1 (where `Number` stops
+round-tripping decimal digits), or an update id with an empty timestamp.
 
 ## Mentions
 

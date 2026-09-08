@@ -270,6 +270,34 @@ const PULL_REQUEST_FIXTURE: SubjectFixture = {
 const SUBJECT_FIXTURES = [ISSUE_FIXTURE, PULL_REQUEST_FIXTURE];
 
 describe('fetchMessages cursor and threadId validation', () => {
+  it.each([2.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'a limit of %s is a validation error, not a 400 from Backlog',
+    async (limit) => {
+      const api = apiWith(5);
+
+      await expect(
+        fetchMessages({
+          threadId: THREAD_ID,
+          options: { limit },
+          subject: subjectOf(api, ISSUE_REF),
+          builders: builders(),
+        })
+      ).rejects.toThrow(ValidationError);
+    }
+  );
+
+  it('a limit outside [1, 100] is clamped, not rejected', async () => {
+    const api = apiWith(5);
+    const result = await fetchMessages({
+      threadId: THREAD_ID,
+      options: { limit: 1000 },
+      subject: subjectOf(api, ISSUE_REF),
+      builders: builders(),
+    });
+
+    expect(result.messages).toHaveLength(6);
+  });
+
   it('a malformed cursor is a validation error', async () => {
     const api = apiWith(5);
     await expect(

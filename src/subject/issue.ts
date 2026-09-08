@@ -230,8 +230,8 @@ export function createIssueSubjectClient(
         issueType: issue.issueType,
         priority: issue.priority,
         createdUserId: issue.createdUser.id,
-        created: issue.created,
-        updated: issue.updated,
+        created: issue.created.toISOString(),
+        updated: issue.updated.toISOString(),
         url: issueWebUrl(host, issue.issueKey),
       };
     },

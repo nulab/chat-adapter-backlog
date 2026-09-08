@@ -30,6 +30,7 @@ import {
   issueDeleted,
   issueMultiUpdated,
   issueUpdated,
+  issueUpdatedWithoutComment,
   pullRequestAdded,
   pullRequestAssigneeChanged,
   pullRequestCommented,
@@ -402,24 +403,50 @@ describe('BacklogAdapter construction', () => {
     );
   });
 
-  it('rejects a negative rateLimit.maxWaitMs', () => {
-    expect(
-      () =>
-        new BacklogAdapter({ ...validConfig(), rateLimit: { maxWaitMs: -1 } })
-    ).toThrow(ValidationError);
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects a rateLimit.maxWaitMs of %s',
+    (maxWaitMs) => {
+      const config = { ...validConfig(), rateLimit: { maxWaitMs } };
+
+      expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
+    }
+  );
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects a rateLimit.maxRetries of %s',
+    (maxRetries) => {
+      const config = { ...validConfig(), rateLimit: { maxRetries } };
+
+      expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
+    }
+  );
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects a maxWebhookBodyBytes of %s',
+    (maxWebhookBodyBytes) => {
+      const config = { ...validConfig(), maxWebhookBodyBytes };
+
+      expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
+    }
+  );
+
+  it('rejects a botUserId no id string could round-trip', () => {
+    // 2^53 and beyond do not survive `Number(String(id))`, and this id is
+    // encoded into every user id and outbound mention (§2.1).
+    const botUserId = Number.MAX_SAFE_INTEGER + 2;
+    const config = { ...validConfig(), botUserId };
+
+    expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
   });
 
-  it('rejects a non-integer rateLimit.maxRetries', () => {
-    expect(
-      () =>
-        new BacklogAdapter({ ...validConfig(), rateLimit: { maxRetries: 1.5 } })
-    ).toThrow(ValidationError);
-  });
+  it('rejects a BACKLOG_BOT_USER_ID no id string could round-trip', () => {
+    process.env.BACKLOG_HOST = 'example.backlog.com';
+    process.env.BACKLOG_API_KEY = 'env-api-key';
+    process.env.BACKLOG_BOT_USER_ID = '99999999999999999999';
+    process.env.BACKLOG_BOT_USER_NAME = 'Chatbot';
+    process.env.BACKLOG_WEBHOOK_SECRET = 'env-secret';
 
-  it('rejects a non-positive maxWebhookBodyBytes', () => {
-    expect(
-      () => new BacklogAdapter({ ...validConfig(), maxWebhookBodyBytes: 0 })
-    ).toThrow(ValidationError);
+    expect(() => createBacklogAdapter()).toThrow(ValidationError);
   });
 
   it('rejects an empty installations array', () => {
@@ -1103,6 +1130,36 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe('Invalid payload');
+  });
+
+  it('a delivery whose created is empty is answered 400, not 500', async () => {
+    // Step 9 rejects it (§5.2 `createdSchema`), which is the ladder's answer.
+    // Worth asserting end to end rather than at the schema alone: tightening
+    // the id encoders gave the dispatcher a way to throw past the ladder for
+    // this exact payload, and a throw there is the consumer's function
+    // rejecting — a 500 on a delivery §5.1 has six answers for.
+    const { adapter } = await webhookAdapter();
+    const payload = { ...issueUpdatedWithoutComment(), created: '' };
+
+    const response = await adapter.handleWebhook(webhookRequest(payload));
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe('Invalid payload');
+  });
+
+  it('a bulk delivery whose created is empty is answered 400, not 500', async () => {
+    const { adapter } = await webhookAdapter();
+    const payload = issueMultiUpdated();
+    const content = payload['content'] as Record<string, unknown>;
+    const links = content['link'] as Record<string, unknown>[];
+    for (const link of links) {
+      delete link['comment'];
+    }
+    payload['created'] = '';
+
+    const response = await adapter.handleWebhook(webhookRequest(payload));
+
+    expect(response.status).toBe(400);
   });
 
   it('a webhook before initialize() has run gets 503', async () => {

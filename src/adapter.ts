@@ -33,6 +33,7 @@ import {
   decodeUserId as decodeUserIdString,
   encodeMessageId,
   encodeThreadId as encodeThreadIdStruct,
+  validateHost,
 } from './ids';
 import {
   fetchChannelInfo as fetchChannelInfoRead,
@@ -59,6 +60,7 @@ import type {
   BacklogThreadId,
   BacklogWebhookPayload,
   Resolvable,
+  ResolvedCredential,
   ResolvedInstallation,
 } from './types';
 import {
@@ -141,23 +143,23 @@ interface AdapterTransport {
   client?: Backlog;
 }
 
+/**
+ * There is no "neither credential" branch, and none is reachable: an
+ * installation is a `ResolvedCredential`, so the compiler narrows the second
+ * test to `never` and a third case would be dead code the reader has to
+ * reason about (this function used to end in an unreachable `throw`).
+ *
+ * Each resolvable is copied into a local first because the closure outlives
+ * the narrowing — reading `installation.apiKey` inside the arrow would widen
+ * back to `Resolvable | undefined`.
+ */
 function toCredentials(installation: ResolvedInstallation): BacklogCredentials {
-  // The constructor already rejected an installation carrying neither
-  // credential, so the fallback below is unreachable; it exists because the
-  // port's union type cannot express "exactly one of these two" in a way the
-  // compiler can narrow from `ResolvedInstallation`.
   if (installation.apiKey !== undefined) {
     const apiKey = installation.apiKey;
     return { apiKey: () => resolve(apiKey) };
   }
-  if (installation.accessToken !== undefined) {
-    const accessToken = installation.accessToken;
-    return { accessToken: () => resolve(accessToken) };
-  }
-  throw new ValidationError(
-    'backlog',
-    `installation ${installation.host} has no apiKey or accessToken`
-  );
+  const accessToken = installation.accessToken;
+  return { accessToken: () => resolve(accessToken) };
 }
 
 function resolve(resolvable: Resolvable): string | Promise<string> {
@@ -171,7 +173,6 @@ const ENV_BOT_USER_ID = 'BACKLOG_BOT_USER_ID';
 const ENV_BOT_USER_NAME = 'BACKLOG_BOT_USER_NAME';
 const ENV_WEBHOOK_SECRET = 'BACKLOG_WEBHOOK_SECRET';
 
-const HOST_GRAMMAR = /^[a-z0-9.-]+$/;
 const DEFAULT_MAX_WAIT_MS = 60_000;
 const DEFAULT_MAX_RETRIES = 1;
 const DEFAULT_MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024;
@@ -181,40 +182,23 @@ function fail(message: string): never {
 }
 
 /**
- * `host` is validated in its raw (non-lowercased) form for scheme/whitespace
- * before lowercasing, so a rejection message shows the value the caller
- * actually passed rather than a silently-transformed one.
+ * `Number.isSafeInteger`, not `Number.isInteger`: the id ends up in
+ * `encodeUserId`, whose grammar stops at 2^53-1 because a larger value cannot
+ * be read back out of an id string (docs/specs/adapter.md §2.1). Accepting
+ * one here would defer the same rejection to the first outbound mention.
  */
-function validateHost(host: string, label: string): string {
-  if (host.trim() !== host || /\s/.test(host)) {
-    fail(`${label} must not contain whitespace`);
-  }
-  if (host.includes('://')) {
-    fail(`${label} must not include a scheme`);
-  }
-  if (host.includes('/')) {
-    fail(`${label} must not include a path`);
-  }
-  const lowered = host.toLowerCase();
-  if (lowered.includes(':')) {
-    fail(`${label} must not include a port`);
-  }
-  if (lowered.length === 0 || !HOST_GRAMMAR.test(lowered)) {
-    fail(`${label} is not a valid Backlog host`);
-  }
-  return lowered;
-}
-
 function validateBotUserId(value: number, label: string): number {
-  if (!Number.isInteger(value) || value <= 0) {
-    fail(`${label} must be a positive integer`);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    fail(`${label} must be a positive integer, at most 2^53-1`);
   }
   return value;
 }
 
 function parseBotUserIdFromEnv(raw: string, envVar: string): number {
-  if (!/^[1-9]\d*$/.test(raw)) {
-    fail(`environment variable ${envVar} must be a positive integer`);
+  if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    fail(
+      `environment variable ${envVar} must be a positive integer, at most 2^53-1`
+    );
   }
   return Number(raw);
 }
@@ -298,21 +282,7 @@ function validateInstallation(
 ): ResolvedInstallation {
   const host = validateHost(candidate.host, 'host');
 
-  const hasApiKey = candidate.apiKey !== undefined;
-  const hasAccessToken = candidate.accessToken !== undefined;
-  if (hasApiKey === hasAccessToken) {
-    fail(
-      hasApiKey
-        ? 'exactly one of apiKey or accessToken is allowed, not both'
-        : 'exactly one of apiKey or accessToken is required'
-    );
-  }
-  if (typeof candidate.apiKey === 'string') {
-    validateApiKey(candidate.apiKey, 'apiKey');
-  }
-  if (typeof candidate.accessToken === 'string') {
-    validateApiKey(candidate.accessToken, 'accessToken');
-  }
+  const credential = resolveCredential(candidate);
 
   const botUserId = validateBotUserId(candidate.botUserId, 'botUserId');
   const botUserName = validateBotUserName(candidate.botUserName, 'botUserName');
@@ -332,17 +302,41 @@ function validateInstallation(
     host,
     botUserId,
     botUserName,
+    ...credential,
   };
-  if (candidate.apiKey !== undefined) {
-    resolved.apiKey = candidate.apiKey;
-  }
-  if (candidate.accessToken !== undefined) {
-    resolved.accessToken = candidate.accessToken;
-  }
   if (candidate.webhookSecret !== undefined) {
     resolved.webhookSecret = candidate.webhookSecret;
   }
   return resolved;
+}
+
+/**
+ * The one place "exactly one of `apiKey`/`accessToken`" is decided
+ * (docs/specs/adapter.md §3.2). It returns the credential as a
+ * `ResolvedCredential` rather than reporting a verdict about the candidate,
+ * so the exclusivity leaves this function as a type and no later reader has
+ * to trust that it was checked.
+ */
+function resolveCredential(candidate: {
+  apiKey?: Resolvable;
+  accessToken?: Resolvable;
+}): ResolvedCredential {
+  if (candidate.apiKey !== undefined && candidate.accessToken !== undefined) {
+    fail('exactly one of apiKey or accessToken is allowed, not both');
+  }
+  if (candidate.apiKey !== undefined) {
+    if (typeof candidate.apiKey === 'string') {
+      validateApiKey(candidate.apiKey, 'apiKey');
+    }
+    return { apiKey: candidate.apiKey };
+  }
+  if (candidate.accessToken !== undefined) {
+    if (typeof candidate.accessToken === 'string') {
+      validateApiKey(candidate.accessToken, 'accessToken');
+    }
+    return { accessToken: candidate.accessToken };
+  }
+  fail('exactly one of apiKey or accessToken is required');
 }
 
 function resolveShapeA(
@@ -450,6 +444,15 @@ function resolveShapeB(
   return resolved;
 }
 
+/**
+ * `Number.isInteger`, not a bare comparison: `NaN < 0` is false, so
+ * `maxWaitMs: NaN` passed validation and then made a 429 whose response
+ * carried no `X-RateLimit-Reset` retry immediately into the same empty
+ * bucket — `decideRetry` compares `waitMs > maxWaitMs`, which is false for
+ * `NaN`, and `wait(NaN)` returns at once (`src/client/rate-limit.ts`).
+ * `Infinity` fails the same check, which is the point of a ceiling on how
+ * long a call may block.
+ */
 function validateRateLimitConfig(
   rateLimit: BacklogAdapterConfig['rateLimit']
 ): {
@@ -457,8 +460,8 @@ function validateRateLimitConfig(
   maxRetries: number;
 } {
   const maxWaitMs = rateLimit?.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
-  if (maxWaitMs < 0) {
-    fail('rateLimit.maxWaitMs must be >= 0');
+  if (!Number.isInteger(maxWaitMs) || maxWaitMs < 0) {
+    fail('rateLimit.maxWaitMs must be a non-negative integer');
   }
 
   const maxRetries = rateLimit?.maxRetries ?? DEFAULT_MAX_RETRIES;
@@ -473,8 +476,8 @@ function validateMaxWebhookBodyBytes(value: number | undefined): number {
   if (value === undefined) {
     return DEFAULT_MAX_WEBHOOK_BODY_BYTES;
   }
-  if (value <= 0) {
-    fail('maxWebhookBodyBytes must be > 0');
+  if (!Number.isInteger(value) || value <= 0) {
+    fail('maxWebhookBodyBytes must be a positive integer');
   }
   return value;
 }
@@ -493,6 +496,36 @@ function validateMaxWebhookBodyBytes(value: number | undefined): number {
  * so moving it onto `SubjectClient` would need a subject client before there
  * is anything to build one from.
  */
+/**
+ * The `messageId` field of a failed-dispatch log line, or nothing when the
+ * delivery cannot produce one.
+ *
+ * `handleWebhook` owes its caller a response from the §5.1 ladder and holds
+ * no `try/catch` outside the body parse, so an encoder throwing while
+ * building a **log** value would take the response with it: when `created`
+ * was `z.string()` on the way in, a delivery carrying `""` left the
+ * consumer's function rejecting — a 500 the ladder has no entry for — over
+ * one field of one log line. The id of the message *itself* is built inside
+ * the lazy factory, where the `.catch` on `processMessage` already turns a
+ * throw into an error log after the 200 (§5.1 step 12), so nothing is
+ * loosened where a failure can be reported.
+ *
+ * No payload can reach the failing branch today: the root and comment forms
+ * are built from ids `identitySchema` already validated as positive safe
+ * integers at step 9, and `createdSchema` rejects the empty timestamp the
+ * `part: 'update'` form would have tripped on (§5.2). It is written to be
+ * total anyway — the value it guards is a log field and the response is not,
+ * so the next encoder rule to name a field step 9 does not constrain costs a
+ * log line rather than a delivery.
+ */
+function messageIdForLog(build: () => string): { messageId?: string } {
+  try {
+    return { messageId: build() };
+  } catch {
+    return {};
+  }
+}
+
 function subjectOfRaw(raw: BacklogRawMessage): {
   projectId: number;
   subject: BacklogSubjectRef;
@@ -1227,7 +1260,7 @@ export class BacklogAdapter implements Adapter<
       });
     };
 
-    const messageIdForLog =
+    const idForLog = messageIdForLog(() =>
       activity.type === 1 || activity.type === 18
         ? encodeMessageId({ host, subject, part: 'root' })
         : activity.content.comment !== null &&
@@ -1243,7 +1276,8 @@ export class BacklogAdapter implements Adapter<
               subject,
               part: 'update',
               created: activity.created,
-            });
+            })
+    );
 
     // Dispatched, not awaited: the response below must return before
     // processing completes (docs/specs/adapter.md §5.1 step 12). A factory
@@ -1258,7 +1292,7 @@ export class BacklogAdapter implements Adapter<
       this.logger.error('inbound processing failed', {
         host,
         threadId,
-        messageId: messageIdForLog,
+        ...idForLog,
         error: cause instanceof Error ? cause.message : String(cause),
       });
     });
@@ -1335,12 +1369,11 @@ export class BacklogAdapter implements Adapter<
         );
       };
       // The same function the message itself is built with, so the id logged
-      // for a failed dispatch is the id the handler would have seen.
-      const messageIdForLog = bulkMessageId(
-        host,
-        subject,
-        target,
-        activity.created
+      // for a failed dispatch is the id the handler would have seen — and
+      // guarded, because this one runs before the response rather than inside
+      // the factory (see `messageIdForLog`).
+      const idForLog = messageIdForLog(() =>
+        bulkMessageId(host, subject, target, activity.created)
       );
 
       // Dispatched per issue and never awaited, exactly as the single-subject
@@ -1351,7 +1384,7 @@ export class BacklogAdapter implements Adapter<
         this.logger.error('inbound processing failed', {
           host,
           threadId,
-          messageId: messageIdForLog,
+          ...idForLog,
           error: cause instanceof Error ? cause.message : String(cause),
         });
       });

@@ -528,10 +528,19 @@ export type Resolvable = string | (() => string | Promise<string>);
 /**
  * One configured Backlog space (shape B of `BacklogAdapterConfig`,
  * docs/specs/adapter.md §3.2). Exactly one of `apiKey`/`accessToken` is
- * required; `webhookSecret` is required unless `BacklogAdapterConfig.webhookVerifier`
- * is set (D2) — both are validated by the adapter constructor, not by this
- * type, because the exclusivity is a cross-field rule `exactOptionalPropertyTypes`
- * cannot express.
+ * required, and `webhookSecret` is required unless
+ * `BacklogAdapterConfig.webhookVerifier` is set (D2); the constructor
+ * enforces both.
+ *
+ * Deliberately **not** the union {@link ResolvedCredential} uses, although
+ * this is the same rule: config is the shape a consumer assembles, often from
+ * `process.env` or JSON the compiler knows nothing about, and every field
+ * here is checked at construction anyway. Stating the exclusivity in the
+ * input type would turn one uniform `ValidationError` naming the field into a
+ * type error a plain-JavaScript consumer never sees and a TypeScript one
+ * meets while building the object rather than where the value came from. The
+ * strictness belongs on the way out, which is what {@link
+ * ResolvedInstallation} is for.
  */
 export interface BacklogInstallation {
   host: string;
@@ -543,21 +552,40 @@ export interface BacklogInstallation {
 }
 
 /**
- * One configured Backlog installation after shape A/B resolution and
- * validation (docs/specs/adapter.md §3.2): a fully-formed `BacklogInstallation`
- * with its host lowercased and exactly one of `apiKey`/`accessToken` present.
- * `createApi` receives this, not the raw config, so a test seam or a future
- * `backlog-js`-backed port never has to re-derive validation the constructor
- * already did.
+ * The credential half of a {@link ResolvedInstallation}: **exactly one** of
+ * the two, stated as a union rather than as two optional fields. `?: never`
+ * is what says "not this one" under `exactOptionalPropertyTypes` — the key
+ * may be omitted and may not be written, `undefined` included — so an
+ * installation carrying both credentials, or neither, is a type error instead
+ * of a constructor-time `ValidationError`.
  */
-export interface ResolvedInstallation {
+export type ResolvedCredential =
+  | { apiKey: Resolvable; accessToken?: never }
+  | { accessToken: Resolvable; apiKey?: never };
+
+/**
+ * One configured Backlog installation after shape A/B resolution and
+ * validation (docs/specs/adapter.md §3.2). `createApi` receives this, not the
+ * raw config, so a test seam or a future port never has to re-derive
+ * validation the constructor already did — which is only worth anything if
+ * the type says what was validated, so it is not a second copy of
+ * {@link BacklogInstallation}:
+ *
+ * - the credential is a {@link ResolvedCredential}, so "exactly one of
+ *   `apiKey`/`accessToken`" holds by construction;
+ * - `host` is lowercased, and stays a plain `string` deliberately. A brand
+ *   would state that too, but only by making every construction site — the
+ *   constructor, every fixture, every `createApi` double a consumer writes —
+ *   cast into it, and the one producer of the value is `validateHost` in
+ *   `src/ids.ts`, which lowercases through the same grammar the id codec
+ *   uses. The cost outweighs what the brand buys (issue #62).
+ */
+export type ResolvedInstallation = {
   host: string;
-  apiKey?: Resolvable;
-  accessToken?: Resolvable;
   botUserId: number;
   botUserName: string;
   webhookSecret?: string;
-}
+} & ResolvedCredential;
 
 /**
  * Constructor config for `BacklogAdapter` / `createBacklogAdapter`

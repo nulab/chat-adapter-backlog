@@ -299,6 +299,10 @@ export function createPullRequestSubjectClient(
     ): Record<string, unknown> {
       const pullRequest = pullRequestOf(root);
       const url = webUrl(names);
+      const closeAt =
+        pullRequest.closeAt === null ? null : pullRequest.closeAt.toISOString();
+      const mergeAt =
+        pullRequest.mergeAt === null ? null : pullRequest.mergeAt.toISOString();
       return {
         kind: 'pullRequest',
         host,
@@ -331,11 +335,11 @@ export function createPullRequestSubjectClient(
         baseCommit: pullRequest.baseCommit,
         branchCommit: pullRequest.branchCommit,
         mergeCommit: pullRequest.mergeCommit,
-        closeAt: pullRequest.closeAt,
-        mergeAt: pullRequest.mergeAt,
+        closeAt,
+        mergeAt,
         createdUserId: pullRequest.createdUser.id,
-        created: pullRequest.created,
-        updated: pullRequest.updated,
+        created: pullRequest.created.toISOString(),
+        updated: pullRequest.updated.toISOString(),
         ...(url === undefined ? {} : { url }),
       };
     },

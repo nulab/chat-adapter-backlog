@@ -95,7 +95,7 @@ type BacklogMessageId = { host: string; subject: BacklogSubjectRef } & (
 
 ```
 host        = 1*( lower-alnum / "." / "-" )      ; no ":" "/" scheme, port or path; lowercased
-posint      = ( "1"-"9" ) *DIGIT
+posint      = ( "1"-"9" ) *DIGIT                 ; value <= 2^53-1 (Number.MAX_SAFE_INTEGER)
 subject     = "issue:" posint                    ; issueId
             / "pr:" posint ":" posint            ; repositoryId, number
 thread-id   = "backlog:" host ":" posint ":" subject   ; projectId, subject
@@ -116,7 +116,24 @@ keyword takes — one posint after `issue:`, two after `pr:`; channel: exactly
 keyword, a subject followed by nothing or by an unknown part, `r` or `c<id>`
 followed by further segments, `u:` with nothing after it. `decodeUserId`
 splits on the **last** `:`; a bare number is rejected even with a single
-installation. A host
+installation.
+
+A `posint` whose **value** exceeds `Number.MAX_SAFE_INTEGER` is rejected as
+well, although its digits match the grammar: the segment is read with
+`Number`, which is lossy past 2^53-1, so `…:issue:99999999999999999999`
+decoded to `1e20` and re-encoded to `…:issue:1e+20` — a round trip that
+silently addressed something else.
+
+`encodeThreadId`, `encodeChannelId`, `encodeMessageId` and `encodeUserId`
+validate their input against **the same grammar** and throw the same
+`ValidationError`, because a value the grammar cannot express produces a
+string the matching decoder rejects: a non-lowercased host, a host with a
+scheme, path or port, a numeric field that is not a positive integer ≤ 2^53-1,
+and an `update` part whose `created` is empty. Nothing is normalised on the
+way out — a host is rejected, not lowercased in passing, since the config path
+(§3.2) is where lowercasing happens.
+
+A host
 that decodes correctly but is not a configured installation is a
 `ResourceNotFoundError("backlog", "installation", host)` at the point of use
 (not a decode error: the id is well-formed).
@@ -134,7 +151,7 @@ Runtime: `BacklogAdapter` (class), `createBacklogAdapter(config?)`,
 `BacklogNotationConverter`, `createInMemoryBacklogApi(seed?)`.
 
 Types: `BacklogAdapterConfig`, `BacklogInstallation`, `ResolvedInstallation`,
-`Resolvable`, `BacklogThreadId`, `BacklogChannelId`, `BacklogSubjectRef`,
+`ResolvedCredential`, `Resolvable`, `BacklogThreadId`, `BacklogChannelId`, `BacklogSubjectRef`,
 `BacklogMessageId`, `BacklogMessagePart`, `BacklogUserId`, `BacklogRawMessage`,
 `BacklogPostableExtras`, `BacklogChannelPostableExtras`,
 `BacklogWebhookPayload`, `BacklogWebhookVerifier`, `BacklogApi` and the domain
@@ -224,16 +241,16 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 | `host` | `string` | — | `BACKLOG_HOST` | Matches `host` grammar after lowercasing; rejects `:`/`/`/scheme/whitespace. |
 | `apiKey` | `Resolvable` | — | `BACKLOG_API_KEY` | Non-empty when a string. Exactly one of `apiKey`/`accessToken` per installation; the pair falls back to the environment together (below). |
 | `accessToken` | `Resolvable` | — | `BACKLOG_ACCESS_TOKEN` | As above. Refresh is the caller's job (resolver form). |
-| `botUserId` | `number` | — | `BACKLOG_BOT_USER_ID` | Positive integer; env value must parse as one. |
+| `botUserId` | `number` | — | `BACKLOG_BOT_USER_ID` | Positive integer ≤ 2^53-1 (the §2.1 `posint` range, since it is encoded into user ids and mentions); env value must parse as one. |
 | `botUserName` | `string` | — | `BACKLOG_BOT_USER_NAME` | Non-empty after trim (an empty name would make every `@` a mention). |
 | `webhookSecret` | `string` | — | `BACKLOG_WEBHOOK_SECRET` | Non-empty and at least **16 bytes** (UTF-8), validated whether or not a verifier is configured. Required on every installation unless `webhookVerifier` is set (D2). |
 | `installations` | `BacklogInstallation[]` | — | none | Non-empty; no duplicate hosts (after lowercasing); each element validated as above. Rejected if any shape-A field is also present. |
 | `webhookVerifier` | function | — | none | When set, replaces the secret check for every installation (D2). |
 | `userName` | `string` | first installation's `botUserName` | none | Non-empty. Exposed to the core as `adapter.userName`. |
 | `logger` | `Logger` (from `chat`) | `new ConsoleLogger("info").child("backlog")` | none | Replaced by `chat.getLogger("backlog")` in `initialize`. |
-| `rateLimit.maxWaitMs` | `number` | `60_000` | none | ≥ 0. Longest wait before a 429 retry (D5). |
+| `rateLimit.maxWaitMs` | `number` | `60_000` | none | Non-negative integer (`NaN` and `Infinity` rejected). Longest wait before a 429 retry (D5). |
 | `rateLimit.maxRetries` | `number` | `1` | none | ≥ 0 integer; `0` disables retries. |
-| `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | none | > 0. Larger bodies → 413 (§5.1) ⚑. |
+| `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | none | Positive integer. Larger bodies → 413 (§5.1) ⚑. |
 | `createApi` | function | `backlog-js` implementation | none | Test seam; receives the resolved installation and returns a port. |
 
 Environment fallbacks apply **only** to shape A and only when the corresponding
@@ -258,6 +275,32 @@ combinations resolve as:
 Otherwise a deployment that moved from OAuth to an API key, wrote `apiKey` in
 `config` and forgot to unset `BACKLOG_ACCESS_TOKEN` would be refused with a
 message blaming the config it had just written.
+
+`ResolvedInstallation` is what validation produced, not a second name for
+`BacklogInstallation`, and it says so in the type:
+
+```ts
+type ResolvedCredential =
+  | { apiKey: Resolvable; accessToken?: never }
+  | { accessToken: Resolvable; apiKey?: never };
+
+type ResolvedInstallation = {
+  host: string;             // lowercased, §2.1 host grammar
+  botUserId: number;
+  botUserName: string;
+  webhookSecret?: string;
+} & ResolvedCredential;
+```
+
+So an installation carrying both credentials or neither is a type error, and
+`createApi` receives a value whose exclusivity no reader has to take on trust.
+The input type stays permissive on purpose: config is assembled from
+`process.env` and JSON the compiler knows nothing about, and one
+`ValidationError` naming the field is a better report than a type error raised
+where the object was built. `host` stays a plain `string` rather than a brand
+— every construction site, fixtures and consumer test doubles included, would
+have to cast into one, and its only producer is the shared host validator in
+`src/ids.ts`.
 
 Credential resolvers are invoked on **every** outbound call and their result is
 never cached by the adapter (vendor-official requirement, verified in the
@@ -364,7 +407,8 @@ in the activity but raw `<@U…>` in REST (measured 2026-09-06). Consumers read
 All from `@chat-adapter/shared`, adapter name `"backlog"`:
 `ValidationError`, `AuthenticationError`, `PermissionError`,
 `ResourceNotFoundError`, `AdapterRateLimitError`, `NetworkError`,
-`AdapterError`. Mapping in §8.5. `mentionUser`/`mentionTeam` throw a built-in
+`AdapterError`. Mapping in §8.5. The id **encoders** throw `ValidationError`
+too, for the input §2.2 lists. `mentionUser`/`mentionTeam` throw a built-in
 `RangeError` for a non-positive-integer id (pure helpers, no adapter context).
 No `ZodError` and no `backlog-js` error class ever escapes the package.
 
@@ -1102,7 +1146,7 @@ so a backward page is `order=desc&maxId=` and a forward page is
 
 | Input | Rule |
 | --- | --- |
-| `limit` | Default 50; clamped to `[1, 100]`. Counts the root message as one slot. |
+| `limit` | Default 50; clamped to `[1, 100]`. A non-integer (`2.5`, `NaN`, `Infinity`) → `ValidationError`: it reaches Backlog as `count`, which answers 400, and rounding would hide the caller's bug. Counts the root message as one slot. |
 | `direction` | Default `"backward"`. |
 | `cursor` | Must match `^(0\|[1-9]\d*)$`; anything else → `ValidationError`. It is a comment id (or `0` meaning "before the first comment", forward only). |
 | `threadId` that is a channel id | `ValidationError` (see §4.2 `fetchChannelMessages`). |
@@ -1129,6 +1173,19 @@ Before building the page, the adapter resolves the project's cached §9.1
 converter with one cached Get Project lookup. Both the root and every comment
 set `formatted` through that converter; `text` remains the original Backlog
 text.
+
+A forward first page with `limit: 1` therefore spends one comment fetch
+whose result is discarded except for `hasMore`. That is the specified
+behaviour, confirmed 2026-09-08 rather than left open: the fetched comment is
+what separates "there are comments, come back with cursor `0`" from "this
+thread has none, you are done", so skipping it would make `nextCursor` always
+defined on that page and move the same call into the caller's next round trip.
+A comment-count endpoint does exist for both kinds
+([Count Comment](https://developer.nulab.com/docs/backlog/api/2/count-comment/),
+`getIssueCommentsCount` / `getPullRequestCommentsCount`, `read` bucket), so the
+alternative is a second call of the same cost answering a different question —
+the total, not whether anything lies past this cursor — and only ever for that
+one page.
 
 Guarantees (each is a test): pages are chronological; backward pages walk from
 newest to oldest; the union of all pages in either direction is root + every
@@ -1178,6 +1235,15 @@ without `url` rather than a failed read. Returns
 `metadata = { kind: "pullRequest", host, projectId, repositoryId, repositoryName?, number, id, summary, description, status: { id, name }, assignee: { id, name } | null, base, branch, issue: { id, issueKey } | null, baseCommit, branchCommit, mergeCommit, closeAt, mergeAt, createdUserId, created, updated, url?: https://<host>/git/<projectKey>/<repositoryName>/pullRequests/<number> }`.
 Statuses are `1 Open`, `2 Closed`, `3 Merged` (measured 2026-09-06).
 
+Every timestamp in `metadata` — `created`, `updated`, and a pull request's
+`closeAt`/`mergeAt` — is an **ISO string**, not the `Date` the port returns
+(decided 2026-09-08). `ThreadInfo.metadata` is `Record<string, unknown>`, so a
+`Date` in it is invisible to the compiler, and a consumer that puts a
+`ThreadInfo` through JSON — a queue, a cache, a tool result — gets a string
+back while its code still reads it as a `Date`. It is the same reason the
+raw-message shapes carry ISO strings (§3.5), and the two should not disagree
+about how an instant is written.
+
 ### 7.4 `fetchSubject(raw)`
 
 Resolves the issue or pull request that `raw` belongs to (one Get Issue or Get
@@ -1209,7 +1275,8 @@ stale name alive under whichever one a clear missed. Over-clearing costs one
 ### 7.6 `listThreads(channelId, { limit?, cursor? })`
 
 [Get Issue List](https://developer.nulab.com/docs/backlog/api/2/get-issue-list/)
-with `projectId[]`, `count` (default 50, clamped `[1, 100]`), `offset`
+with `projectId[]`, `count` (default 50, clamped `[1, 100]`, non-integer →
+`ValidationError` as in §7.1), `offset`
 (cursor, `^(0|[1-9]\d*)$` else `ValidationError`). This endpoint draws on the
 **search** bucket (150/min documented example), not read. **Pull requests are
 not listed** (D-PR7): a pull-request list is per repository, a coordinate the

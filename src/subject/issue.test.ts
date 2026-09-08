@@ -471,10 +471,23 @@ describe('the issue subject client', () => {
       issueType: { id: 1, name: 'Bug' },
       priority: { id: 3, name: 'Normal' },
       createdUserId: BOB.id,
-      created: ISSUE.created,
-      updated: ISSUE.updated,
+      created: ISSUE.created.toISOString(),
+      updated: ISSUE.updated.toISOString(),
       url: 'https://example.backlog.com/view/PROJECT-42',
     });
+  });
+
+  it('writes metadata timestamps as ISO strings, so a JSON round trip is identity', () => {
+    // `Record<string, unknown>` hides a `Date` from the compiler, so a
+    // consumer serialising a `ThreadInfo` would get a string back while its
+    // code still read it as a `Date` (§7.3).
+    const { subject } = clientWith();
+
+    const metadata = subject.threadMetadata(rootOf(), {});
+
+    expect(metadata['created']).toBe(ISSUE.created.toISOString());
+    expect(metadata['updated']).toBe(ISSUE.updated.toISOString());
+    expect(JSON.parse(JSON.stringify(metadata))).toEqual(metadata);
   });
 
   it('describes an issue subject by its type and its priority', () => {
