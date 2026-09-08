@@ -84,7 +84,14 @@ describe('converterFor', () => {
 });
 
 describe('a card fallback under each formatting rule', () => {
-  /** Every child a card fallback renders, markup-free ones included. */
+  const IMAGE_URL = 'https://example.test/cover.png';
+
+  /**
+   * Every member of `CardChild` — `text | image | divider | actions |
+   * section | fields | link | table | chart`. A fixture short of one cannot
+   * catch that child being dropped, which is how `link` and `divider` went
+   * missing once already.
+   */
   const card: CardElement = {
     type: 'card',
     title: 'Release 1.4',
@@ -105,11 +112,21 @@ describe('a card fallback under each formatting rule', () => {
         ],
       },
       { type: 'table', headers: ['Blocker'], rows: [['#12']] },
+      {
+        type: 'chart',
+        title: 'Failures',
+        chart: {
+          type: 'bar',
+          categories: ['w1'],
+          series: [{ name: 'week', data: [{ label: 'w1', value: 3 }] }],
+        },
+      },
+      { type: 'image', url: IMAGE_URL, alt: 'the release cover' },
       { type: 'actions', children: [] },
     ],
   };
 
-  it('renders every child, bolding with Markdown asterisks', () => {
+  it('renders each child in GFM, bolding with asterisks', () => {
     const fallback = converterFor('markdown', createMockLogger(), context);
 
     expect(fallback.renderPostable(card)).toBe(
@@ -123,11 +140,15 @@ describe('a card fallback under each formatting rule', () => {
         'Blocker',
         '-------',
         '#12',
+        'Failures',
+        '   | week',
+        '---|-----',
+        'w1 | 3',
       ].join('\n')
     );
   });
 
-  it("renders every child, bolding with '' and never an asterisk", () => {
+  it("renders each child in notation, with '' and never an asterisk", () => {
     const fallback = converterFor('backlog', createMockLogger(), context);
 
     expect(fallback.renderPostable(card)).toBe(
@@ -141,7 +162,24 @@ describe('a card fallback under each formatting rule', () => {
         'Blocker',
         '-------',
         '#12',
+        'Failures',
+        '   | week',
+        '---|-----',
+        'w1 | 3',
       ].join('\n')
     );
+  });
+
+  it('drops an image under either rule, and that is not an oversight', () => {
+    // `chat@4.39.0` has no `image` case in any of its three card walks — the
+    // `BaseFormatConverter` method, the standalone `cardChildToFallbackText`
+    // and `@chat-adapter/shared`'s, which delegates to the standalone one —
+    // so nothing was lost by routing cards through the converter, and there
+    // is no Backlog syntax this adapter is declining to emit.
+    for (const rule of ['markdown', 'backlog'] as const) {
+      const fallback = converterFor(rule, createMockLogger(), context);
+
+      expect(fallback.renderPostable(card)).not.toContain(IMAGE_URL);
+    }
   });
 });

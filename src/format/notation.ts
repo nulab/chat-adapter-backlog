@@ -206,10 +206,13 @@ export class BacklogNotationConverter extends BaseFormatConverter {
 
   /**
    * `link` and `divider` are here for a different reason than `fields`:
-   * `chat@4.39.0`'s own card walk has no case for either and returns `null`,
-   * which drops a `CardLink`'s URL out of the message entirely. That is a
-   * loss of content, not of markup, so each routes through the §9.4 row it
-   * already has rather than through `super`.
+   * `BaseFormatConverter.cardChildToFallbackText` — the walk `renderPostable`
+   * reaches — has a case for neither and returns `null`, which drops a
+   * `CardLink`'s URL out of the message entirely. That is a loss of content,
+   * not of markup, so each routes through the §9.4 row it already has rather
+   * than through `super`. `chat@4.39.0`'s other two card walks are not
+   * missing the same cases, so the gap belongs to that method, not to the
+   * package.
    */
   protected override cardChildToFallbackText(child: CardChild): string | null {
     switch (child.type) {
