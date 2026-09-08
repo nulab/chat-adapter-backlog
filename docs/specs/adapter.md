@@ -1172,6 +1172,17 @@ lost between the subject layer and the request. No method deletes a
 pull-request comment or fetches one by id: neither route exists
 (`.claude/rules/backlog-pull-request-facts.md`).
 
+The two download methods name the file from `Content-Disposition`, the only
+place Backlog puts it, and never fail over the name: a download whose bytes
+arrived is a success. `filename*` is preferred over plain `filename` when a
+header carries both ([RFC 6266
+§4.3](https://www.rfc-editor.org/rfc/rfc6266#section-4.3)); only `filename*`
+is percent-decoded, because RFC 6266 leaves plain `filename` a quoted string
+(so `filename="100%.png"` is that name, not a decode failure); a `filename*`
+that will not decode falls back to its raw value; and a header naming no file
+falls back to the attachment id. Only the `UTF-8''` prefix is stripped, so
+another charset or a populated `language` field is left in the returned name.
+
 Bucket assignment follows the rule on the
 [Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/) page:
 read = GET except Search and Icon; update = POST/PATCH/DELETE; search = Get

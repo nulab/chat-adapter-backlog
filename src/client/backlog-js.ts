@@ -985,30 +985,39 @@ async function toDownloadedFile(
  * endpoint (docs/specs/adapter.md §8.1) names the file this way; there is no
  * separate filename field in the JSON API.
  *
- * Only the extended form is percent-decoded. RFC 6266 percent-encodes
+ * The two forms are matched separately, in the order
+ * [RFC 6266 §4.3](https://www.rfc-editor.org/rfc/rfc6266#section-4.3) asks
+ * for — `filename*` wins and plain `filename` is then ignored — rather than
+ * with one pattern taking whichever appeared first in the header. A sender
+ * that supplies both means the plain one as the fallback for a receiver that
+ * cannot read the extended one, so taking it by position gets the answer
+ * backwards whenever it happens to come first.
+ *
+ * Only the extended form is percent-decoded: RFC 6266 percent-encodes
  * `filename*` and leaves plain `filename` a quoted string, which is what
- * Backlog itself sends (`filename*=UTF-8''…`, measured 2026-09-06) — so
- * decoding both meant a plain `filename="100%.png"` threw a `URIError` out of
- * a download that had already succeeded. A stray `%` in the extended form is
- * still possible from something else in front of Backlog, and there the raw
- * value is a better answer than an exception: the caller wanted the bytes,
- * and the name is a label on them.
+ * Backlog itself sends (`filename*=UTF-8''…`, measured 2026-09-06). Decoding
+ * both is what made a plain `filename="100%.png"` throw a `URIError` out of a
+ * download that had already succeeded, and it would also have turned a
+ * literal `%20` in a plain name into a space.
+ *
+ * Only `UTF-8''` is stripped, so any other charset or a populated `language`
+ * field stays in the returned name (`UTF-8'en'a%20b.png` → `UTF-8'en'a b.png`,
+ * `ISO-8859-1''%E9.png` → `ISO-8859-1''%E9.png`). That is wrong and known to
+ * be; what matters is that it cannot fail the call, which is why an
+ * undecodable value falls back to the raw string instead of throwing. The
+ * caller wanted the bytes, and the name is a label on them.
  */
 function parseFilename(disposition: string | null): string | undefined {
   if (disposition === null) {
     return undefined;
   }
-  const match = /filename(\*?)=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
-  const value = match?.[2];
-  if (value === undefined) {
-    return undefined;
+  const extended = /filename\*=(?:UTF-8'')?([^";]+)/i.exec(disposition)?.[1];
+  if (extended !== undefined) {
+    try {
+      return decodeURIComponent(extended);
+    } catch {
+      return extended;
+    }
   }
-  if (match?.[1] !== '*') {
-    return value;
-  }
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
+  return /filename="?([^";]+)"?/i.exec(disposition)?.[1];
 }

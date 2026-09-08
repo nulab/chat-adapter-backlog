@@ -423,6 +423,35 @@ describe('createBacklogJsApi', () => {
     expect(filename).toBe('100%.png');
   });
 
+  it('takes filename* over filename when a header carries both, whichever came first', async () => {
+    const extendedLast = await downloadNamed(
+      'attachment; filename="fallback.png"; filename*=UTF-8\'\'real%20name.png'
+    );
+    const extendedFirst = await downloadNamed(
+      'attachment; filename*=UTF-8\'\'real%20name.png; filename="fallback.png"'
+    );
+
+    // RFC 6266 §4.3: the plain form is the fallback for a receiver that
+    // cannot read the extended one, so position must not decide.
+    expect(extendedLast).toBe('real name.png');
+    expect(extendedFirst).toBe('real name.png');
+  });
+
+  it('leaves a charset it does not strip in the name rather than failing the download', async () => {
+    const latin1 = await downloadNamed(
+      "attachment; filename*=ISO-8859-1''%E9.png"
+    );
+    const withLanguage = await downloadNamed(
+      "attachment; filename*=UTF-8'en'file%20name.png"
+    );
+
+    // Only `UTF-8''` is stripped, so both names come back carrying their
+    // prefix. Wrong, and known to be; what is fixed here is that neither
+    // throws out of a download whose bytes already arrived.
+    expect(latin1).toBe("ISO-8859-1''%E9.png");
+    expect(withLanguage).toBe("UTF-8'en'file name.png");
+  });
+
   it('names a download by its attachment id when the header names no file', async () => {
     const filename = await downloadNamed('attachment');
 
