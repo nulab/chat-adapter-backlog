@@ -73,6 +73,29 @@ export function mapBacklogError(input: MapBacklogErrorInput): AdapterError {
     resourceId
   );
   error.cause = detail;
+  return withBacklogMessage(error, bodyError?.message);
+}
+
+/**
+ * Appends what Backlog said to an error whose class composed its own message.
+ *
+ * Two of the classes take no message at all —
+ * `ResourceNotFoundError(adapter, resourceType, resourceId?)` and
+ * `AdapterRateLimitError(adapter, retryAfterSeconds?)` — so a code 6's "No
+ * such issue" reached the caller only on `cause`, invisible to every log line
+ * and test assertion that prints the error. Appending rather than replacing
+ * keeps the class's own wording, which is what a caller matching on it reads,
+ * and the containment check leaves the classes that were already constructed
+ * with the message untouched.
+ */
+function withBacklogMessage<E extends AdapterError>(
+  error: E,
+  message: string | undefined
+): E {
+  if (message === undefined || error.message.includes(message)) {
+    return error;
+  }
+  error.message = `${error.message}: ${message}`;
   return error;
 }
 

@@ -1316,6 +1316,13 @@ Every mapped error sets `error.cause` to a plain
 `BacklogApiErrorDetail { status, code?, message, moreInfo?, url }` — never the
 `backlog-js` error instance and never the secret-bearing request.
 
+When the body carried a message, that message is on `error.message` as well.
+Two of the classes take none — `ResourceNotFoundError(adapter, resourceType,
+resourceId?)` and `AdapterRateLimitError(adapter, retryAfterSeconds?)` compose
+theirs from the ids and the delay — so a code 6's "No such issue" is appended
+to what the class wrote rather than reaching the caller on `cause` alone,
+where no log line that prints the error would show it.
+
 ### 8.6 Conformance suite
 
 `describeBacklogApiConformance(name, factory)` runs the same behavioural
