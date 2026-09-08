@@ -36,6 +36,8 @@ import {
   validateHost,
 } from './ids';
 import {
+  buildCommentMessage,
+  buildRootMessage,
   fetchChannelInfo as fetchChannelInfoRead,
   fetchMessage as fetchMessageRead,
   fetchMessages as fetchMessagesRead,
@@ -49,6 +51,7 @@ import {
 import type { MessageBuilders } from './reads';
 import { subjectClientFor } from './subject/client';
 import type { SubjectClient, SubjectNames } from './subject/client';
+import { fromRawComment } from './subject/raw';
 import { downloadAttachmentAt } from './subject/url';
 import type { AttachmentLocation } from './subject/url';
 import type {
@@ -481,6 +484,18 @@ function validateMaxWebhookBodyBytes(value: number | undefined): number {
   }
   return value;
 }
+
+/**
+ * The `BacklogRawMessage` variants the adapter's own reads and writes hand
+ * back, as opposed to the two the webhook path builds (docs/specs/adapter.md
+ * §3.5). `parseMessage` accepts all five, and these three are the ones it
+ * answers without touching a payload schema — they were already validated on
+ * the way out of the port.
+ */
+type BacklogRestRawMessage = Extract<
+  BacklogRawMessage,
+  { kind: 'comment' | 'issue' | 'pullRequest' }
+>;
 
 /**
  * Which project and subject a `BacklogRawMessage` belongs to
@@ -1393,19 +1408,19 @@ export class BacklogAdapter implements Adapter<
     return new Response('OK', { status: 200 });
   }
 
+  /**
+   * All five raw shapes (docs/specs/adapter.md §3.5), by two routes. A
+   * `webhook` or `bulkUpdate` raw carries a delivery whose declared type was
+   * reached by a cast, so it is parsed again here; the three the adapter
+   * produced itself were validated on the way out of the port and are rebuilt
+   * through the read path's own builders (`parseRestMessage`).
+   */
   parseMessage(raw: BacklogRawMessage): Message<BacklogRawMessage> {
     if (raw.kind === 'bulkUpdate') {
       return this.parseBulkUpdateMessage(raw);
     }
     if (raw.kind !== 'webhook') {
-      // P5 (REST comment/issue -> Message) and P3 (webhook) share the
-      // `BacklogRawMessage` union, but this phase only ever constructs the
-      // `webhook` variant; a non-webhook raw reaching here would be a defect
-      // in the caller, not a recoverable input.
-      throw new ValidationError(
-        'backlog',
-        `parseMessage: unsupported raw message kind "${raw.kind}"`
-      );
+      return this.parseRestMessage(raw);
     }
 
     const { host, payload } = raw;
@@ -1457,6 +1472,64 @@ export class BacklogAdapter implements Adapter<
       },
       MessageCtor
     );
+  }
+
+  /**
+   * The three shapes the adapter's own reads and writes hand back: a REST
+   * comment, and an issue or a pull request as its thread's root
+   * (docs/specs/adapter.md §3.5). `parseMessage(m.raw)` reproduces the
+   * `Message` `fetchMessages`, `fetchMessage`, `listThreads`, `postMessage`,
+   * `editMessage` and `postChannelMessage` produced, which is the point of
+   * accepting them at all: a consumer that persisted a `Message` and kept
+   * only `raw` — the core serialises exactly that into the state adapter —
+   * gets its message back without a Backlog call.
+   *
+   * It therefore goes through `buildRootMessage`/`buildCommentMessage`
+   * (`src/reads.ts`) rather than assembling a message here. A second builder
+   * producing "the same" shape is what would let the two drift apart, and the
+   * round trip is asserted rather than assumed
+   * (`src/adapter.test.ts`, docs/specs/adapter.md §12.2).
+   *
+   * Two fidelity limits are the raw shapes', not this method's, and both are
+   * documented on `fromRawComment` (`src/subject/raw.ts`): an issue comment's
+   * attachments cannot be rebuilt because `attachmentInfo.id` is not carried,
+   * and a rebuilt root's `formatted` follows the **cached** formatting rule
+   * like every other `parseMessage` call (§9.1), so a cold cache renders
+   * Markdown and warns.
+   */
+  private parseRestMessage(
+    raw: BacklogRestRawMessage
+  ): Message<BacklogRawMessage> {
+    const { host } = raw;
+    const { projectId, subject } = subjectOfRaw(raw);
+    // Built before the converter is resolved, because this is the call that
+    // rejects a host no installation was configured for; the other order
+    // would warn about an uncached formatting rule for a host that is about
+    // to throw.
+    const subjectClient = this.subjectClient(host, projectId, subject);
+    const builders: MessageBuilders = {
+      ...this.messageBuilders(host, this.cachedConverter(host, projectId)),
+      projectId,
+      subject: subjectClient,
+    };
+
+    if (raw.kind === 'comment') {
+      return buildCommentMessage(builders, fromRawComment(raw.comment));
+    }
+
+    const root = subjectClient.rootFrom(raw);
+    if (root === undefined) {
+      // Unreachable: `subjectOfRaw` derived the ref from this very raw, so
+      // the client it built reads this variant. Asking the subject client
+      // rather than branching on which root variant arrived is what keeps
+      // this method from naming either kind (D-PR2).
+      throw new AdapterError(
+        'a root raw message did not describe its own subject',
+        'backlog',
+        'INVALID_SUBJECT_ROOT'
+      );
+    }
+    return buildRootMessage(builders, root);
   }
 
   /**

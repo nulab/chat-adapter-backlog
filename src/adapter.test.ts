@@ -2029,30 +2029,72 @@ describe('BacklogAdapter.handleWebhook — a notifications[] the adapter cannot 
   });
 });
 
+const ROOT_CREATED = new Date('2026-01-01T00:00:00Z');
+
+/**
+ * The `{ kind: "issue" }` raw as `fetchMessages` and `postChannelMessage`
+ * hand it out, matching `egressAdapter`'s seeded issue so the same fixture
+ * describes the same thread on both paths.
+ */
+function rawIssue(): Extract<BacklogRawMessage, { kind: 'issue' }>['issue'] {
+  return {
+    id: FIXTURE.issueId,
+    issueKey: `${FIXTURE.projectKey}-1`,
+    projectId: FIXTURE.projectId,
+    summary: 'Deploy fails on the staging space',
+    description: 'Reproduces on every push to main.',
+    status: { id: 1, name: 'Open' },
+    issueType: { id: 1, name: 'Task' },
+    priority: { id: 3, name: 'Normal' },
+    assignee: null,
+    createdUser: {
+      id: FIXTURE.alice.id,
+      name: FIXTURE.alice.name,
+      userId: FIXTURE.alice.userId,
+    },
+    created: ROOT_CREATED.toISOString(),
+    updated: ROOT_CREATED.toISOString(),
+  };
+}
+
 describe('BacklogAdapter.parseMessage', () => {
-  it('rejects a non-webhook raw message kind as a defect, not a recoverable input', () => {
+  it('an issue raw message becomes the thread root it describes', () => {
     const adapter = createBacklogAdapter(webhookAdapterConfig());
+
+    const message = adapter.parseMessage({
+      kind: 'issue',
+      host: FIXTURE.host,
+      issue: rawIssue(),
+      changes: [],
+    });
+
+    expect(message.id).toBe(
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: ISSUE_SUBJECT,
+        part: 'root',
+      })
+    );
+    expect(message.threadId).toBe(
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`
+    );
+    expect(message.text).toBe(
+      'Deploy fails on the staging space\n\nReproduces on every push to main.'
+    );
+    expect(message.metadata.dateSent).toEqual(ROOT_CREATED);
+  });
+
+  it('a raw message naming a host no installation was configured for is rejected', () => {
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+
     expect(() =>
       adapter.parseMessage({
         kind: 'issue',
-        host: FIXTURE.host,
-        issue: {
-          id: FIXTURE.issueId,
-          issueKey: 'EXAMPLE-1',
-          projectId: FIXTURE.projectId,
-          summary: '',
-          description: '',
-          status: { id: 1, name: 'Open' },
-          issueType: { id: 1, name: 'Task' },
-          priority: { id: 3, name: 'Normal' },
-          assignee: null,
-          createdUser: { id: 1, name: 'a' },
-          created: '',
-          updated: '',
-        },
+        host: 'other.backlog.jp',
+        issue: rawIssue(),
         changes: [],
       })
-    ).toThrow(ValidationError);
+    ).toThrow(ResourceNotFoundError);
   });
 
   it('builds one issue of a bulk update from the delivery and the issue id', () => {
@@ -2986,6 +3028,153 @@ describe('BacklogAdapter read budget (§7.3, §7.4)', () => {
 
     expect(subject).toMatchObject({ type: 'issue' });
     expect(calls).toEqual([]);
+  });
+});
+
+describe('BacklogAdapter.parseMessage round trip (§3.5)', () => {
+  /**
+   * The fields §3.5 promises `parseMessage(message.raw)` reproduces, compared
+   * as one object so a failure names every field that drifted rather than
+   * only the first. `formatted` is in the set because both paths pick the
+   * converter from the same cached project rule (§9.1), and so is `raw`: a
+   * rebuilt message must be re-parseable again.
+   */
+  function identity(message: Message<BacklogRawMessage>): unknown {
+    return {
+      id: message.id,
+      threadId: message.threadId,
+      text: message.text,
+      author: message.author,
+      dateSent: message.metadata.dateSent,
+      edited: message.metadata.edited,
+      formatted: message.formatted,
+      raw: message.raw,
+    };
+  }
+
+  it('a comment fetchMessages returned is rebuilt from its own raw', async () => {
+    const { adapter } = egressAdapter({
+      seed: { comments: [seededComment()] },
+    });
+    const { messages } = await adapter.fetchMessages(EGRESS_THREAD_ID, {
+      limit: 2,
+      direction: 'backward',
+    });
+    const fetched = messages.find((message) => message.text === 'Original');
+    if (fetched === undefined) {
+      throw new Error('the comment was not returned');
+    }
+
+    expect(identity(adapter.parseMessage(fetched.raw))).toEqual(
+      identity(fetched)
+    );
+  });
+
+  it('an issue root fetchMessages returned is rebuilt from its own raw', async () => {
+    const { adapter } = egressAdapter();
+    const { messages } = await adapter.fetchMessages(EGRESS_THREAD_ID, {
+      limit: 2,
+      direction: 'backward',
+    });
+    const rootId = encodeMessageId({
+      host: FIXTURE.host,
+      subject: ISSUE_SUBJECT,
+      part: 'root',
+    });
+    const root = messages.find((message) => message.id === rootId);
+    if (root === undefined) {
+      throw new Error('the issue root was not returned');
+    }
+
+    expect(identity(adapter.parseMessage(root.raw))).toEqual(identity(root));
+  });
+
+  it('a pull request root fetchMessage returned is rebuilt from its own raw', async () => {
+    const { adapter } = egressAdapter({ seed: pullRequestSeed() });
+    const root = await adapter.fetchMessage(
+      PULL_REQUEST_THREAD_ID,
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: PULL_REQUEST_SUBJECT,
+        part: 'root',
+      })
+    );
+    if (root === null) {
+      throw new Error('the pull request root was not returned');
+    }
+
+    expect(identity(adapter.parseMessage(root.raw))).toEqual(identity(root));
+  });
+
+  it('the comment postMessage returned is rebuilt from its own raw', async () => {
+    const { adapter } = egressAdapter();
+
+    const posted = await adapter.postMessage(EGRESS_THREAD_ID, {
+      markdown: 'Any progress on this?',
+    });
+    const parsed = adapter.parseMessage(posted.raw);
+
+    expect(parsed.id).toBe(posted.id);
+    expect(parsed.threadId).toBe(posted.threadId);
+    expect(parsed.text).toBe('Any progress on this?');
+    expect(parsed.author.isMe).toBe(true);
+  });
+
+  it('the issue postChannelMessage created is rebuilt from its own raw', async () => {
+    const { adapter } = egressAdapter({
+      seed: { issueTypes: { [FIXTURE.projectId]: [{ id: 1, name: 'Task' }] } },
+    });
+
+    const created = await adapter.postChannelMessage(
+      `backlog:${FIXTURE.host}:${FIXTURE.projectId}`,
+      { markdown: '# Deploy is broken\n\nSee the logs for details.' }
+    );
+    const parsed = adapter.parseMessage(created.raw);
+
+    expect(parsed.id).toBe(created.id);
+    expect(parsed.threadId).toBe(created.threadId);
+    expect(parsed.text).toBe('Deploy is broken\n\nSee the logs for details.');
+  });
+
+  it('an issue comment’s attachments are not rebuilt from its raw', async () => {
+    const { adapter } = egressAdapter({
+      seed: {
+        comments: [
+          {
+            ...seededComment(),
+            changeLog: [
+              {
+                field: 'attachment',
+                newValue: 'trace.log',
+                oldValue: null,
+                attachmentInfo: { id: 900, name: 'trace.log', size: 12 },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const fetched = await adapter.fetchMessage(
+      EGRESS_THREAD_ID,
+      encodeMessageId({
+        host: FIXTURE.host,
+        subject: ISSUE_SUBJECT,
+        part: 'comment',
+        commentId: 1,
+      })
+    );
+    if (fetched === null) {
+      throw new Error('the comment was not returned');
+    }
+
+    // The id an issue attachment is downloaded by lives in the REST
+    // changelog's `attachmentInfo`, which `BacklogRawComment` does not carry
+    // (`fromRawComment`, `src/subject/raw.ts`), so the round trip keeps the
+    // change and loses the file. A pull-request comment's survives: that kind
+    // resolves a file by name (§6.6).
+    expect(fetched.attachments).toHaveLength(1);
+    expect(adapter.parseMessage(fetched.raw).attachments).toEqual([]);
+    expect(adapter.parseMessage(fetched.raw).raw).toEqual(fetched.raw);
   });
 });
 

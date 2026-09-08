@@ -362,6 +362,25 @@ type BacklogRawMessage =
   | { kind: "pullRequest"; host: string; pullRequest: BacklogRawPullRequest; changes: [] };
 ```
 
+`parseMessage` accepts **all five** variants. The last three are the ones the
+adapter produces itself — `fetchMessages`, `fetchMessage`, `listThreads`,
+`postMessage`, `editMessage` and `postChannelMessage` put them on the messages
+they return — and `parseMessage(message.raw)` rebuilds such a message with **no
+API call**, reproducing its `id`, `threadId`, `text`, `formatted`, `author`,
+`metadata.dateSent`, `metadata.edited` and `raw`. That is what makes a
+`Message` recoverable from the `raw` alone, which is all the core serialises
+into the state adapter. It holds because `parseMessage` builds them through the
+same `buildRootMessage`/`buildCommentMessage` the reads use, not through a
+second builder of its own; §12.2 asserts the round trip on each of the three.
+One field is **not** reproduced: an issue comment's `attachments`, because the
+download id lives in the REST changelog's `attachmentInfo` and
+`BacklogRawComment` does not carry it (§6.6, the same trade `src/index.ts`
+records for the user fields). A pull-request comment's attachments do survive
+— that kind resolves a file by name. `formatted` follows the **cached**
+formatting rule like every other `parseMessage` call (§9.1), so a cold cache
+renders Markdown and warns. A raw naming a host no installation was configured
+for is a `ResourceNotFoundError`.
+
 `BacklogWebhookPayload` is the union of the recognised issue **and**
 pull-request activities (§5.2), the ones that name one subject; `payload.type`
 tells them apart. As with the bulk variant below, `payload` is the delivery as
@@ -433,7 +452,7 @@ channel ids (D-PR7, §6.7); each is stated where it differs.
 | `handleWebhook(request, options?)` | implemented | §5. | `chat.webhooks.backlog(req)` |
 | `encodeThreadId` / `decodeThreadId` | implemented | §2 grammar; exact round trip of `{ host, projectId, subject }`, the nested `BacklogSubjectRef` (D-PR2). | never (test kit) |
 | `channelIdFromThreadId` | implemented | First three segments: `backlog:<host>:<projectId>`. | `createThread`, lock key, history |
-| `parseMessage(raw)` | implemented | Synchronous `BacklogRawMessage → Message`; converter chosen from the **cached** formatting rule of `raw`'s project, Markdown with a `warn` when uncached (§9.1). | never; the webhook factory calls it |
+| `parseMessage(raw)` | implemented | Synchronous `BacklogRawMessage → Message`, for all five variants: a `webhook` or `bulkUpdate` raw is re-parsed against its schema, and the three the adapter produced itself round-trip back into the message they came from (§3.5). Converter chosen from the **cached** formatting rule of `raw`'s project, Markdown with a `warn` when uncached (§9.1). | never; the webhook factory calls it |
 | `renderFormatted(content, target?)` | implemented | Renders mdast with the converter for `target` (thread or channel id) when its rule is cached; otherwise GFM Markdown ⚑. | never |
 | `postMessage(threadId, message)` | implemented | Adds a comment (§6.1). | `thread.post`, object/ephemeral fallbacks, `channel.post` fallback (not taken: `postChannelMessage` exists) |
 | `editMessage(threadId, messageId, message)` | implemented | Updates comment content (§6.2). | `SentMessage.edit` |
@@ -1995,6 +2014,16 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   of a message; `isMention` for every §5.4 rule including the negative cases;
   same payload to two hosts yields two threads and two distinct message ids;
   processing runs after the 200 and a throwing factory is logged, not thrown.
+- **parseMessage**: each of the five §3.5 variants; a `webhook` payload that
+  does not parse, a type 4 or 14 `webhook` payload, a `bulkUpdate` naming an
+  issue the delivery does not cover and one whose payload is not type 14 all
+  → `ValidationError`; an unconfigured host → `ResourceNotFoundError`; and the
+  round trip on each of the three the adapter produces — a comment and an
+  issue root from `fetchMessages`, a pull-request root from `fetchMessage`,
+  the comment `postMessage` returned and the issue `postChannelMessage`
+  created — asserted over `id`, `threadId`, `text`, `formatted`, `author`,
+  `metadata.dateSent`, `metadata.edited` and `raw` at once, plus the one
+  documented loss (an issue comment's `attachments`).
 - **format**: every row of §9.4 and §9.5; single-line `{code}x{/code}`;
   unclosed `{code}`; unclosed `{quote}`; a list whose first marker is the
   deepest, a marker changing kind mid-run, a depth jump, a marker between two
