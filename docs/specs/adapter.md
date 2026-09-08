@@ -1647,7 +1647,12 @@ for one scratch space is worse than requiring the two to share it.
 ## 13. Documentation deliverables
 
 - **README.md**, following Chat SDK's publishing checklist order: title and
-  one-line description; installation (`pnpm add @nulab/chat-adapter-backlog chat`);
+  one-line description; an npm-version badge and a license badge; a **Status**
+  section stating the release cadence and pre-1.0 semver (`0.1.0` first, a
+  breaking change is a minor while the major is `0`), the contract coverage of
+  §4, and the catalog-listing choice
+  ([docs/plans/adapter-implementation.md](../plans/adapter-implementation.md)
+  P7); installation (`pnpm add @nulab/chat-adapter-backlog chat`);
   quick start (shape A with explicit fields); environment-variable table (the
   six `BACKLOG_*` variables, required/optional); configuration reference (§3.2
   table); platform setup (create bot user, add to project, issue API key,

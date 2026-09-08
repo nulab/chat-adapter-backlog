@@ -4,6 +4,24 @@ A [Backlog](https://backlog.com/) adapter for [Chat SDK](https://chat-sdk.dev/) 
 Backlog issues and pull requests become threads, comments become messages, and
 an agent replies by commenting.
 
+[![npm](https://img.shields.io/npm/v/@nulab/chat-adapter-backlog)](https://www.npmjs.com/package/@nulab/chat-adapter-backlog)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/nulab/chat-adapter-backlog/blob/main/LICENSE)
+
+## Status
+
+Released on its own cadence, starting at `0.1.0`, and still pre-1.0: while the
+major is `0`, a breaking change to the public surface ships as a minor release.
+
+Feature-complete against the adapter contract of `chat@4.39.0`: all 17 required
+members are present, plus 10 of the 27 optional ones. A few of them go as far
+as Backlog allows and no further — a reaction is a star, and there is no typing
+indicator to show. What each member does, and every place Backlog itself stops
+short, is the matrix under **Features and limitations**.
+
+Not listed in Chat SDK's adapter catalog yet — as neither a community nor a
+vendor-official adapter. That listing is a separate decision and changes
+nothing about installing or using the package.
+
 ## Installation
 
 ```sh
