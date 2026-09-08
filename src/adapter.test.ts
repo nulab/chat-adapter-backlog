@@ -30,6 +30,7 @@ import {
   issueDeleted,
   issueMultiUpdated,
   issueUpdated,
+  issueUpdatedWithoutComment,
   pullRequestAdded,
   pullRequestAssigneeChanged,
   pullRequestCommented,
@@ -1129,6 +1130,34 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe('Invalid payload');
+  });
+
+  it('a delivery whose created is empty is still answered from the ladder', async () => {
+    // `created` is `z.string()` at step 9, so `""` reaches the dispatcher,
+    // where the only message-id form an empty timestamp can produce is the
+    // one the encoder rejects. The response owes the caller a ladder entry
+    // either way: the id is a log field, not the answer.
+    const { adapter } = await webhookAdapter();
+    const payload = { ...issueUpdatedWithoutComment(), created: '' };
+
+    const response = await adapter.handleWebhook(webhookRequest(payload));
+
+    expect(response.status).toBe(200);
+  });
+
+  it('a bulk delivery whose created is empty is still answered 200', async () => {
+    const { adapter } = await webhookAdapter();
+    const payload = issueMultiUpdated();
+    const content = payload['content'] as Record<string, unknown>;
+    const links = content['link'] as Record<string, unknown>[];
+    for (const link of links) {
+      delete link['comment'];
+    }
+    payload['created'] = '';
+
+    const response = await adapter.handleWebhook(webhookRequest(payload));
+
+    expect(response.status).toBe(200);
   });
 
   it('a webhook before initialize() has run gets 503', async () => {

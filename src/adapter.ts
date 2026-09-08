@@ -496,6 +496,34 @@ function validateMaxWebhookBodyBytes(value: number | undefined): number {
  * so moving it onto `SubjectClient` would need a subject client before there
  * is anything to build one from.
  */
+/**
+ * The `messageId` field of a failed-dispatch log line, or nothing when the
+ * delivery cannot produce one.
+ *
+ * `handleWebhook` owes its caller a response from the §5.1 ladder and holds
+ * no `try/catch` outside the body parse, so an encoder throwing while
+ * building a **log** value would take the response with it: `created` is
+ * `z.string()` on the way in, and a delivery carrying `""` would leave the
+ * consumer's function rejecting — a 500 the ladder has no entry for — over
+ * one field of one log line. The id of the message *itself* is built inside
+ * the lazy factory, where the `.catch` on `processMessage` already turns a
+ * throw into an error log after the 200 (§5.1 step 12), so nothing is
+ * loosened where a failure can be reported.
+ *
+ * Only the `part: 'update'` form can fail today: the root and comment forms
+ * are built from ids `identitySchema` already validated as positive safe
+ * integers at step 9, while `created` has no such check until #63 lands.
+ * This is written to be total anyway, because the value it guards is a log
+ * field and the response is not.
+ */
+function messageIdForLog(build: () => string): { messageId?: string } {
+  try {
+    return { messageId: build() };
+  } catch {
+    return {};
+  }
+}
+
 function subjectOfRaw(raw: BacklogRawMessage): {
   projectId: number;
   subject: BacklogSubjectRef;
@@ -1230,7 +1258,7 @@ export class BacklogAdapter implements Adapter<
       });
     };
 
-    const messageIdForLog =
+    const idForLog = messageIdForLog(() =>
       activity.type === 1 || activity.type === 18
         ? encodeMessageId({ host, subject, part: 'root' })
         : activity.content.comment !== null &&
@@ -1246,7 +1274,8 @@ export class BacklogAdapter implements Adapter<
               subject,
               part: 'update',
               created: activity.created,
-            });
+            })
+    );
 
     // Dispatched, not awaited: the response below must return before
     // processing completes (docs/specs/adapter.md §5.1 step 12). A factory
@@ -1261,7 +1290,7 @@ export class BacklogAdapter implements Adapter<
       this.logger.error('inbound processing failed', {
         host,
         threadId,
-        messageId: messageIdForLog,
+        ...idForLog,
         error: cause instanceof Error ? cause.message : String(cause),
       });
     });
@@ -1338,12 +1367,11 @@ export class BacklogAdapter implements Adapter<
         );
       };
       // The same function the message itself is built with, so the id logged
-      // for a failed dispatch is the id the handler would have seen.
-      const messageIdForLog = bulkMessageId(
-        host,
-        subject,
-        target,
-        activity.created
+      // for a failed dispatch is the id the handler would have seen — and
+      // guarded, because this one runs before the response rather than inside
+      // the factory (see `messageIdForLog`).
+      const idForLog = messageIdForLog(() =>
+        bulkMessageId(host, subject, target, activity.created)
       );
 
       // Dispatched per issue and never awaited, exactly as the single-subject
@@ -1354,7 +1382,7 @@ export class BacklogAdapter implements Adapter<
         this.logger.error('inbound processing failed', {
           host,
           threadId,
-          messageId: messageIdForLog,
+          ...idForLog,
           error: cause instanceof Error ? cause.message : String(cause),
         });
       });
