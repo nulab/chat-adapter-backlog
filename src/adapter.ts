@@ -334,16 +334,35 @@ function resolveShapeA(
 ): ResolvedInstallation {
   const host = requireWithEnvFallback(config.host, ENV_HOST, 'host');
 
-  const apiKey =
-    config.apiKey ??
-    (config.accessToken === undefined ? process.env[ENV_API_KEY] : undefined);
-  const accessToken = config.accessToken ?? process.env[ENV_ACCESS_TOKEN];
+  // The credential falls back to the environment as a *pair*, not field by
+  // field like every other option: `apiKey` and `accessToken` are one
+  // mutually exclusive choice, so an explicit one alongside the other's
+  // variable is a leftover, never an instruction. Falling back per field made
+  // a deployment that moved from OAuth to an API key without unsetting
+  // `BACKLOG_ACCESS_TOKEN` fail `validateInstallation`'s "exactly one of
+  // apiKey or accessToken" check, blaming the config the caller had just
+  // written (docs/specs/adapter.md §3.2).
+  const hasExplicitCredential =
+    config.apiKey !== undefined || config.accessToken !== undefined;
+  const apiKey = hasExplicitCredential
+    ? config.apiKey
+    : process.env[ENV_API_KEY];
+  const accessToken = hasExplicitCredential
+    ? config.accessToken
+    : process.env[ENV_ACCESS_TOKEN];
 
-  const hasApiKey = apiKey !== undefined;
-  const hasAccessToken = accessToken !== undefined;
-  if (!hasApiKey && !hasAccessToken) {
+  if (apiKey === undefined && accessToken === undefined) {
     fail(
       `apiKey is required: set config.apiKey, config.accessToken, ${ENV_API_KEY}, or ${ENV_ACCESS_TOKEN}`
+    );
+  }
+  if (
+    !hasExplicitCredential &&
+    apiKey !== undefined &&
+    accessToken !== undefined
+  ) {
+    fail(
+      `exactly one of ${ENV_API_KEY} or ${ENV_ACCESS_TOKEN} is allowed, not both`
     );
   }
 

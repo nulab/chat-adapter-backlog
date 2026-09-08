@@ -222,7 +222,7 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 | Option | Type | Default | Env fallback | Validation |
 | --- | --- | --- | --- | --- |
 | `host` | `string` | — | `BACKLOG_HOST` | Matches `host` grammar after lowercasing; rejects `:`/`/`/scheme/whitespace. |
-| `apiKey` | `Resolvable` | — | `BACKLOG_API_KEY` | Non-empty when a string. Exactly one of `apiKey`/`accessToken` per installation. |
+| `apiKey` | `Resolvable` | — | `BACKLOG_API_KEY` | Non-empty when a string. Exactly one of `apiKey`/`accessToken` per installation; the pair falls back to the environment together (below). |
 | `accessToken` | `Resolvable` | — | `BACKLOG_ACCESS_TOKEN` | As above. Refresh is the caller's job (resolver form). |
 | `botUserId` | `number` | — | `BACKLOG_BOT_USER_ID` | Positive integer; env value must parse as one. |
 | `botUserName` | `string` | — | `BACKLOG_BOT_USER_NAME` | Non-empty after trim (an empty name would make every `@` a mention). |
@@ -241,6 +241,23 @@ field is absent from `config` (an explicit empty string is a validation error,
 not a fallback trigger). Missing everything → `ValidationError` naming the
 first missing field and its environment variable. Internally the adapter always
 holds `Map<host, ResolvedInstallation>`; shape A is one entry.
+
+`apiKey` and `accessToken` are the one exception to "field by field": they are
+a single mutually exclusive choice, so they fall back as a **pair**. An
+explicit `apiKey` *or* an explicit `accessToken` in `config` suppresses
+**both** `BACKLOG_API_KEY` and `BACKLOG_ACCESS_TOKEN`, and the four
+combinations resolve as:
+
+| `config` | Environment | Result |
+| --- | --- | --- |
+| `apiKey` | `BACKLOG_ACCESS_TOKEN` set | The explicit `apiKey`; the variable is ignored. |
+| `accessToken` | `BACKLOG_API_KEY` set | The explicit `accessToken`; the variable is ignored. |
+| both | either or neither | `ValidationError` — "exactly one of apiKey or accessToken is allowed, not both". |
+| neither | both set | `ValidationError` — "exactly one of BACKLOG_API_KEY or BACKLOG_ACCESS_TOKEN is allowed, not both", naming the **variables** rather than the config fields. |
+
+Otherwise a deployment that moved from OAuth to an API key, wrote `apiKey` in
+`config` and forgot to unset `BACKLOG_ACCESS_TOKEN` would be refused with a
+message blaming the config it had just written.
 
 Credential resolvers are invoked on **every** outbound call and their result is
 never cached by the adapter (vendor-official requirement, verified in the
