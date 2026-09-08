@@ -4,6 +4,24 @@ A [Backlog](https://backlog.com/) adapter for [Chat SDK](https://chat-sdk.dev/) 
 Backlog issues and pull requests become threads, comments become messages, and
 an agent replies by commenting.
 
+[![npm](https://img.shields.io/npm/v/@nulab/chat-adapter-backlog)](https://www.npmjs.com/package/@nulab/chat-adapter-backlog)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/nulab/chat-adapter-backlog/blob/main/LICENSE)
+
+## Status
+
+Releases on its own cadence, starting at `0.1.0`, and still pre-1.0: while the
+major is `0`, a breaking change to the public surface ships as a minor release.
+
+Feature-complete against the adapter contract of `chat@4.39.0`: all 17 required
+members are present, plus 10 of the 27 optional ones. A few of them go as far
+as Backlog allows and no further — a reaction is a star, and there is no typing
+indicator to show. What each member does, and every place Backlog itself stops
+short, is the matrix under **Features and limitations**.
+
+Not listed in Chat SDK's adapter catalog yet — as neither a community nor a
+vendor-official adapter. That listing is a separate decision and changes
+nothing about installing or using the package.
+
 ## Installation
 
 ```sh
@@ -45,7 +63,7 @@ Every field falls back to an environment variable, so
 
 For a whole bot rather than a fragment — a Vercel project with the webhook
 wired up, environment variables and a handler that does something useful — see
-[examples/](./examples).
+[examples/](https://github.com/nulab/chat-adapter-backlog/tree/main/examples).
 
 ## Environment variables
 
@@ -78,6 +96,7 @@ not a request to fall back.
 | `rateLimit.maxWaitMs` | `number` | `60_000` | Longest wait before a 429 retry. |
 | `rateLimit.maxRetries` | `number` | `1` | `0` disables retries. |
 | `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | Larger bodies get a 413. Description edits carry two full bodies. |
+| `createApi` | `(installation: ResolvedInstallation) => BacklogApi` | the `backlog-js`-backed port | Test seam: replaces the port every Backlog call goes through, so a consumer's suite needs no network — see **Testing**. Replacing it also takes the rate-limit accounting, the 429 retry and `client()` with it. |
 
 ### Several spaces
 
@@ -518,6 +537,23 @@ any polling loop falls into. Listing or counting **pull requests** spends `read`
 instead, so the two lists draw on different budgets and one being exhausted says
 nothing about the other.
 
+`api(host)` names only the endpoints this adapter itself needs. For anything
+else — custom fields, project settings, attachments — `client(host)` hands back
+the very [`backlog-js`](https://github.com/nulab/backlog-js) client the port
+speaks through, so those calls land in the same buckets, share the same 429
+retry and raise the same errors:
+
+```ts
+const client = adapter.client('example.backlog.com');
+const fields = await client.getCustomFields(500); // projectId
+```
+
+Build a Backlog client of your own instead and none of that holds: it spends
+the same per-user limit without counting it. `client()` is unavailable in
+exactly one configuration — a custom `createApi` replaces the
+`backlog-js`-backed port, so there is no client to hand out and `client()`
+throws an `AdapterError` with code `NO_CLIENT`.
+
 ### A 429 blocks the call for up to a minute
 
 Backlog sends no `Retry-After`, so a 429 is retried once by waiting until
@@ -591,12 +627,14 @@ comments, stars, uploads, notifications and recorded inputs for assertions.
 
 ## Links
 
-- [examples/](./examples) — deployable bots built on this adapter, in order of
-  how much they ask of you
+- [examples/](https://github.com/nulab/chat-adapter-backlog/tree/main/examples)
+  — deployable bots built on this adapter, in order of how much they ask of you
 - [Chat SDK documentation](https://chat-sdk.dev/docs)
 - [Backlog API v2](https://developer.nulab.com/docs/backlog/)
-- [sample-messages.md](./sample-messages.md) — a payload per activity type
-- [DEVELOPMENT.md](./DEVELOPMENT.md) — contributor setup
+- [sample-messages.md](https://github.com/nulab/chat-adapter-backlog/blob/main/sample-messages.md)
+  — a payload per activity type
+- [DEVELOPMENT.md](https://github.com/nulab/chat-adapter-backlog/blob/main/DEVELOPMENT.md)
+  — contributor setup
 
 ## Package name
 
@@ -607,4 +645,4 @@ by an unrelated third-party package, so this one is published under the
 
 ## License
 
-[MIT](./LICENSE) © Nulab Inc.
+[MIT](https://github.com/nulab/chat-adapter-backlog/blob/main/LICENSE) © Nulab Inc.

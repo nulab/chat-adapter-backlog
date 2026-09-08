@@ -1760,7 +1760,12 @@ for one scratch space is worse than requiring the two to share it.
 ## 13. Documentation deliverables
 
 - **README.md**, following Chat SDK's publishing checklist order: title and
-  one-line description; installation (`pnpm add @nulab/chat-adapter-backlog chat`);
+  one-line description; an npm-version badge and a license badge; a **Status**
+  section stating the release cadence and pre-1.0 semver (`0.1.0` first, a
+  breaking change is a minor while the major is `0`), the contract coverage of
+  §4, and the catalog-listing choice
+  ([docs/plans/adapter-implementation.md](../plans/adapter-implementation.md)
+  P7); installation (`pnpm add @nulab/chat-adapter-backlog chat`);
   quick start (shape A with explicit fields); environment-variable table (the
   six `BACKLOG_*` variables, required/optional); configuration reference (§3.2
   table); platform setup (create bot user, add to project, issue API key,
@@ -1788,11 +1793,20 @@ for one scratch space is worse than requiring the two to share it.
   or `pullRequestCommentId`); read receipts; history paging (§7.1);
   `message.subject.type` being `"issue"` or `"pull_request"` (D-PR8); raw API
   and errors (§3.6, §8.5), with `api(host).listPullRequests` named as the route
-  to a repository's pull requests, and the 429 retry stated as a wait of up to
-  `rateLimit.maxWaitMs` that blocks the call — so a serverless deployment must
-  allow more execution time than `maxWaitMs` or lower it and handle
-  `AdapterRateLimitError` itself, with the two `warn` lines named as how the
-  wait becomes visible; testing with `createInMemoryBacklogApi`; license.
+  to a repository's pull requests, `client(host)` named as the `backlog-js`
+  client for the endpoints the port does not — carrying the same buckets, retry
+  and errors, and throwing `NO_CLIENT` under a custom `createApi` — and the 429
+  retry stated as a wait of up to `rateLimit.maxWaitMs` that blocks the call —
+  so a serverless deployment must allow more execution time than `maxWaitMs` or
+  lower it and handle `AdapterRateLimitError` itself, with the two `warn` lines
+  named as how the wait becomes visible; testing with
+  `createInMemoryBacklogApi`, with `createApi` in the configuration table
+  because that section passes it; license.
+  Every link into this repository is absolute
+  (`https://github.com/nulab/chat-adapter-backlog/blob/main/…` for a file,
+  `/tree/main/…` for a directory), never `./file`: README.md ships in the
+  tarball whatever `files` lists, and npmjs.com resolves no relative path
+  (#66).
 - **`sample-messages.md`** in the package root with anonymised payloads for
   every §5.3 row, issue **and** pull request — 18, 19 (comment, status,
   assignee, summary), 20 (plain and with an attachment) and the ignored 21 and
