@@ -575,7 +575,8 @@ const adapter = createBacklogAdapter({
   apiKey: 'test',
   botUserId: 999,
   botUserName: 'Chatbot',
-  webhookSecret: 'test',
+  // 16 bytes minimum, in a test too: the check runs in the constructor.
+  webhookSecret: 'test-webhook-secret',
   createApi: () => api,
 });
 ```
