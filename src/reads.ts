@@ -53,9 +53,21 @@ const DEFAULT_LIMIT = 50;
 const MIN_LIMIT = 1;
 const MAX_LIMIT = 100;
 
+/**
+ * `limit` is clamped into `[1, 100]` but a non-integer is **rejected** rather
+ * than rounded (docs/specs/adapter.md §7.1): it reaches Backlog as the `count`
+ * parameter, which answers 400 for `2.5`, and `NaN` survives
+ * `Math.min`/`Math.max` untouched — so both used to leave this function and
+ * fail at the API with Backlog's message instead of the adapter's. Rounding
+ * would be the other option; a caller asking for 2.5 messages has a bug, and
+ * silently answering with 2 or 3 hides it.
+ */
 function clampLimit(limit: number | undefined): number {
   if (limit === undefined) {
     return DEFAULT_LIMIT;
+  }
+  if (!Number.isInteger(limit)) {
+    throw new ValidationError('backlog', `"${limit}" is not a valid limit`);
   }
   return Math.min(MAX_LIMIT, Math.max(MIN_LIMIT, limit));
 }

@@ -402,24 +402,50 @@ describe('BacklogAdapter construction', () => {
     );
   });
 
-  it('rejects a negative rateLimit.maxWaitMs', () => {
-    expect(
-      () =>
-        new BacklogAdapter({ ...validConfig(), rateLimit: { maxWaitMs: -1 } })
-    ).toThrow(ValidationError);
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects a rateLimit.maxWaitMs of %s',
+    (maxWaitMs) => {
+      const config = { ...validConfig(), rateLimit: { maxWaitMs } };
+
+      expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
+    }
+  );
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects a rateLimit.maxRetries of %s',
+    (maxRetries) => {
+      const config = { ...validConfig(), rateLimit: { maxRetries } };
+
+      expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
+    }
+  );
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects a maxWebhookBodyBytes of %s',
+    (maxWebhookBodyBytes) => {
+      const config = { ...validConfig(), maxWebhookBodyBytes };
+
+      expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
+    }
+  );
+
+  it('rejects a botUserId no id string could round-trip', () => {
+    // 2^53 and beyond do not survive `Number(String(id))`, and this id is
+    // encoded into every user id and outbound mention (§2.1).
+    const botUserId = Number.MAX_SAFE_INTEGER + 2;
+    const config = { ...validConfig(), botUserId };
+
+    expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
   });
 
-  it('rejects a non-integer rateLimit.maxRetries', () => {
-    expect(
-      () =>
-        new BacklogAdapter({ ...validConfig(), rateLimit: { maxRetries: 1.5 } })
-    ).toThrow(ValidationError);
-  });
+  it('rejects a BACKLOG_BOT_USER_ID no id string could round-trip', () => {
+    process.env.BACKLOG_HOST = 'example.backlog.com';
+    process.env.BACKLOG_API_KEY = 'env-api-key';
+    process.env.BACKLOG_BOT_USER_ID = '99999999999999999999';
+    process.env.BACKLOG_BOT_USER_NAME = 'Chatbot';
+    process.env.BACKLOG_WEBHOOK_SECRET = 'env-secret';
 
-  it('rejects a non-positive maxWebhookBodyBytes', () => {
-    expect(
-      () => new BacklogAdapter({ ...validConfig(), maxWebhookBodyBytes: 0 })
-    ).toThrow(ValidationError);
+    expect(() => createBacklogAdapter()).toThrow(ValidationError);
   });
 
   it('rejects an empty installations array', () => {

@@ -95,7 +95,7 @@ type BacklogMessageId = { host: string; subject: BacklogSubjectRef } & (
 
 ```
 host        = 1*( lower-alnum / "." / "-" )      ; no ":" "/" scheme, port or path; lowercased
-posint      = ( "1"-"9" ) *DIGIT
+posint      = ( "1"-"9" ) *DIGIT                 ; value <= 2^53-1 (Number.MAX_SAFE_INTEGER)
 subject     = "issue:" posint                    ; issueId
             / "pr:" posint ":" posint            ; repositoryId, number
 thread-id   = "backlog:" host ":" posint ":" subject   ; projectId, subject
@@ -116,7 +116,24 @@ keyword takes — one posint after `issue:`, two after `pr:`; channel: exactly
 keyword, a subject followed by nothing or by an unknown part, `r` or `c<id>`
 followed by further segments, `u:` with nothing after it. `decodeUserId`
 splits on the **last** `:`; a bare number is rejected even with a single
-installation. A host
+installation.
+
+A `posint` whose **value** exceeds `Number.MAX_SAFE_INTEGER` is rejected as
+well, although its digits match the grammar: the segment is read with
+`Number`, which is lossy past 2^53-1, so `…:issue:99999999999999999999`
+decoded to `1e20` and re-encoded to `…:issue:1e+20` — a round trip that
+silently addressed something else.
+
+`encodeThreadId`, `encodeChannelId`, `encodeMessageId` and `encodeUserId`
+validate their input against **the same grammar** and throw the same
+`ValidationError`, because a value the grammar cannot express produces a
+string the matching decoder rejects: a non-lowercased host, a host with a
+scheme, path or port, a numeric field that is not a positive integer ≤ 2^53-1,
+and an `update` part whose `created` is empty. Nothing is normalised on the
+way out — a host is rejected, not lowercased in passing, since the config path
+(§3.2) is where lowercasing happens.
+
+A host
 that decodes correctly but is not a configured installation is a
 `ResourceNotFoundError("backlog", "installation", host)` at the point of use
 (not a decode error: the id is well-formed).
@@ -224,16 +241,16 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 | `host` | `string` | — | `BACKLOG_HOST` | Matches `host` grammar after lowercasing; rejects `:`/`/`/scheme/whitespace. |
 | `apiKey` | `Resolvable` | — | `BACKLOG_API_KEY` | Non-empty when a string. Exactly one of `apiKey`/`accessToken` per installation; the pair falls back to the environment together (below). |
 | `accessToken` | `Resolvable` | — | `BACKLOG_ACCESS_TOKEN` | As above. Refresh is the caller's job (resolver form). |
-| `botUserId` | `number` | — | `BACKLOG_BOT_USER_ID` | Positive integer; env value must parse as one. |
+| `botUserId` | `number` | — | `BACKLOG_BOT_USER_ID` | Positive integer ≤ 2^53-1 (the §2.1 `posint` range, since it is encoded into user ids and mentions); env value must parse as one. |
 | `botUserName` | `string` | — | `BACKLOG_BOT_USER_NAME` | Non-empty after trim (an empty name would make every `@` a mention). |
 | `webhookSecret` | `string` | — | `BACKLOG_WEBHOOK_SECRET` | Non-empty and at least **16 bytes** (UTF-8), validated whether or not a verifier is configured. Required on every installation unless `webhookVerifier` is set (D2). |
 | `installations` | `BacklogInstallation[]` | — | none | Non-empty; no duplicate hosts (after lowercasing); each element validated as above. Rejected if any shape-A field is also present. |
 | `webhookVerifier` | function | — | none | When set, replaces the secret check for every installation (D2). |
 | `userName` | `string` | first installation's `botUserName` | none | Non-empty. Exposed to the core as `adapter.userName`. |
 | `logger` | `Logger` (from `chat`) | `new ConsoleLogger("info").child("backlog")` | none | Replaced by `chat.getLogger("backlog")` in `initialize`. |
-| `rateLimit.maxWaitMs` | `number` | `60_000` | none | ≥ 0. Longest wait before a 429 retry (D5). |
+| `rateLimit.maxWaitMs` | `number` | `60_000` | none | Non-negative integer (`NaN` and `Infinity` rejected). Longest wait before a 429 retry (D5). |
 | `rateLimit.maxRetries` | `number` | `1` | none | ≥ 0 integer; `0` disables retries. |
-| `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | none | > 0. Larger bodies → 413 (§5.1) ⚑. |
+| `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | none | Positive integer. Larger bodies → 413 (§5.1) ⚑. |
 | `createApi` | function | `backlog-js` implementation | none | Test seam; receives the resolved installation and returns a port. |
 
 Environment fallbacks apply **only** to shape A and only when the corresponding
@@ -364,7 +381,8 @@ in the activity but raw `<@U…>` in REST (measured 2026-09-06). Consumers read
 All from `@chat-adapter/shared`, adapter name `"backlog"`:
 `ValidationError`, `AuthenticationError`, `PermissionError`,
 `ResourceNotFoundError`, `AdapterRateLimitError`, `NetworkError`,
-`AdapterError`. Mapping in §8.5. `mentionUser`/`mentionTeam` throw a built-in
+`AdapterError`. Mapping in §8.5. The id **encoders** throw `ValidationError`
+too, for the input §2.2 lists. `mentionUser`/`mentionTeam` throw a built-in
 `RangeError` for a non-positive-integer id (pure helpers, no adapter context).
 No `ZodError` and no `backlog-js` error class ever escapes the package.
 
@@ -1102,7 +1120,7 @@ so a backward page is `order=desc&maxId=` and a forward page is
 
 | Input | Rule |
 | --- | --- |
-| `limit` | Default 50; clamped to `[1, 100]`. Counts the root message as one slot. |
+| `limit` | Default 50; clamped to `[1, 100]`. A non-integer (`2.5`, `NaN`, `Infinity`) → `ValidationError`: it reaches Backlog as `count`, which answers 400, and rounding would hide the caller's bug. Counts the root message as one slot. |
 | `direction` | Default `"backward"`. |
 | `cursor` | Must match `^(0\|[1-9]\d*)$`; anything else → `ValidationError`. It is a comment id (or `0` meaning "before the first comment", forward only). |
 | `threadId` that is a channel id | `ValidationError` (see §4.2 `fetchChannelMessages`). |
@@ -1209,7 +1227,8 @@ stale name alive under whichever one a clear missed. Over-clearing costs one
 ### 7.6 `listThreads(channelId, { limit?, cursor? })`
 
 [Get Issue List](https://developer.nulab.com/docs/backlog/api/2/get-issue-list/)
-with `projectId[]`, `count` (default 50, clamped `[1, 100]`), `offset`
+with `projectId[]`, `count` (default 50, clamped `[1, 100]`, non-integer →
+`ValidationError` as in §7.1), `offset`
 (cursor, `^(0|[1-9]\d*)$` else `ValidationError`). This endpoint draws on the
 **search** bucket (150/min documented example), not read. **Pull requests are
 not listed** (D-PR7): a pull-request list is per repository, a coordinate the

@@ -33,6 +33,7 @@ import {
   decodeUserId as decodeUserIdString,
   encodeMessageId,
   encodeThreadId as encodeThreadIdStruct,
+  validateHost,
 } from './ids';
 import {
   fetchChannelInfo as fetchChannelInfoRead,
@@ -171,7 +172,6 @@ const ENV_BOT_USER_ID = 'BACKLOG_BOT_USER_ID';
 const ENV_BOT_USER_NAME = 'BACKLOG_BOT_USER_NAME';
 const ENV_WEBHOOK_SECRET = 'BACKLOG_WEBHOOK_SECRET';
 
-const HOST_GRAMMAR = /^[a-z0-9.-]+$/;
 const DEFAULT_MAX_WAIT_MS = 60_000;
 const DEFAULT_MAX_RETRIES = 1;
 const DEFAULT_MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024;
@@ -181,40 +181,23 @@ function fail(message: string): never {
 }
 
 /**
- * `host` is validated in its raw (non-lowercased) form for scheme/whitespace
- * before lowercasing, so a rejection message shows the value the caller
- * actually passed rather than a silently-transformed one.
+ * `Number.isSafeInteger`, not `Number.isInteger`: the id ends up in
+ * `encodeUserId`, whose grammar stops at 2^53-1 because a larger value cannot
+ * be read back out of an id string (docs/specs/adapter.md §2.1). Accepting
+ * one here would defer the same rejection to the first outbound mention.
  */
-function validateHost(host: string, label: string): string {
-  if (host.trim() !== host || /\s/.test(host)) {
-    fail(`${label} must not contain whitespace`);
-  }
-  if (host.includes('://')) {
-    fail(`${label} must not include a scheme`);
-  }
-  if (host.includes('/')) {
-    fail(`${label} must not include a path`);
-  }
-  const lowered = host.toLowerCase();
-  if (lowered.includes(':')) {
-    fail(`${label} must not include a port`);
-  }
-  if (lowered.length === 0 || !HOST_GRAMMAR.test(lowered)) {
-    fail(`${label} is not a valid Backlog host`);
-  }
-  return lowered;
-}
-
 function validateBotUserId(value: number, label: string): number {
-  if (!Number.isInteger(value) || value <= 0) {
-    fail(`${label} must be a positive integer`);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    fail(`${label} must be a positive integer, at most 2^53-1`);
   }
   return value;
 }
 
 function parseBotUserIdFromEnv(raw: string, envVar: string): number {
-  if (!/^[1-9]\d*$/.test(raw)) {
-    fail(`environment variable ${envVar} must be a positive integer`);
+  if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    fail(
+      `environment variable ${envVar} must be a positive integer, at most 2^53-1`
+    );
   }
   return Number(raw);
 }
@@ -450,6 +433,15 @@ function resolveShapeB(
   return resolved;
 }
 
+/**
+ * `Number.isInteger`, not a bare comparison: `NaN < 0` is false, so
+ * `maxWaitMs: NaN` passed validation and then made a 429 whose response
+ * carried no `X-RateLimit-Reset` retry immediately into the same empty
+ * bucket — `decideRetry` compares `waitMs > maxWaitMs`, which is false for
+ * `NaN`, and `wait(NaN)` returns at once (`src/client/rate-limit.ts`).
+ * `Infinity` fails the same check, which is the point of a ceiling on how
+ * long a call may block.
+ */
 function validateRateLimitConfig(
   rateLimit: BacklogAdapterConfig['rateLimit']
 ): {
@@ -457,8 +449,8 @@ function validateRateLimitConfig(
   maxRetries: number;
 } {
   const maxWaitMs = rateLimit?.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
-  if (maxWaitMs < 0) {
-    fail('rateLimit.maxWaitMs must be >= 0');
+  if (!Number.isInteger(maxWaitMs) || maxWaitMs < 0) {
+    fail('rateLimit.maxWaitMs must be a non-negative integer');
   }
 
   const maxRetries = rateLimit?.maxRetries ?? DEFAULT_MAX_RETRIES;
@@ -473,8 +465,8 @@ function validateMaxWebhookBodyBytes(value: number | undefined): number {
   if (value === undefined) {
     return DEFAULT_MAX_WEBHOOK_BODY_BYTES;
   }
-  if (value <= 0) {
-    fail('maxWebhookBodyBytes must be > 0');
+  if (!Number.isInteger(value) || value <= 0) {
+    fail('maxWebhookBodyBytes must be a positive integer');
   }
   return value;
 }
