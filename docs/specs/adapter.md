@@ -466,7 +466,11 @@ keys** everywhere (`field_text`, `type` inside `changes[]`,
 `shared_files`, `status`, `priority` … are all seen in real payloads) and
 `raw.payload` is the parsed body as received, not a stripped copy.
 
-Required (400 when missing): `type` number; `created` string; `project.id`
+Required (400 when missing): `type` number; `created` a string that names an
+instant — `Date.parse` yields a finite value, which is the property the two
+readers of it need (`:u:<created>` message ids in `src/ids.ts` and
+`metadata.dateSent`), not a grammar: a form Backlog widens to milliseconds or
+a numeric offset parses, `""` and `"yesterday"` are the 400; `project.id`
 number; `createdUser.id` number; `createdUser.name` string; `content.id`
 number; for types 18–20 additionally `content.number` number and
 `content.repository.id` number; for type 14 `content.link[]` **instead of**
@@ -481,13 +485,25 @@ absent array and an array in a shape not measured here both mean "this
 delivery says nothing about who was notified", and neither is worth losing a
 message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
 
+Two more fields cannot make a body invalid, for the same reason and with the
+same consequence — a 400 loses the comment the delivery carries, and Backlog
+never sends it again:
+
+- `changes[].new_value` and `.old_value` fall back to `null` when the value is
+  neither a string nor a number. The value system is Backlog's own and only
+  partly measured (a status as an id string, an assignee as a display name),
+  so a custom attribute serialised some other way reads as "no value here"
+  rather than costing the message. `raw.payload` still carries what was sent.
+- `attachments[].size` is optional. It reaches `Attachment.size` and nothing
+  else; only `attachments[].id` addresses the file.
+
 | Field | Type 1 | Type 2/3 | Type 4 | Type 18 | Type 19/20 |
 | --- | --- | --- | --- | --- | --- |
 | `content.summary`, `content.description` | read (`description` nullable) | ignored | — | read | ignored |
 | `content.assignee` | `{ id, name, … } \| null`; always sent on a webhook, `null` when unassigned (measured 2026-09-06), optional in the schema because the activity form omits it | sent, same shape; ignored — the **current** assignee, repeated on every delivery, so an assignment is read from `changes` instead | — | `{ id, name, … } \| null`, webhook-only (measured 2026-09-06); the assignment at creation, read as a mention | sent, same shape; ignored — the **current** assignee, as on 2/3 |
 | `content.comment` | absent | `{ id: number, content: string \| null } \| null` | — | `null` | `{ id, content } \| null` |
-| `content.changes[]` | absent | `{ field: string, new_value?: string \| number \| null, old_value?: … }[]` optional | — | `[]` | same shape as 2/3 |
-| `content.attachments[]` | `{ id, name, size }[]` optional | same | — | optional (not measured on the activity form) | optional |
+| `content.changes[]` | absent | `{ field: string, new_value?: string \| number \| null, old_value?: … }[]` optional; a value of any other type reads as `null` | — | `[]` | same shape as 2/3 |
+| `content.attachments[]` | `{ id, name, size? }[]` optional | same | — | optional (not measured on the activity form) | optional |
 | `content.number`, `content.repository.{id,name}` | — | — | — | required / required + optional | same |
 | `content.issue` | — | — | — | `{ id, key_id, issue_key?, summary, description } \| null`, the linked issue; display data (D-PR6) | same |
 | `createdUser.userId` | `string \| null` optional (Nulab-account users have none) | same | same | same | same |

@@ -67,6 +67,14 @@ function activity(type: number, payload: object) {
   return value;
 }
 
+function commentedActivity(payload: object): IssueUpdatedOrCommentedActivity {
+  const value = parsed(3, payload);
+  if (value.type !== 3) {
+    throw new Error('fixture failed to validate as type 3');
+  }
+  return value;
+}
+
 function bulkActivity(payload: object): IssueMultiUpdatedActivity {
   const value = parsed(14, payload);
   if (value.type !== 14) {
@@ -440,6 +448,70 @@ describe('type 21', () => {
     expect((DISPATCHED_ACTIVITY_TYPES as readonly number[]).includes(21)).toBe(
       false
     );
+  });
+});
+
+describe('parseActivity — created (§5.2)', () => {
+  it('an activity whose created is empty is invalid', () => {
+    // `created: ""` used to pass: the message id of an update with no comment
+    // ended in `:u:` and could not be decoded back, and `dateSent` was an
+    // Invalid Date — both behind a 200.
+    const result = parseActivity(
+      2,
+      issueUpdatedWithoutComment({ created: '' })
+    );
+
+    expect('issuePaths' in result).toBe(true);
+    if ('issuePaths' in result) {
+      expect(result.issuePaths).toContain('created');
+    }
+  });
+
+  it('an activity whose created names no instant is invalid', () => {
+    const result = parseActivity(3, issueCommented({ created: 'yesterday' }));
+
+    expect('issuePaths' in result).toBe(true);
+    if ('issuePaths' in result) {
+      expect(result.issuePaths).toContain('created');
+    }
+  });
+
+  it('a created carrying milliseconds or a numeric offset is accepted', () => {
+    // The measured form is `2026-09-03T04:05:06Z`, and Backlog documents no
+    // format at all — so a widened one is read rather than rejected.
+    const withMillis = issueCommented({ created: '2026-09-03T04:05:06.123Z' });
+    const withOffset = issueCommented({ created: '2026-09-03T13:05:06+09:00' });
+
+    expect('activity' in parseActivity(3, withMillis)).toBe(true);
+    expect('activity' in parseActivity(3, withOffset)).toBe(true);
+  });
+});
+
+describe('parseActivity — fields that must not cost the message (§5.2)', () => {
+  it('a changes value in a shape the adapter has not measured keeps the entry and the comment', () => {
+    const payload = issueCommented();
+    const content = payload['content'] as Record<string, unknown>;
+    content['changes'] = [
+      { field: 'custom_field_42', new_value: true, old_value: ['a', 'b'] },
+    ];
+
+    const parsed = commentedActivity(payload);
+
+    expect(parsed.content.changes).toEqual([
+      { field: 'custom_field_42', new_value: null, old_value: null },
+    ]);
+  });
+
+  it('an attachment carrying no size is valid', () => {
+    const payload = issueCommented();
+    const content = payload['content'] as Record<string, unknown>;
+    content['attachments'] = [{ id: 4001, name: 'trace.log' }];
+
+    const parsed = commentedActivity(payload);
+
+    expect(parsed.content.attachments).toEqual([
+      { id: 4001, name: 'trace.log' },
+    ]);
   });
 });
 

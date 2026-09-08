@@ -114,11 +114,15 @@ export interface BacklogActivityChange {
   old_value?: string | number | null | undefined;
 }
 
-/** One `content.attachments[]` entry (docs/specs/adapter.md §5.2, §6.6). */
+/**
+ * One `content.attachments[]` entry (docs/specs/adapter.md §5.2, §6.6).
+ * `size` is optional: it is informational, so a delivery that omits it is
+ * read rather than rejected — only `id` addresses the file.
+ */
 export interface BacklogActivityAttachment {
   id: number;
   name: string;
-  size: number;
+  size?: number | undefined;
 }
 
 /**

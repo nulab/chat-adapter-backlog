@@ -42,6 +42,25 @@ export function parseEnvelope(value: object): WebhookEnvelope | null {
  */
 const identitySchema = z.number().int().positive();
 
+/**
+ * The delivery's timestamp, which is not display data: an update carrying no
+ * comment id has the message id `<host>:<subject>:u:<created>` (`src/ids.ts`)
+ * and every message's `metadata.dateSent` is `new Date(created)`. `created: ""`
+ * therefore produced an id no `decodeMessageId` could read back and an
+ * `Invalid Date` on the envelope, both behind a 200 — so a value the two
+ * readers cannot use is a 400 (§5.1 step 9) instead.
+ *
+ * The check is "names an instant", not a grammar. `z.iso.datetime()` would
+ * reject a delivery that added milliseconds or a `+09:00` offset, and Backlog
+ * documents no format for this field at all — every measured value is
+ * `2026-09-03T04:05:06Z` (`.claude/rules/backlog-webhook-facts.md`), which is
+ * a measurement, not a promise. Both readers handle any form `Date` accepts,
+ * so rejecting past that would lose real events to buy nothing.
+ */
+const createdSchema = z
+  .string()
+  .refine((value) => Number.isFinite(Date.parse(value)));
+
 const createdUserSchema = z.object({
   id: identitySchema,
   name: z.string(),
@@ -51,19 +70,42 @@ const createdUserSchema = z.object({
 /** `createdUser` shape shared by every activity type §5.2 requires it on. */
 export type ActivityCreatedUser = z.infer<typeof createdUserSchema>;
 
+/**
+ * One `changes[]` value. `.catch(null)` rather than the bare union: the value
+ * system is Backlog's own and only partly measured — a status arrives as an
+ * id string, an assignee as a display name
+ * (`.claude/rules/backlog-webhook-facts.md`) — and a custom attribute whose
+ * value serialises as something else (a checkbox, a multiple-choice list)
+ * would otherwise fail the field and cost a 400, dropping the real comment
+ * the same delivery carries. Nothing identifies a subject here, so "a value
+ * in a shape this adapter has not measured" is read as "no value", and
+ * `raw.payload` still hands the consumer what Backlog actually sent.
+ */
+const changeValueSchema = z
+  .union([z.string(), z.number()])
+  .nullable()
+  .catch(null)
+  .optional();
+
 const changeSchema = z.object({
   field: z.string(),
-  new_value: z.union([z.string(), z.number()]).nullable().optional(),
-  old_value: z.union([z.string(), z.number()]).nullable().optional(),
+  new_value: changeValueSchema,
+  old_value: changeValueSchema,
 });
 
 /** One `content.changes[]` entry (docs/specs/adapter.md §5.2). */
 export type ActivityChange = z.infer<typeof changeSchema>;
 
+/**
+ * `size` is optional because it is informational — it reaches
+ * `Attachment.size` and nothing else, and the comment's own `changeLog`
+ * describes an attachment without one already (`src/client/schemas.ts`).
+ * Only `id` addresses the file.
+ */
 const attachmentSchema = z.object({
   id: z.number(),
   name: z.string(),
-  size: z.number(),
+  size: z.number().optional(),
 });
 
 /** One `content.attachments[]` entry (docs/specs/adapter.md §5.2, §6.6). */
@@ -103,7 +145,7 @@ export type ActivityNotification = z.infer<typeof notificationSchema>;
  * optional even though every measured payload carries them.
  */
 const baseActivitySchema = z.object({
-  created: z.string(),
+  created: createdSchema,
   project: z.object({
     id: identitySchema,
     projectKey: z.string().optional(),

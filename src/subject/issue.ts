@@ -178,12 +178,15 @@ export function createIssueSubjectClient(
     webhookAttachment(attachment: {
       id: number;
       name: string;
-      size: number;
+      size?: number | undefined;
     }): Attachment {
       return {
         type: 'file',
         name: attachment.name,
-        size: attachment.size,
+        // Spread rather than `size: attachment.size`: a payload that omits
+        // `size` (§5.2) has to leave the key unset, which is not the same as
+        // setting it to `undefined` under `exactOptionalPropertyTypes`.
+        ...(attachment.size === undefined ? {} : { size: attachment.size }),
         url: issueAttachmentUrl(host, issueId, attachment.id),
         fetchData: () => downloadAttachment(attachment.id),
       };
