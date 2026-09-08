@@ -1707,9 +1707,9 @@ for one scratch space is worse than requiring the two to share it.
   behaviour lives there and nowhere else, with the two-module containment rule
   (`src/subject/client.ts` and `src/ids.ts`,
   `src/subject/containment.test.ts` failing on a third for the shapes it can
-  see); the raw-versus-domain
-  paragraph pointing at `src/index.ts`'s header rather than restating it; the
-  smoke-test paragraph updated to the new assertion.
+  see); the raw-versus-domain paragraph pointing at `src/index.ts`'s header
+  rather than restating it; the smoke-test paragraph updated to the new
+  assertion.
 - **CI smoke test** (`ci.yml`): asserts `typeof m.createBacklogAdapter === "function"`
   and `new m.BacklogAdapter({...minimal config...}).name === "backlog"`.
 - **Feature matrix** for a future catalog listing (values per Chat SDK's

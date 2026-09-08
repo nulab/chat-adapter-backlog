@@ -37,6 +37,14 @@ has no name on the line — `(await …).kind`, a parameter pattern, a predicate
 passes it. That file's header lists what it does not see; read it before
 trusting a green run.
 
+It reads the **text** of a line, not parsed code, which is why a comment is
+stripped before matching: a Why-not sentence about D-PR2 is safe to write, and
+`src/webhook/bulk.ts` and `src/subject/url.ts` already carry one. A string
+literal is not stripped, though, so prose written *outside* a comment — a log
+message, a test fixture, a doc string — must keep the `kind` read and the
+subject-kind literal on separate lines, or the scan reports the sentence and
+tells its author to move a comment onto `SubjectClient`.
+
 One split is worth knowing before you touch either side: `src/client/port.ts`
 owns the **API domain** types, which carry `Date` objects, while `src/types.ts`
 owns the **raw-message** types reachable from `message.raw`, which carry ISO

@@ -41,8 +41,8 @@ const KIND = String.raw`\s*(?:\??\.\s*kind|\??\[\s*['"]kind['"]\s*\])`;
 /** `===`, `!==`, `==`, `!=`, never a bare `=`: an assignment is no dispatch. */
 const EQUALITY = String.raw`[!=]={1,2}`;
 
-/** A subject kind as a string, template or otherwise. */
-const SUBJECT_KIND = String.raw`['"\`](?:issue|pullRequest)['"\`]`;
+/** A subject kind, quoted or backticked; the closing quote must match. */
+const SUBJECT_KIND = String.raw`(?<quote>['"\`])(?:issue|pullRequest)\k<quote>`;
 
 /**
  * A kind dispatch is recognised only where the value it reads can be *named*
@@ -66,6 +66,16 @@ const SUBJECT_KIND = String.raw`['"\`](?:issue|pullRequest)['"\`]`;
  * Field sniffing (`'issueId' in ref`) is left out for a different reason: one
  * line cannot tell it from *building* a ref out of a webhook payload
  * (`src/webhook/payload.ts`), which is what the adapter is supposed to do.
+ *
+ * Being by name, the exemptions also over-report: the destructuring pattern
+ * flags `kind` pulled out of **any** receiver that is not `raw` or `source`,
+ * so `const { kind, id } = customField`, `const { kind } = await this.load()`
+ * and even a type parameter's default
+ * (`<T extends { kind: string } = BacklogSubjectRef>`) would all be reported.
+ * What keeps that theoretical is that no `kind` in `src/` belongs to anything
+ * but the three unions named here. A fourth one means teaching `OTHER_UNIONS`
+ * about it, not loosening the pattern — the pattern is only worth having
+ * while `kind` means a discriminant and nothing else.
  *
  * So this suite is a tripwire and not a proof. It catches the shapes a kind
  * dispatch is actually written in; the rule itself still has to be understood
@@ -106,11 +116,42 @@ function isOtherUnion(receiver: string, file: string): boolean {
   );
 }
 
+/**
+ * The one thing this scan is not is a parser: it reads the **text** of a line,
+ * so prose about this very rule matches the patterns as readily as code does.
+ * That is not hypothetical — `src/webhook/bulk.ts` and `src/subject/url.ts`
+ * each already carry a Why-not sentence about D-PR2 that would start failing
+ * this suite the moment a subject kind were quoted in it, and the failure
+ * message would tell its author to move a comment onto `SubjectClient`. A
+ * grep test that fires on prose is a grep test somebody deletes, so a comment
+ * comes off the line first: one that opens or continues a block comment is
+ * dropped whole, and a `//` tail is cut away.
+ *
+ * Two consequences survive that, and are disclosed rather than fixed because
+ * closing them needs the parser this deliberately is not:
+ *
+ * - **A subject kind inside a string literal is still reported**, because
+ *   nothing tells `logger.warn("subject.kind === 'issue'")` from the dispatch
+ *   it describes. Writing about this rule *outside* a comment therefore means
+ *   keeping the `kind` read and the kind literal on separate lines.
+ * - **A `//` inside a string cuts the line short** (`'https://…'`), so a
+ *   dispatch written after one, on that same line, is missed.
+ */
+function codeOn(line: string): string {
+  const text = line.trimStart();
+  if (text.startsWith('*') || text.startsWith('/*')) {
+    return '';
+  }
+  const commentTail = line.indexOf('//');
+  return commentTail === -1 ? line : line.slice(0, commentTail);
+}
+
 function violationsIn(file: string, contents: string): Violation[] {
   const violations: Violation[] = [];
   contents.split('\n').forEach((source, index) => {
+    const code = codeOn(source);
     for (const pattern of DISPATCH_PATTERNS) {
-      for (const match of source.matchAll(pattern)) {
+      for (const match of code.matchAll(pattern)) {
         const receiver = match[1] ?? '';
         if (isOtherUnion(receiver, file)) {
           continue;
@@ -183,6 +224,17 @@ describe('subject kind dispatch', () => {
       expect(violationsIn('reads.ts', line)).toHaveLength(1);
     }
   );
+
+  it('reads code, not the prose written about the rule', () => {
+    const documented = [
+      "  * a `ref.kind === 'issue'` branch belongs on SubjectClient",
+      '  /** Never `switch (ref.kind)` here — call subjectClientFor. */',
+      '  // const { kind } = ref; would violate D-PR2',
+      "  } // no `ref.kind === 'pullRequest'` outside the subject layer",
+    ].join('\n');
+
+    expect(violationsIn('reads.ts', documented)).toEqual([]);
+  });
 
   it('leaves the raw message union and a root’s port object alone', () => {
     const allowed = [
