@@ -513,6 +513,22 @@ describe('parseActivity — fields that must not cost the message (§5.2)', () =
       { id: 4001, name: 'trace.log' },
     ]);
   });
+
+  it('an attachment whose size is null, or in any other shape, keeps the file', () => {
+    const payload = issueCommented();
+    const content = payload['content'] as Record<string, unknown>;
+    content['attachments'] = [
+      { id: 4001, name: 'trace.log', size: null },
+      { id: 4002, name: 'dump.bin', size: '2048' },
+    ];
+
+    const parsed = commentedActivity(payload);
+
+    expect(parsed.content.attachments).toEqual([
+      { id: 4001, name: 'trace.log' },
+      { id: 4002, name: 'dump.bin' },
+    ]);
+  });
 });
 
 /**

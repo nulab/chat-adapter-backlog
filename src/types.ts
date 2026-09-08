@@ -116,8 +116,10 @@ export interface BacklogActivityChange {
 
 /**
  * One `content.attachments[]` entry (docs/specs/adapter.md §5.2, §6.6).
- * `size` is optional: it is informational, so a delivery that omits it is
- * read rather than rejected — only `id` addresses the file.
+ * `size` is optional: it is informational, so a delivery that omits it — or
+ * sends it as anything but a number — is read rather than rejected, with the
+ * key absent. Only `id` addresses the file; `src/webhook/payload.ts` says why
+ * `name` is not optional alongside it.
  */
 export interface BacklogActivityAttachment {
   id: number;

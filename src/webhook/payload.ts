@@ -56,6 +56,15 @@ const identitySchema = z.number().int().positive();
  * `2026-09-03T04:05:06Z` (`.claude/rules/backlog-webhook-facts.md`), which is
  * a measurement, not a promise. Both readers handle any form `Date` accepts,
  * so rejecting past that would lose real events to buy nothing.
+ *
+ * That makes the accepted set **loose and engine-defined** on purpose:
+ * `Date.parse` also takes `"2026"` and `"Sep 3 2026"`, and what it takes
+ * beyond ISO 8601 is implementation-specific. Nothing downstream is harmed by
+ * that — both readers build the same `new Date(created)`, and `src/ids.ts`
+ * rejoins the `u:` tail whatever it contains, so any non-empty value
+ * round-trips through the message id. Tightening this to a fixed grammar
+ * would turn a widened Backlog timestamp into lost events, which is the
+ * failure this check exists to prevent; re-measure before narrowing it.
  */
 const createdSchema = z
   .string()
@@ -97,15 +106,26 @@ const changeSchema = z.object({
 export type ActivityChange = z.infer<typeof changeSchema>;
 
 /**
- * `size` is optional because it is informational — it reaches
- * `Attachment.size` and nothing else, and the comment's own `changeLog`
- * describes an attachment without one already (`src/client/schemas.ts`).
- * Only `id` addresses the file.
+ * `size` is informational — it reaches `Attachment.size` and nothing else —
+ * so `.optional().catch(undefined)`: absent, `null` and a shape this adapter
+ * has not measured all read as "this delivery says no size", none of them
+ * costing the message. Only `id` addresses the file.
+ *
+ * `name` stays **required**, which is deliberately asymmetric with the REST
+ * side, where `src/client/schemas.ts` makes both fields optional, and with
+ * `chat`'s own `Attachment.name` (`?: string`). Do not "align" them: the two
+ * are not the same evidence. The REST form is optional because two Backlog
+ * doc pages disagree about which keys a `changeLog` attachment carries, while
+ * every measured webhook payload names its files; and a falling-back `name`
+ * would have to either invent a file name or drop the whole file list, where
+ * a falling-back `size` loses nothing a consumer can act on. If an unnamed
+ * webhook attachment is ever measured, that measurement is what changes this
+ * — not the symmetry.
  */
 const attachmentSchema = z.object({
   id: z.number(),
   name: z.string(),
-  size: z.number().optional(),
+  size: z.number().optional().catch(undefined),
 });
 
 /** One `content.attachments[]` entry (docs/specs/adapter.md §5.2, §6.6). */
