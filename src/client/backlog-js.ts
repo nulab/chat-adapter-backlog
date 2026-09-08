@@ -129,27 +129,6 @@ interface ChosenCredential {
 }
 
 /**
- * Widens the {@link BacklogCredentials} union so both fields can be read at
- * once.
- *
- * The union refuses a value carrying both and one carrying neither, so the
- * reachable caller cannot get either past the compiler: that is
- * `toCredentials` in `src/adapter.ts`, and it is the only one, because
- * neither `createBacklogJsApi` nor `createBacklogJsTransport` is on the
- * package's public surface (`src/index.test.ts` asserts their absence). What
- * a type cannot rule out is a value that arrived through an assertion, which
- * is the case {@link chooseCredential} is left to answer — and answering it
- * needs the shape read structurally, which the union by itself does not
- * allow.
- */
-function widenCredentials(credentials: BacklogCredentials): {
-  apiKey?: () => MaybeAsync<string>;
-  accessToken?: () => MaybeAsync<string>;
-} {
-  return credentials;
-}
-
-/**
  * Picks the auth mode, once per transport.
  *
  * Both credentials used to mean `apiKey`, silently, and that is the wrong
@@ -160,16 +139,22 @@ function widenCredentials(credentials: BacklogCredentials): {
  * becomes right by retrying, and no resolver has run yet, so the message can
  * name the host with no secret in hand.
  *
- * The type says the same thing (§8.7), so these two branches answer only what
- * a type cannot: a value cast past the compiler. Deleting them as redundant
- * restores the silent preference, because the reader that follows them is a
- * header being set, not a type being checked.
+ * The type says the same thing (§8.7), and it says it about the only caller
+ * that can reach here — `toCredentials` in `src/adapter.ts`, since neither
+ * `createBacklogJsApi` nor `createBacklogJsTransport` is on the package's
+ * public surface (`src/index.test.ts` asserts both absences). So what these
+ * two branches answer is a value cast past the compiler, and nothing else.
+ * Deleting them as redundant restores the silent preference, because the
+ * reader that follows them is a header being set, not a type being checked.
  */
 function chooseCredential(
   host: string,
   credentials: BacklogCredentials
 ): ChosenCredential {
-  const { apiKey, accessToken } = widenCredentials(credentials);
+  // Both properties are readable off the bare union: `?: never` puts each of
+  // them in both members, which is what lets one destructuring see the shape
+  // the check needs.
+  const { apiKey, accessToken } = credentials;
   if (apiKey !== undefined && accessToken !== undefined) {
     throw new ValidationError(
       'backlog',

@@ -113,6 +113,7 @@ describe('package entry point', () => {
     // contract, so a consumer cannot come to depend on them.
     for (const name of [
       'createBacklogJsApi',
+      'createBacklogJsTransport',
       'FallbackFormatConverter',
       'converterFor',
       'userSchema',
