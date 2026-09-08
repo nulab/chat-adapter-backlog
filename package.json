@@ -1,12 +1,14 @@
 {
   "name": "@nulab/chat-adapter-backlog",
   "version": "0.0.0",
-  "description": "Backlog adapter for Chat SDK with support for issues, pull requests, comments, and project notifications.",
+  "description": "Backlog adapter for Chat SDK: issues and pull requests become threads, comments become messages, and an agent replies by commenting.",
   "keywords": [
     "nulab",
     "backlog",
     "chat-sdk",
-    "adapter"
+    "chat-adapter",
+    "adapter",
+    "webhook"
   ],
   "homepage": "https://github.com/nulab/chat-adapter-backlog#readme",
   "bugs": {
