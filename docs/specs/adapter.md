@@ -413,40 +413,51 @@ adapter never throws its own "not supported".
 
 ### 5.1 Response ladder
 
-Steps run in order; the first failure returns. Bodies are plain text. Every 401
-uses the identical body so an unauthenticated caller cannot distinguish "wrong
-secret" from "unknown host" (D2).
+The first failure returns. Bodies are plain text. Every 401 uses the identical
+body so an unauthenticated caller cannot distinguish "wrong secret" from
+"unknown host" (D2).
 
-| # | Check | Failure → status, body | Log |
-| --- | --- | --- | --- |
-| 1 | `request.method === "POST"` | 405 `Method not allowed` | debug |
-| 2 | Body readable as text and ≤ `maxWebhookBodyBytes` (also checked against `Content-Length` before reading) ⚑ — **runs after rows 4 and 5 when no `webhookVerifier` is configured**, see below | 400 `Unreadable body` / 413 `Payload too large` | warn `webhook rejected` `{reason}` |
-| 3 | If `webhookVerifier` is configured: `await verifier(request, rawBody)` is truthy and does not throw | 401 `Unauthorized` | warn `webhook rejected` `{reason: "verifier"}` (error message logged, never the body) |
-| 4 | Resolve installation: `?host=` (lowercased) is a configured host; when absent, exactly one installation is configured (D3) | 401 `Unauthorized` | warn `{reason: "unknown_host" \| "missing_host"}` |
-| 5 | If no verifier: `?token=` present and `timingSafeEqual` to the installation's `webhookSecret` after a byte-length check | 401 `Unauthorized` | warn `{reason: "missing_token" \| "token_mismatch"}` |
-| 6 | `JSON.parse(rawBody)` succeeds and yields an object | 400 `Invalid JSON` | warn |
-| 7 | Envelope `{ type: number }` | 400 `Invalid payload` | warn |
-| 8 | `type ∈ {1, 2, 3, 4, 14, 18, 19, 20}` — `DISPATCHED_ACTIVITY_TYPES` in `src/webhook/payload.ts`, with no switch: 4 is always dispatched when it arrives, 14 fans out to one message per issue (D22), and 21 never is (D-PR5) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
-| 9 | Type-specific schema (§5.2) | 400 `Invalid payload` | warn with zod issue paths (no values) |
-| 10 | `initialize()` has run | 503 `Adapter not initialized` ⚑ (a 5xx is the only answer that could make Backlog redeliver; whether it does is undocumented) | error |
-| 11 | `createdUser.id !== botUserId` | 200 `OK` (self message, nothing dispatched) | debug `self message skipped` |
-| 12 | Success | 200 `OK`, returned **before** processing completes | debug |
+**`#` names a row; it is not the order the rows run in.** Rows 1–5 run in one
+of two orders, decided by whether a `webhookVerifier` is configured, and the
+**Position** column gives both. Read the one your deployment has:
 
-The rows above are the order a **verifier-protected** deployment runs them in:
-body, verifier, host, because the verifier is handed the body. Step 3 before
-step 4 keeps a verifier-protected deployment from revealing whether a host is
-configured, and `connectWebhookContract` requires the verifier to receive
-`(Request, string)` and to win over a configured secret, which this order
-satisfies.
+- **`webhookVerifier` configured**: `1 → 2 → 3 → 4`, then rows 6–12 in order.
+  Row 5 never runs.
+- **no verifier** (the shared-secret deployment): `1 → 4 → 5 → 2`, then rows
+  6–12 in order. Row 3 never runs.
 
-With **no verifier** the order is host, token, body — rows 4 and 5 before row
-2. Nothing before row 5 reads the body then, so buffering it first would let
-anyone who has found the URL make the process hold `maxWebhookBodyBytes` per
-request, and would answer 413 to a caller that never proved it knows the
-secret. Authenticating first costs an unauthenticated request nothing but its
-headers, and the observable difference is which 4xx an oversized unauthorised
-body gets: 401, not 413. Either way step 4 precedes step 5, because the secret
-being compared is per installation.
+| # | Position (verifier / no verifier) | Check | Failure → status, body | Log |
+| --- | --- | --- | --- | --- |
+| 1 | 1 / 1 | `request.method === "POST"` | 405 `Method not allowed` | debug |
+| 2 | 2 / **4** | Body readable as text and ≤ `maxWebhookBodyBytes` (also checked against `Content-Length` before reading) ⚑ | 400 `Unreadable body` / 413 `Payload too large` | warn `webhook rejected` `{reason}` |
+| 3 | 3 / — | If `webhookVerifier` is configured: `await verifier(request, rawBody)` is truthy and does not throw | 401 `Unauthorized` | warn `webhook rejected` `{reason: "verifier"}` (error message logged, never the body) |
+| 4 | 4 / **2** | Resolve installation: `?host=` (lowercased) is a configured host; when absent, exactly one installation is configured (D3) | 401 `Unauthorized` | warn `{reason: "unknown_host" \| "missing_host"}` |
+| 5 | — / **3** | If no verifier: `?token=` present and `timingSafeEqual` to the installation's `webhookSecret` after a byte-length check | 401 `Unauthorized` | warn `{reason: "missing_token" \| "token_mismatch"}` |
+| 6 | 5 / 5 | `JSON.parse(rawBody)` succeeds and yields an object | 400 `Invalid JSON` | warn |
+| 7 | 6 / 6 | Envelope `{ type: number }` | 400 `Invalid payload` | warn |
+| 8 | 7 / 7 | `type ∈ {1, 2, 3, 4, 14, 18, 19, 20}` — `DISPATCHED_ACTIVITY_TYPES` in `src/webhook/payload.ts`, with no switch: 4 is always dispatched when it arrives, 14 fans out to one message per issue (D22), and 21 never is (D-PR5) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
+| 9 | 8 / 8 | Type-specific schema (§5.2) | 400 `Invalid payload` | warn with zod issue paths (no values) |
+| 10 | 9 / 9 | `initialize()` has run | 503 `Adapter not initialized` ⚑ (a 5xx is the only answer that could make Backlog redeliver; whether it does is undocumented) | error |
+| 11 | 10 / 10 | `createdUser.id !== botUserId` | 200 `OK` (self message, nothing dispatched) | debug `self message skipped` |
+| 12 | 11 / 11 | Success | 200 `OK`, returned **before** processing completes | debug |
+
+**Why the split.** The verifier is handed the body, so a verifier-protected
+deployment cannot authenticate before buffering it; row 3 before row 4 also
+keeps that deployment from revealing whether a host is configured.
+`connectWebhookContract` requires only that the verifier be called with
+`(Request, string)` — a buffered body, hence row 2 before row 3 — and that a
+verifier win over a configured secret; the position of row 4 is this
+adapter's choice, not the contract's.
+
+With no verifier, nothing before row 5 reads the body, so buffering it first
+would let anyone who has found the URL make the process hold
+`maxWebhookBodyBytes` per request, and would answer 413 to a caller that never
+proved it knows the secret. Authenticating first costs an unauthenticated
+request nothing but its headers. The observable difference is which 4xx an
+oversized unauthorised body gets — 401, not 413 — so the statuses such a
+caller can distinguish shrink from {405, 400, 413, 401} to {405, 401}. Either
+way row 4 precedes row 5, because the secret being compared is per
+installation.
 
 No timestamp-staleness window is applied ⚑, deliberately departing from
 CLAUDE.md's "Don't" list: Backlog's payload timestamp is unsigned and therefore
@@ -505,8 +516,20 @@ never sends it again:
   partly measured (a status as an id string, an assignee as a display name),
   so a custom attribute serialised some other way reads as "no value here"
   rather than costing the message. `raw.payload` still carries what was sent.
-- `attachments[].size` is optional. It reaches `Attachment.size` and nothing
-  else; only `attachments[].id` addresses the file.
+- `attachments[].size` is optional and falls back to absent: `null` and any
+  other shape read as "this delivery says no size". It reaches
+  `Attachment.size` and nothing else; only `attachments[].id` addresses the
+  file.
+
+`attachments[].name`, by contrast, stays required, and the asymmetry with the
+REST side — where `src/client/schemas.ts` makes `name` and `size` both
+optional — is deliberate. There, two Backlog doc pages disagree about which
+keys a `changeLog` attachment carries at all; here every measured payload
+names its files. And the fallbacks are not comparable: an absent `size` loses
+nothing a consumer can act on, while an absent `name` would leave the adapter
+either inventing a file name or dropping the file list. A measurement of an
+unnamed webhook attachment is what would change this, not the symmetry with
+the other schema.
 
 | Field | Type 1 | Type 2/3 | Type 4 | Type 18 | Type 19/20 |
 | --- | --- | --- | --- | --- | --- |
