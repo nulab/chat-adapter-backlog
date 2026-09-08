@@ -26,6 +26,7 @@ const {
   baseProject,
   baseIssue,
   baseIssueTypes,
+  basePriorities,
   baseComment,
   statusChangeLog,
   baseGitRepository,
@@ -59,6 +60,9 @@ function seed(): InMemoryBacklogSeed {
       baseComment({ id: 4, issueId: otherIssueId }),
     ],
     issueTypes: { [projectId]: baseIssueTypes() },
+    // Seeded rather than left to the factory's default, which happens to hold
+    // the same three: a `createIssue` conformance test names priority 2 by id.
+    priorities: basePriorities(),
     notifications: baseNotifications(),
     repositories: [
       baseGitRepository(),
