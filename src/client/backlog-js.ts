@@ -971,11 +971,31 @@ async function toDownloadedFile(
  * Extracts a filename from `Content-Disposition`. Backlog's download
  * endpoint (docs/specs/adapter.md §8.1) names the file this way; there is no
  * separate filename field in the JSON API.
+ *
+ * Only the extended form is percent-decoded. RFC 6266 percent-encodes
+ * `filename*` and leaves plain `filename` a quoted string, which is what
+ * Backlog itself sends (`filename*=UTF-8''…`, measured 2026-09-06) — so
+ * decoding both meant a plain `filename="100%.png"` threw a `URIError` out of
+ * a download that had already succeeded. A stray `%` in the extended form is
+ * still possible from something else in front of Backlog, and there the raw
+ * value is a better answer than an exception: the caller wanted the bytes,
+ * and the name is a label on them.
  */
 function parseFilename(disposition: string | null): string | undefined {
   if (disposition === null) {
     return undefined;
   }
-  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
-  return match?.[1] === undefined ? undefined : decodeURIComponent(match[1]);
+  const match = /filename(\*?)=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+  const value = match?.[2];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (match?.[1] !== '*') {
+    return value;
+  }
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }

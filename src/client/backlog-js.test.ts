@@ -57,6 +57,25 @@ function pullRequestWire(issue: unknown) {
   };
 }
 
+/** The filename one attachment download settles on, given that `Content-Disposition`. */
+async function downloadNamed(disposition: string): Promise<string> {
+  const api = createBacklogJsApi({
+    host,
+    credentials: { apiKey: () => 'test-api-key' },
+    fetch: async () =>
+      new Response('file bytes', {
+        status: 200,
+        headers: {
+          ...rateLimitHeaders,
+          'Content-Disposition': disposition,
+        },
+      }),
+  });
+
+  const downloaded = await api.downloadAttachment(issueId, 55);
+  return downloaded.filename;
+}
+
 describeBacklogApiConformance('createBacklogJsApi', () => {
   const server = createFakeBacklogServer();
   return createBacklogJsApi({
@@ -378,6 +397,34 @@ describe('createBacklogJsApi', () => {
     await expect(api.downloadAttachment(issueId, 55)).rejects.toBeInstanceOf(
       NetworkError
     );
+  });
+
+  it('percent-decodes the extended Content-Disposition form Backlog sends', async () => {
+    const filename = await downloadNamed(
+      "attachment; filename*=UTF-8''diagram%20final.png"
+    );
+
+    expect(filename).toBe('diagram final.png');
+  });
+
+  it('leaves a plain filename undecoded, so a bare % in one is not a URIError', async () => {
+    const filename = await downloadNamed('attachment; filename="100%.png"');
+
+    expect(filename).toBe('100%.png');
+  });
+
+  it('falls back to the raw value when the extended form will not decode', async () => {
+    const filename = await downloadNamed(
+      "attachment; filename*=UTF-8''100%.png"
+    );
+
+    expect(filename).toBe('100%.png');
+  });
+
+  it('names a download by its attachment id when the header names no file', async () => {
+    const filename = await downloadNamed('attachment');
+
+    expect(filename).toBe('55');
   });
 
   it('an error body without errors[] still maps by status and records its headers', async () => {
