@@ -2868,15 +2868,11 @@ describe('BacklogAdapter.postChannelMessage (§6.7)', () => {
   });
 
   it('explicit issue type and priority are never retried', async () => {
+    // No issue types are seeded, so the port refuses the explicit id itself
+    // — the refresh path is what is on trial here, and it must not run for
+    // ids the caller supplied rather than the cache.
     const { adapter, api } = egressAdapter();
     const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
-    let calls = 0;
-    api.createIssue = () => {
-      calls += 1;
-      return Promise.reject(
-        new ValidationError('backlog', 'summary already exists')
-      );
-    };
 
     await expect(
       adapter.postChannelMessage(channelId, {
@@ -2885,7 +2881,9 @@ describe('BacklogAdapter.postChannelMessage (§6.7)', () => {
         priorityId: 3,
       } as unknown as Parameters<BacklogAdapter['postChannelMessage']>[1])
     ).rejects.toThrow(ValidationError);
-    expect(calls).toBe(1);
+    expect(
+      api.state.recordedInputs.filter((input) => input.method === 'createIssue')
+    ).toHaveLength(1);
   });
 
   it('an empty summary is a validation error', async () => {
