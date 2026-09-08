@@ -33,13 +33,25 @@ The project is done when all of the following hold on `main`:
 6. `0.1.0` is published from `release.yml` and installs into a consumer that
    imports `createBacklogAdapter` under Node 20 (§7).
 
-**Status, 2026-09-08** (`main` at `72b0148`): 1, 2, 4 and 5 hold. 3 holds in
+**Status, 2026-09-09** (`main` at `9995525`): 1, 2, 4 and 5 hold. 3 holds in
 its first half only — `pnpm test` needs no network and the live suite skips
 itself, but it has never been run against a real space, which needs the
-credentials issue #52 is waiting on. 6 has not happened: the package is
-unreleased (#53), and the repository's visibility has to be settled before
-`release.yml` runs at all (spec §15.4). Those two are the whole distance
-between here and the first release.
+credentials issue #52 is waiting on. 6 holds in its second half: the
+`consumer` job in `ci.yml` packs the tarball, installs it with npm outside the
+repository and constructs the adapter from the environment alone on Node 20 on
+every push and pull request — including the run `release.yml` calls before it
+publishes — so the consumer side is a gate rather than a check somebody
+remembers to do once. Two things are still true of it. The release itself has
+not happened: the package is unreleased (#53), and the repository's visibility
+has to be settled before `release.yml` runs at all (spec §15.4). And the
+consumer that job builds installs with `--ignore-scripts`, because
+`preinstall: only-allow pnpm` in the published manifest fails an npm
+consumer's install with exit 127 (`only-allow` is a devDependency they never
+install; pnpm consumers escape it because pnpm ignores dependency lifecycle
+scripts, measured 2026-09-09) — so "installs into a consumer" holds for a pnpm
+consumer today and for an npm consumer once the release path stops publishing
+that script. The live run (#52), the release (#53) and that manifest are the
+whole distance between here and the first release.
 
 ## 2. Ground rules recap
 
@@ -417,8 +429,11 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
 - **Acceptance**: `npm pack --dry-run` contains only `dist/`, `package.json`,
   `README.md`, `LICENSE`; a scratch consumer on Node 20 imports the package
   and constructs the adapter from env; the GitHub release notes are correctly
-  categorised (every `feat` PR carried `enhancement`). None of the three has
-  been checked yet — they are P7d's own verification and belong in #53.
+  categorised (every `feat` PR carried `enhancement`). The first two are no
+  longer P7d's to check by hand: the `consumer` job in `ci.yml` asserts the
+  installed tree is exactly those four entries and constructs the adapter from
+  the environment on Node 20, so #53 is left with the release notes — and with
+  the manifest defect that job's `--ignore-scripts` documents (§1).
 - **Catalog decision**: community listing needs only a docs page and
   allowlist entries in `vercel/chat`; vendor-official additionally needs the
   catalog/scaffold entries, a changeset, product docs and an announcement.

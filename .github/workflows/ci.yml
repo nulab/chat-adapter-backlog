@@ -106,6 +106,97 @@ jobs:
           "
           test -f dist/index.d.ts
 
+  consumer:
+    runs-on: ubuntu-latest
+    name: Consumer (Node ${{ matrix.node }})
+
+    strategy:
+      matrix:
+        # A matrix of one, so the major is written once and the assertion
+        # inside smoke.mjs checks the version this job actually asked for.
+        # Node 20 rather than the range `test` covers: `exports` resolution
+        # and the packed manifest do not vary by major, and the floor of
+        # `engines.node` is where the package's promise is weakest — every
+        # other job here runs the Node `devEngines.runtime` pins.
+        node: [20]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The install half needs npm, and the Node `pnpm install` provisions
+      # ships without npm, npx or corepack — the same reason release.yml's
+      # publish job sets up a Node of its own. It is also the Node the
+      # consumer runs on, so both halves come from here.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          standalone: true
+
+      # With the runtime, unlike `test`: building and packing are development
+      # commands and belong on the pinned Node. Node 20 stays reachable
+      # because nothing below this line goes through pnpm, so a bare `node` or
+      # `npm` is the one actions/setup-node put on PATH.
+      - run: pnpm install --frozen-lockfile
+
+      # Its own build rather than `needs: [build]` and an artifact: the
+      # tarball has to be packed from a tree this job produced, and a job that
+      # waits on another reports that job's failure as its own skip.
+      - name: Build
+        run: pnpm run build
+
+      # `--out`, not the default filename: `pnpm pack` names the tarball after
+      # `version`, and `version` is `0.0.0` on `main` only because release.yml
+      # bumps the manifest inside its publish job and never commits it back.
+      # Naming the output keeps this job out of that arrangement.
+      - name: Pack the tarball a consumer would install
+        env:
+          TARBALL: ${{ runner.temp }}/chat-adapter-backlog.tgz
+        run: pnpm pack --out "$TARBALL"
+
+      # Installed outside the repository, because inside it Node's resolution
+      # walks up into the repo's own node_modules: an import the tarball does
+      # not ship would still be answered, and the job would pass for a reason
+      # a consumer does not have.
+      #
+      # `--ignore-scripts` covers for a defect, so the defect is written down
+      # here rather than hidden by it. The packed manifest carries
+      # `preinstall: only-allow pnpm`; npm runs a
+      # dependency's preinstall, and `only-allow` is a devDependency no
+      # consumer installs, so an npm install of the published tarball fails
+      # with exit 127 before any of this runs (measured 2026-09-09; pnpm
+      # consumers escape it because pnpm ignores dependency scripts, and
+      # `pnpm pack` strips `prepare` and `packageManager` but not
+      # `preinstall`). Nothing asserted below needs a lifecycle script, the
+      # manifest belongs to the release path, and this flag comes off with the
+      # fix.
+      - name: Install it into a consumer outside the repository
+        env:
+          TARBALL: ${{ runner.temp }}/chat-adapter-backlog.tgz
+          CONSUMER: ${{ runner.temp }}/consumer
+        run: |
+          cp -R scripts/consumer-smoke "$CONSUMER"
+          cd "$CONSUMER"
+          npm install --no-audit --no-fund --ignore-scripts "$TARBALL"
+
+      # The five variables src/adapter.ts reads, and no config object: that
+      # `createBacklogAdapter()` resolves all of them from the environment is
+      # the half of the claim the `build` job's explicit construction cannot
+      # reach. The values are the spec §13 vocabulary; the secret is dummy but
+      # not short, since under 16 bytes construction is a ValidationError.
+      - name: Construct the adapter from the environment alone
+        working-directory: ${{ runner.temp }}/consumer
+        env:
+          EXPECTED_NODE_MAJOR: ${{ matrix.node }}
+          BACKLOG_HOST: example.backlog.com
+          BACKLOG_API_KEY: consumer-smoke-api-key
+          BACKLOG_BOT_USER_ID: '999'
+          BACKLOG_BOT_USER_NAME: Chatbot
+          BACKLOG_WEBHOOK_SECRET: consumer-smoke-webhook-secret
+        run: node smoke.mjs
+
   test:
     runs-on: ubuntu-latest
     name: Test (Node ${{ matrix.node }})

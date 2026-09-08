@@ -1,0 +1,7 @@
+{
+  "name": "chat-adapter-backlog-consumer-smoke",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A consumer of the packed @nulab/chat-adapter-backlog tarball, run by the ci.yml consumer job outside this repository."
+}

@@ -60,6 +60,16 @@ process, constructs an adapter from it and asserts `adapter.name === 'backlog'`.
 Changing the public entry means changing that smoke test in the same commit, or
 the build job breaks.
 
+A second job, `consumer`, is the same claim about the **published** package
+rather than the bundle: it packs the tarball, installs it with npm outside the
+repository and runs `scripts/consumer-smoke/smoke.mjs` on Node 20, where the
+entry has to resolve through `exports` and `createBacklogAdapter()` gets no
+argument at all — the five `BACKLOG_*` variables are the whole configuration.
+So `exports`, `files`, the env fallbacks and the floor of `engines.node` fail
+here rather than at a consumer. Changing any of those four means changing that
+consumer in the same commit; its assertions are one file, in the order a
+consumer meets them.
+
 ## Design documents
 
 The goal state and the route to it are written down, not inferred from this

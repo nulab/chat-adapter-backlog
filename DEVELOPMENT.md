@@ -364,6 +364,7 @@ merges — and as a reusable workflow called by the release. Five jobs:
 | `lint`       | `pnpm lint` then `pnpm format:check`.                                              |
 | `typecheck`  | `pnpm typecheck`.                                                                  |
 | `build`      | `pnpm build`, then imports `dist/index.js` in a real Node process and asserts the entry loads and `dist/index.d.ts` exists. |
+| `consumer`   | `pnpm pack`, then installs the tarball with npm into a directory outside the repository and runs `scripts/consumer-smoke/smoke.mjs` on Node 20. |
 | `test`       | Matrix over Node 20, 22, 24 and 26. Asserts the running Node is the major the job asked for, then `pnpm test`. |
 
 Every job provisions pnpm with `pnpm/action-setup` and `standalone: true`,
@@ -376,7 +377,15 @@ before pnpm has run.
 `pnpm install --frozen-lockfile` and get the runtime the lockfile pins, exactly
 like a contributor — no job carries a Node version of its own.
 
-`test` is the exception, and the only job that names Node versions.
+`test` and `consumer` are the two that name a Node version, and they get it on
+PATH in opposite ways. `consumer` installs with the runtime, because building
+and packing are development commands and belong on the pinned Node; Node 20
+reaches the consumer half because nothing after that install goes through
+pnpm. `test` cannot do that — every step it has left is a pnpm command — so it
+installs with `--no-runtime` instead.
+
+`test` is the exception among the gates, and the only job that names several
+Node versions.
 `actions/setup-node` puts the major under test on PATH and the install adds
 `--no-runtime`, so no linked runtime shadows it. That flag is what makes a
 matrix possible at all: with the runtime linked, `node_modules/.bin/node` wins
@@ -396,9 +405,11 @@ earlier matrix went green while testing a single version, and this assertion is
 the only guard against that recurring — it is also what caught the
 re-materializing install rather than letting it pass as three green checks.
 
-Nothing in CI calls a bare `node`. The runner images ship their own, and it
-would quietly service any step that asked for it, so the build job's smoke test
-goes through `pnpm exec node`.
+A bare `node` appears only where a job has deliberately put one on PATH with
+`actions/setup-node`: the assertion and the suite in `test`, and the install
+and the consumer script in `consumer`. Everywhere else it goes through
+`pnpm exec node`, the build job's smoke test included — the runner images ship
+a Node of their own, and it would quietly service any step that asked for it.
 
 Installs use `pnpm install --frozen-lockfile`, so `pnpm-lock.yaml` must be
 committed alongside any `package.json` change.
@@ -406,6 +417,27 @@ committed alongside any `package.json` change.
 The build job's smoke test asserts on the value the entry point exports today.
 If you change the public entry, the smoke test in `ci.yml` has to change with
 it.
+
+`consumer` covers what a path import cannot. It packs the tarball with
+`pnpm pack --out` — a name of its own, because the default is derived from
+`version`, which stays `0.0.0` on `main` — installs it with npm under
+`$RUNNER_TEMP`, and runs `scripts/consumer-smoke/smoke.mjs` from there:
+outside the repository, so nothing can be answered by the repo's own
+`node_modules`. What it asserts is the published surface rather than the
+bundle — that the entry resolves through `exports`, that the installed tree is
+exactly `dist/`, `package.json`, `README.md` and `LICENSE`, that
+`exports["."].types` names a file that shipped, and that
+`createBacklogAdapter()` with no argument builds an adapter out of the five
+`BACKLOG_*` variables on Node 20, the floor of `engines.node`.
+
+The install passes `--ignore-scripts`, which covers for a defect rather than a
+preference: `package.json` carries `preinstall: only-allow pnpm`, npm runs a
+dependency's `preinstall`, and `only-allow` is a devDependency no consumer
+installs, so npm installing the published tarball fails with exit 127 before
+any of the package is loaded (measured 2026-09-09). pnpm consumers do not see
+it, because pnpm ignores dependency lifecycle scripts, and `pnpm pack` strips
+`prepare` and `packageManager` from the packed manifest but not `preinstall`.
+The fix belongs to the release path, and the flag comes off with it.
 
 `examples/` is not built, type checked or tested by CI, and that is a property
 of what an example is rather than an omission: each one is a standalone project
