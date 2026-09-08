@@ -661,6 +661,32 @@ export async function removeReaction(
   }
 }
 
+const STREAM_ABORTED = Symbol('stream aborted');
+
+interface AbortRace {
+  /** Settles with {@link STREAM_ABORTED} the moment the signal aborts. */
+  readonly aborted: Promise<typeof STREAM_ABORTED>;
+  dispose: () => void;
+}
+
+function raceAbort(signal: AbortSignal | undefined): AbortRace | undefined {
+  // No signal, no race: a stand-in promise that never settles would collect
+  // one `Promise.race` reaction per chunk for the whole stream, and the
+  // signal-less call is the ordinary one.
+  if (signal === undefined) {
+    return undefined;
+  }
+  let remove = (): void => undefined;
+  const aborted = new Promise<typeof STREAM_ABORTED>((resolve) => {
+    const onAbort = (): void => resolve(STREAM_ABORTED);
+    signal.addEventListener('abort', onAbort, { once: true });
+    remove = () => {
+      signal.removeEventListener('abort', onAbort);
+    };
+  });
+  return { aborted, dispose: () => remove() };
+}
+
 /**
  * Buffers a `stream()` textStream into one string (docs/specs/adapter.md
  * §6.4, D4, CLAUDE.md "`stream()` must be overridden"): concatenates `string`
@@ -675,17 +701,49 @@ export async function bufferStream(
   signal: AbortSignal | undefined
 ): Promise<string> {
   let buffered = '';
-  for await (const chunk of textStream) {
-    if (signal?.aborted === true) {
-      break;
+  // Driven by hand rather than with `for await`, whose `break` can only run
+  // between iterations: a source that stalls — a model that stopped
+  // generating, a socket that hung — never delivers the chunk that would let
+  // the loop look at `signal` again, so an abort would never be observed and
+  // `stream()` would never resolve.
+  const iterator = textStream[Symbol.asyncIterator]();
+  const abort = raceAbort(signal);
+  let exhausted = false;
+  try {
+    while (signal?.aborted !== true) {
+      const pending = iterator.next();
+      const step =
+        abort === undefined
+          ? await pending
+          : await Promise.race([pending, abort.aborted]);
+      if (step === STREAM_ABORTED) {
+        // The abandoned `next()` can still reject once nobody is reading it,
+        // and an unobserved rejection takes the host process down under
+        // Node's default `--unhandled-rejections=throw`.
+        void pending.catch(() => undefined);
+        break;
+      }
+      if (step.done === true) {
+        exhausted = true;
+        break;
+      }
+      const chunk = step.value;
+      if (typeof chunk === 'string') {
+        buffered += chunk;
+      } else if (chunk.type === 'markdown_text') {
+        buffered += chunk.text;
+      }
+      // `task_update` and `plan_update` chunks carry no text (§6.4) and are
+      // ignored.
     }
-    if (typeof chunk === 'string') {
-      buffered += chunk;
-    } else if (chunk.type === 'markdown_text') {
-      buffered += chunk.text;
+  } finally {
+    abort?.dispose();
+    if (!exhausted) {
+      // Told to clean up, but not waited for: a generator suspended inside an
+      // await that never settles returns a `return()` promise that never
+      // settles either, which is the stall this function exists to escape.
+      void Promise.resolve(iterator.return?.()).catch(() => undefined);
     }
-    // `task_update` and `plan_update` chunks carry no text (§6.4) and are
-    // ignored.
   }
   return buffered;
 }

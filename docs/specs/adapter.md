@@ -386,7 +386,7 @@ channel ids (D-PR7, §6.7); each is stated where it differs.
 
 | Member | Status | Behaviour / core degradation when absent |
 | --- | --- | --- |
-| `stream(threadId, textStream, options?)` | **implemented, buffered** (D4) | Consumes the whole stream, joins `markdown_text` chunks, then one `postMessage`; returns its `RawMessage`. Never returns `null` before the stream is consumed (that re-enables the core's 500 ms edit loop). Empty stream → posts `" "`, matching the core's own fallback, so a `SentMessage` always exists (§15 question 7, settled). |
+| `stream(threadId, textStream, options?)` | **implemented, buffered** (D4) | Consumes the whole stream, joins `markdown_text` chunks, then one `postMessage`; returns its `RawMessage`. Never returns `null` before the stream is consumed (that re-enables the core's 500 ms edit loop). Empty stream — an abort that buffered nothing included — → posts `" "`, matching the core's own fallback, so a `SentMessage` always exists (§15 question 7, settled). |
 | `isDM(threadId)` | implemented | Always `false`. |
 | `fetchMessage(threadId, messageId)` | implemented | §7.2. |
 | `fetchSubject(raw)` | implemented | §7.4; the parent issue (`type: "issue"`) or pull request (`type: "pull_request"`) as `MessageSubject`. |
@@ -861,7 +861,16 @@ Consume the iterable to completion, concatenating `string` chunks and
 Then exactly one `postMessage(threadId, { markdown: buffered })` and return its
 result. Rationale is rate-limit protection (CLAUDE.md "`stream()` must be
 overridden"). `options.signal` aborting ends consumption and posts what was
-buffered so far if non-empty.
+buffered so far — `" "` when that is nothing, the same as an empty stream
+(§4.2, §15 question 7): the contract `stream()` keeps whatever ends it is a
+`SentMessage` the caller can edit or delete, and posting nothing would mean
+resolving to `null` after consumption, which question 7 rejected.
+
+Consumption is raced against the signal rather than read with `for await`,
+which can only re-check the signal once the next chunk arrives. A source that
+has stopped producing — a model that stopped generating, a socket that hung —
+would otherwise leave an aborted `stream()` waiting forever and post nothing at
+all.
 
 ### 6.5 Reactions
 
@@ -1559,7 +1568,9 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
 - **egress**: `postMessage` markdown/raw/card/files/`notifiedUserId`;
   mistyped extra → `ValidationError`; `editMessage` with files → error;
   `:r`/`:u:` rejected for edit/delete/star; `stream` buffers into one comment
-  and never calls `editMessage`; reactions add (idempotent), remove own only,
+  and never calls `editMessage`, returns on abort even from a source that has
+  stopped producing (driven by a controllable iterator, not a timeout) and
+  leaves no listener on the signal; reactions add (idempotent), remove own only,
   no-op without a star; `postChannelMessage` summary/description split,
   plain-text summary, defaults, explicit ids, single retry on code 7 with
   refreshed defaults, no retry otherwise, empty summary error.
@@ -1795,7 +1806,10 @@ for one scratch space is worse than requiring the two to share it.
    it would hand `thread.post(stream)` a null the caller has to branch on for
    a case they cannot distinguish from success. The cost is a comment holding
    one space, which is visible in Backlog and therefore documented in README's
-   Streaming limitation rather than hidden.
+   Streaming limitation rather than hidden. The same answer covers an
+   `options.signal` abort that buffered nothing: the caller cannot tell the two
+   apart, and §6.4 said "if non-empty" only because it was written before this
+   question was settled.
 8. **Empty summary** in `postChannelMessage`: `ValidationError` (assumed) or a
    placeholder summary.
 9. ~~**Type 4 deletion**: ship in the first release or defer.~~ **Settled**:

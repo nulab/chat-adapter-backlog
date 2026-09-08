@@ -1,3 +1,5 @@
+import { getEventListeners } from 'node:events';
+
 import { ValidationError } from '@chat-adapter/shared';
 import { createMockLogger } from '@chat-adapter/tests';
 import { describe, expect, it } from 'vitest';
@@ -727,7 +729,124 @@ describe('bufferStream', () => {
     const buffered = await bufferStream(chunks(), controller.signal);
     expect(buffered).toBe('first');
   });
+
+  it('a signal aborted before the call reads no chunk at all', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const source = stallingStream();
+
+    expect(await bufferStream(source.stream, controller.signal)).toBe('');
+    expect(source.pulls).toBe(0);
+  });
+
+  it('a source that stops producing still returns when the caller aborts', async () => {
+    const controller = new AbortController();
+    const source = stallingStream();
+
+    const buffered = bufferStream(source.stream, controller.signal);
+    await source.stalled;
+    controller.abort();
+
+    expect(await buffered).toBe('');
+  });
+
+  it('a source that stalls mid-stream keeps the text that arrived first', async () => {
+    const controller = new AbortController();
+    const source = stallingStream(['half a ', 'sentence']);
+
+    const buffered = bufferStream(source.stream, controller.signal);
+    await source.stalled;
+    controller.abort();
+
+    expect(await buffered).toBe('half a sentence');
+  });
+
+  it('a stalled source is told to clean up when the caller aborts', async () => {
+    const controller = new AbortController();
+    const source = stallingStream();
+
+    const buffered = bufferStream(source.stream, controller.signal);
+    await source.stalled;
+    controller.abort();
+    await buffered;
+
+    expect(source.returned).toBe(true);
+  });
+
+  it('no abort listener outlives the call', async () => {
+    const controller = new AbortController();
+    async function* chunks() {
+      yield 'done';
+    }
+    await bufferStream(chunks(), controller.signal);
+
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+  });
+
+  it('no abort listener outlives a call that was aborted', async () => {
+    const controller = new AbortController();
+    const source = stallingStream();
+
+    const buffered = bufferStream(source.stream, controller.signal);
+    await source.stalled;
+    controller.abort();
+    await buffered;
+
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+  });
 });
+
+/**
+ * A stream that yields `chunks` and then stalls forever. `stalled` settles
+ * once the stall has been reached, so a test aborts at a point ordered by the
+ * stream itself rather than by a timer — a timer would let the pre-fix
+ * `for await` pass too, just later.
+ */
+function stallingStream(chunks: string[] = []): {
+  stream: AsyncIterable<string>;
+  stalled: Promise<void>;
+  readonly pulls: number;
+  readonly returned: boolean;
+} {
+  let reachedStall!: () => void;
+  const stalled = new Promise<void>((resolve) => {
+    reachedStall = resolve;
+  });
+  const state = { pulls: 0, returned: false };
+  const stream: AsyncIterable<string> = {
+    [Symbol.asyncIterator]: () => ({
+      next: () => {
+        const chunk = chunks[state.pulls];
+        state.pulls += 1;
+        if (chunk === undefined) {
+          reachedStall();
+          return new Promise<IteratorResult<string>>(() => undefined);
+        }
+        return Promise.resolve<IteratorResult<string>>({
+          done: false,
+          value: chunk,
+        });
+      },
+      return: () => {
+        state.returned = true;
+        return Promise.resolve<IteratorResult<string>>({
+          done: true,
+          value: undefined,
+        });
+      },
+    }),
+  };
+  return {
+    stream,
+    stalled,
+    get pulls() {
+      return state.pulls;
+    },
+    get returned() {
+      return state.returned;
+    },
+  };
+}
 
 describe('uploadFiles', () => {
   it('abandons no upload but stops issuing new ones after a failure', async () => {
