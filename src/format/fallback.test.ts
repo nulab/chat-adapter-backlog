@@ -1,6 +1,6 @@
 import { createMockLogger } from '@chat-adapter/tests';
 import { paragraph, root, text } from 'chat';
-import type { BaseFormatConverter, Root as RootNode } from 'chat';
+import type { BaseFormatConverter, CardElement, Root as RootNode } from 'chat';
 import { describe, expect, it, vi } from 'vitest';
 
 import { converterFor, FallbackFormatConverter } from './fallback';
@@ -80,5 +80,106 @@ describe('converterFor', () => {
     expect(fallback.toAst("''bold''").children).toEqual(
       new BacklogNotationConverter().toAst("''bold''").children
     );
+  });
+});
+
+describe('a card fallback under each formatting rule', () => {
+  const IMAGE_URL = 'https://example.test/cover.png';
+
+  /**
+   * Every member of `CardChild` — `text | image | divider | actions |
+   * section | fields | link | table | chart`. A fixture short of one cannot
+   * catch that child being dropped, which is how `link` and `divider` went
+   * missing once already.
+   */
+  const card: CardElement = {
+    type: 'card',
+    title: 'Release 1.4',
+    subtitle: 'ready to ship',
+    children: [
+      { type: 'text', content: 'Two blockers left.' },
+      { type: 'link', label: 'Open build', url: 'https://example.test/b/1' },
+      { type: 'divider' },
+      {
+        type: 'section',
+        children: [
+          {
+            type: 'fields',
+            children: [
+              { type: 'field', label: 'Owner', value: 'the release team' },
+            ],
+          },
+        ],
+      },
+      { type: 'table', headers: ['Blocker'], rows: [['#12']] },
+      {
+        type: 'chart',
+        title: 'Failures',
+        chart: {
+          type: 'bar',
+          categories: ['w1'],
+          series: [{ name: 'week', data: [{ label: 'w1', value: 3 }] }],
+        },
+      },
+      { type: 'image', url: IMAGE_URL, alt: 'the release cover' },
+      { type: 'actions', children: [] },
+    ],
+  };
+
+  it('renders each child in GFM, bolding with asterisks', () => {
+    const fallback = converterFor('markdown', createMockLogger(), context);
+
+    expect(fallback.renderPostable(card)).toBe(
+      [
+        '**Release 1.4**',
+        'ready to ship',
+        'Two blockers left.',
+        '[Open build](https://example.test/b/1)',
+        '---',
+        '**Owner**: the release team',
+        'Blocker',
+        '-------',
+        '#12',
+        'Failures',
+        '   | week',
+        '---|-----',
+        'w1 | 3',
+      ].join('\n')
+    );
+  });
+
+  it("renders each child in notation, with '' and never an asterisk", () => {
+    const fallback = converterFor('backlog', createMockLogger(), context);
+
+    expect(fallback.renderPostable(card)).toBe(
+      [
+        "''Release 1.4''",
+        'ready to ship',
+        'Two blockers left.',
+        '[[Open build>https://example.test/b/1]]',
+        '----',
+        "''Owner'': the release team",
+        'Blocker',
+        '-------',
+        '#12',
+        'Failures',
+        '   | week',
+        '---|-----',
+        'w1 | 3',
+      ].join('\n')
+    );
+  });
+
+  it('drops an image under either rule, and that is not an oversight', () => {
+    // `chat@4.39.0` has no `image` case in any of its three card walks — the
+    // `BaseFormatConverter` method, the standalone `cardChildToFallbackText`
+    // and `@chat-adapter/shared`'s, which delegates to the standalone one —
+    // so nothing was lost by routing cards through the converter, and there
+    // is no Backlog syntax this adapter is declining to emit.
+    for (const rule of ['markdown', 'backlog'] as const) {
+      const fallback = converterFor(rule, createMockLogger(), context);
+
+      expect(fallback.renderPostable(card)).not.toContain(IMAGE_URL);
+    }
   });
 });

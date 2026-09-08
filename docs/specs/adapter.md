@@ -883,7 +883,37 @@ both kinds unless a subsection says otherwise. Non-comment message ids (`:r`,
    ([Post Attachment File](https://developer.nulab.com/docs/backlog/api/2/post-attachment-file/));
    the returned ids are single-use handles valid for one hour.
 2. Render: `converter.renderPostable(message)` with the project's converter
-   (§9). Cards render through `cardToFallbackText`.
+   (§9). A card renders through `cardToFallbackText`, so its fallback text is
+   **the project's own markup, not Markdown**: the card's title and each field
+   label are bold, written `**…**` on a Markdown project and `''…''` on a
+   Backlog-notation one (§9.4). A caller-supplied `fallbackText` wins over the
+   generated one and is posted verbatim. A `link` and a `divider` carry markup
+   too and take the project's own form — `[label](url)` / `---` on Markdown
+   (§9.3), `[[label>url]]` / `----` on notation (§9.4) — because the card walk
+   `renderPostable` reaches, `BaseFormatConverter.cardChildToFallbackText`,
+   has no case for either and would drop a `CardLink`'s URL outright. `chat`
+   ships three card walks and they disagree: only that method is missing both
+   (the standalone `cardChildToFallbackText` export renders a `link` as
+   `label (url)`, and `@chat-adapter/shared`'s renders a `divider` too), so
+   the claim is about the one the code reaches, not about the package.
+   Three things are emitted as written under either rule, and none of them is
+   markup-free by accident: a `text`'s content and a card's subtitle
+   (unconverted, so an author's Markdown inside one reaches a notation project
+   verbatim); an emoji placeholder such as `{{emoji:tada}}`, which is left as
+   the caller wrote it because Backlog renders neither form; and a `table` or
+   `chart`, which `chat` renders as space-aligned plain text. Plain text is
+   not the same as "renders as typed", and on a Markdown project the mechanism
+   is setext: a run of `-` under a line of text is an `h2`. So a
+   **single-column** table's `-------` row turns its own header into a
+   heading, while a two-column table's `--------|----` re-parses as a GFM
+   table instead — the outcome depends on the column count, not on tables as
+   such. A `divider` is the worse case of the same mechanism, because its
+   `---` sits under prose rather than under a header row: everything above it
+   collapses into one `h2` (a card of title, subtitle, text and link parses as
+   `[heading depth 2, paragraph]`). §9.3 records why that byte is kept anyway.
+   `image` and `actions` render as nothing under both rules — `actions` by an
+   explicit case in `chat`'s walk, `image` by the absence of one in every
+   walk `chat` ships.
 3. `POST /issues/:issueId/comments` with `content`, `notifiedUserId[]`,
    `attachmentId[]`
    ([Add Comment](https://developer.nulab.com/docs/backlog/api/2/add-comment/)),
@@ -1014,6 +1044,19 @@ Backlog requires `projectId`, `summary`, `issueTypeId`, `priorityId`
   line. Summary is plain text regardless of project rule (Backlog does not
   render markup in summaries). Empty summary → `ValidationError` ⚑.
 - **Description** = remaining blocks rendered with the project converter.
+- **A card** is rendered once by `converter.renderPostable` (§6.1 step 2), and
+  the rendered text is split on its first newline: first line → summary, the
+  rest → description. The first line carries the title's bold markup, so it is
+  put back through `extractPlainText` to satisfy the plain-text rule above —
+  `**Deploy failed**` and `''Deploy failed''` both become `Deploy failed`. The
+  description keeps the project's markup like any other description, field
+  labels included, so a card's fields read `**Env**: prod` / `''Env'': prod`
+  there. A **caller-supplied** `fallbackText` is parsed the same way, which is
+  the cost of one rule for both: its first line is plain text to the caller but
+  markup to the parser, so a leading list or heading marker is consumed —
+  `- bullet summary`, `1. First step` and (on Markdown) `# Heading summary` all
+  become the text after the marker. Backlog would not have rendered the marker
+  in a summary field either way.
 - **Defaults**: `issueTypeId` = first of
   [Get Issue Type List](https://developer.nulab.com/docs/backlog/api/2/get-issue-type-list/);
   `priorityId` = the middle element of
@@ -1565,6 +1608,21 @@ must fail, not silently post garbage).
 `renderPostable` passes `string` and `{ raw }` through untouched and renders
 `{ markdown }` verbatim (no round trip, so no escaping churn).
 
+It overrides `cardChildToFallbackText` for the two children the card walk this
+code reaches answers with nothing — a `link` becomes `[label](url)`, or the
+bare URL when the label is empty or equal to it, and a `divider` becomes
+`---`. Both are written directly rather than through `stringifyMarkdown`,
+which emits a thematic break as `***`.
+
+`---` is chosen over the safer `***` on purpose, and it is the one place in
+this spec where a worse rendering is preferred: `---` is byte-for-byte what
+`@chat-adapter/shared`'s card walk produced before cards were routed through
+the project's converter, so keeping it means the Markdown rule's card output
+does not change at all. `***` would be a second, unrequested behaviour change
+riding along with a bug fix. The cost is the setext collapse described in
+§6.1 step 2, which `---` in that position already caused before this change.
+Everything else about a card is already GFM, so it stays with the base walk.
+
 ### 9.4 Backlog-notation projects, outbound (`fromAst`)
 
 | mdast node | Backlog notation |
@@ -1585,6 +1643,20 @@ must fail, not silently post garbage).
 | `list` | `-` × depth (unordered) or `+` × depth (ordered), nested lists recurse |
 | `table` | `\|cell\|cell\|` per row, header row suffixed `h`; alignment dropped (lossy) |
 | `html`, `footnote*`, others | `defaultNodeToText` |
+
+A card's fallback text is not built from mdast, but the markup in it follows
+the rows above: `BacklogNotationConverter` overrides
+`cardToFallbackText`/`cardChildToFallbackText` so a card's title and field
+labels come out `''…''`, its `link` children `[[label>url]]` and its `divider`
+children `----` (§6.1 step 2). Two different reasons sit behind that one
+override. Bold, because the base converter's `**` is Markdown and would reach
+a `backlog` project as literal asterisks, and the marker cannot be passed in as
+an argument — `@chat-adapter/shared`'s `cardToFallbackText` types `boldFormat`
+as `"*" | "**"`. Link and divider, because the walk `renderPostable`
+reaches has no case for either and returns nothing, which loses a URL rather
+than mis-rendering it; that half is not notation-specific, so the Markdown
+converter overrides the same member. Neither escapes what it wraps: a title holding `''` or a trailing
+`'` is emitted as written, which is the class of limit §9.7 covers.
 
 ### 9.5 Backlog-notation projects, inbound (`toAst`)
 
@@ -1852,10 +1924,18 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   throwing →
   plain paragraph + warn; rule cache primed by webhook path, replaced by
   `fetchChannelInfo`, lookup failure not cached; `renderFormatted`/
-  `parseMessage` honour a cached `backlog` rule and warn when uncached.
-- **egress**: `postMessage` markdown/raw/card/files/`notifiedUserId`;
-  mistyped extra → `ValidationError`; an `ArrayBuffer` and a `Blob` upload
-  like a `Buffer`; unsupported `file.data` → `ValidationError` named
+  `parseMessage` honour a cached `backlog` rule and warn when uncached; a card
+  fallback under **both** rules over a card carrying **every** member of
+  `CardChild` (`text`, `image`, `divider`, `actions`, `section`, `fields`,
+  `link`, `table`, `chart`), with `image` asserted to render as nothing on
+  purpose — a fixture short of one member cannot catch that child being
+  dropped, which is how `link` and `divider` went missing once already.
+- **egress**: `postMessage` markdown/raw/card/files/`notifiedUserId`; a card
+  posted under **both** formatting rules (asterisks on `markdown`, `''` and no
+  asterisk on `backlog`), a caller's `fallbackText` posted verbatim, and its
+  first line stripped of a leading list or heading marker when it becomes a
+  summary; mistyped extra → `ValidationError`; an `ArrayBuffer` and a `Blob`
+  upload like a `Buffer`; unsupported `file.data` → `ValidationError` named
   `backlog` with that file not uploaded; `editMessage` with files → error;
   `:r`/`:u:` rejected for edit/delete/star; `stream` buffers into one comment
   and never calls `editMessage`; reactions add (idempotent), remove own only,

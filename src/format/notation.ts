@@ -12,7 +12,15 @@ import {
   strong,
   text,
 } from 'chat';
-import type { Content, List, ListItem, MdastTable, Root } from 'chat';
+import type {
+  CardChild,
+  CardElement,
+  Content,
+  List,
+  ListItem,
+  MdastTable,
+  Root,
+} from 'chat';
 
 /**
  * The subset of `Content` that inline notation parsing can ever produce.
@@ -61,7 +69,7 @@ export class BacklogNotationConverter extends BaseFormatConverter {
         // (docs/specs/adapter.md §9.7). Measure against a real space first.
         return getNodeValue(node);
       case 'strong':
-        return `''${this.inlineChildren(node)}''`;
+        return this.bold(this.inlineChildren(node));
       case 'emphasis':
         return `'''${this.inlineChildren(node)}'''`;
       case 'delete':
@@ -161,6 +169,64 @@ export class BacklogNotationConverter extends BaseFormatConverter {
     return rows
       .map((row, index) => (index === 0 ? `|${row}|h` : `|${row}|`))
       .join('\n');
+  }
+
+  private bold(value: string): string {
+    return `''${value}''`;
+  }
+
+  /**
+   * `BaseFormatConverter.cardToFallbackText` hard-codes Markdown's `**`
+   * around the title, so a `backlog` project posted the asterisks literally
+   * (docs/specs/adapter.md §6.1, §9.4). The bold marker cannot be passed in:
+   * the base method takes no options, and `@chat-adapter/shared`'s
+   * `cardToFallbackText` types `boldFormat` as `"*" | "**"` — neither can
+   * express `''`. So the places a card carries markup are re-rendered here
+   * and every other child (subtitle, text, tables, charts, sections) still
+   * comes from `super`, which is why this override repeats the base method's
+   * three-part assembly rather than replacing the walk. A title or label is
+   * emitted as written; §9.7 covers what notation cannot escape.
+   */
+  protected override cardToFallbackText(card: CardElement): string {
+    const parts: string[] = [];
+    if (card.title) {
+      parts.push(this.bold(card.title));
+    }
+    if (card.subtitle) {
+      parts.push(card.subtitle);
+    }
+    for (const child of card.children) {
+      const rendered = this.cardChildToFallbackText(child);
+      if (rendered) {
+        parts.push(rendered);
+      }
+    }
+    return parts.join('\n');
+  }
+
+  /**
+   * `link` and `divider` are here for a different reason than `fields`:
+   * `BaseFormatConverter.cardChildToFallbackText` — the walk `renderPostable`
+   * reaches — has a case for neither and returns `null`, which drops a
+   * `CardLink`'s URL out of the message entirely. That is a loss of content,
+   * not of markup, so each routes through the §9.4 row it already has rather
+   * than through `super`. `chat@4.39.0`'s other two card walks are not
+   * missing the same cases, so the gap belongs to that method, not to the
+   * package.
+   */
+  protected override cardChildToFallbackText(child: CardChild): string | null {
+    switch (child.type) {
+      case 'fields':
+        return child.children
+          .map((field) => `${this.bold(field.label)}: ${field.value}`)
+          .join('\n');
+      case 'link':
+        return this.nodeToNotation(link(child.url, [text(child.label)]));
+      case 'divider':
+        return this.nodeToNotation({ type: 'thematicBreak' });
+      default:
+        return super.cardChildToFallbackText(child);
+    }
   }
 }
 
