@@ -256,8 +256,8 @@ function fallbackTextToSummaryAndDescription(fallbackText: string): {
  * (`@chat-adapter/shared@4.39.0`); `"slack"` only selects error wording, not
  * an actual Slack-shaped output, so it is passed with `boldFormat: '**'` set
  * explicitly rather than relying on a platform default that has no Backlog
- * entry (see `egress.ts`'s `toFileBuffer`/`toBuffer` comment in
- * `adapter.ts` for the same trade-off on `toBuffer`).
+ * entry (see `toFileBuffer` in `adapter.ts` for the same trade-off on
+ * `toBuffer`).
  */
 export function resolveSummaryAndDescription(
   message: AdapterPostableMessage,

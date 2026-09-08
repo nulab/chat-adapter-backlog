@@ -1047,12 +1047,26 @@ export class BacklogAdapter implements Adapter<
     }
   }
 
+  /**
+   * `toBuffer`'s `platform: PlatformName` has no `"backlog"` member
+   * (`@chat-adapter/shared@4.39.0`) and its default `throwOnUnsupported: true`
+   * throws a `ValidationError` named after whichever platform was passed, so
+   * the default would blame `"slack"` for a caller's unsupported `file.data`
+   * and never reach the error below. `throwOnUnsupported: false` turns the
+   * unsupported case into `null`, which leaves `platform` selecting wording
+   * that is never rendered and keeps every error this adapter throws named
+   * `"backlog"` (#48; the same trade-off on `cardToFallbackText` is in
+   * `resolveSummaryAndDescription`, `egress.ts`).
+   */
   private toFileBuffer = async (file: FileUpload): Promise<Buffer> => {
-    const buffer = await toBuffer(file.data, { platform: 'slack' });
+    const buffer = await toBuffer(file.data, {
+      platform: 'slack',
+      throwOnUnsupported: false,
+    });
     if (buffer === null) {
       throw new ValidationError(
         'backlog',
-        `file "${file.filename}" has no readable data`
+        `file "${file.filename}" has unsupported data; expected a Buffer, an ArrayBuffer or a Blob`
       );
     }
     return buffer;

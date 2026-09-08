@@ -831,6 +831,13 @@ A failed step rejects; no synthetic message is ever returned. Uploads that
 succeeded before a failed comment are abandoned (Backlog deletes them after an
 hour). The caller's message object is never mutated.
 
+Unsupported `file.data` — anything but a `Buffer`, an `ArrayBuffer` or a
+`Blob` — is a `ValidationError("backlog", …)` naming the file, raised before
+the first upload. `@chat-adapter/shared`'s `toBuffer` is therefore called with
+`throwOnUnsupported: false`: its own error is named after a `PlatformName`, a
+union with no `"backlog"` member, so letting it throw would attribute the
+caller's mistake to another vendor's adapter.
+
 ### 6.2 `editMessage(threadId, messageId, message)`
 
 `PATCH /issues/:issueId/comments/:commentId`, or
@@ -1557,7 +1564,9 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   `fetchChannelInfo`, lookup failure not cached; `renderFormatted`/
   `parseMessage` honour a cached `backlog` rule and warn when uncached.
 - **egress**: `postMessage` markdown/raw/card/files/`notifiedUserId`;
-  mistyped extra → `ValidationError`; `editMessage` with files → error;
+  mistyped extra → `ValidationError`; unsupported `file.data` →
+  `ValidationError` named `backlog` with nothing uploaded;
+  `editMessage` with files → error;
   `:r`/`:u:` rejected for edit/delete/star; `stream` buffers into one comment
   and never calls `editMessage`; reactions add (idempotent), remove own only,
   no-op without a star; `postChannelMessage` summary/description split,

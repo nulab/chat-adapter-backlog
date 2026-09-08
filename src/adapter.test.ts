@@ -2242,6 +2242,19 @@ describe('BacklogAdapter.postMessage (§6.1)', () => {
     expect(api.state.uploads).toHaveLength(1);
   });
 
+  it('a file whose data is neither a Buffer, an ArrayBuffer nor a Blob is rejected as a backlog error, before anything is uploaded', async () => {
+    const { adapter, api } = egressAdapter();
+    const rejection = adapter.postMessage(EGRESS_THREAD_ID, {
+      markdown: 'See attached',
+      files: [{ filename: 'notes.txt', data: new ReadableStream() }],
+    } as unknown as Parameters<BacklogAdapter['postMessage']>[1]);
+
+    await expect(rejection).rejects.toThrow(ValidationError);
+    await expect(rejection).rejects.toThrow(/notes\.txt/);
+    await expect(rejection).rejects.toMatchObject({ adapter: 'backlog' });
+    expect(api.state.uploads).toEqual([]);
+  });
+
   it('a mistyped notifiedUserId is a validation error', async () => {
     const { adapter } = egressAdapter();
     const message = {
@@ -2897,6 +2910,24 @@ describe('BacklogAdapter.postChannelMessage (§6.7)', () => {
       } as unknown as Parameters<BacklogAdapter['postChannelMessage']>[1])
     ).rejects.toThrow(ValidationError);
     expect(calls).toBe(1);
+  });
+
+  it('a channel post carrying a file with unsupported data is rejected as a backlog error, and creates no issue', async () => {
+    const { adapter, api } = egressAdapter({
+      seed: { issueTypes: { [FIXTURE.projectId]: [{ id: 1, name: 'Task' }] } },
+    });
+    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
+    const rejection = adapter.postChannelMessage(channelId, {
+      markdown: 'Deploy is broken',
+      files: [{ filename: 'trace.log', data: new ReadableStream() }],
+    } as unknown as Parameters<BacklogAdapter['postChannelMessage']>[1]);
+
+    await expect(rejection).rejects.toThrow(ValidationError);
+    await expect(rejection).rejects.toMatchObject({ adapter: 'backlog' });
+    expect(api.state.uploads).toEqual([]);
+    expect(
+      api.state.recordedInputs.filter((input) => input.method === 'createIssue')
+    ).toEqual([]);
   });
 
   it('an empty summary is a validation error', async () => {
