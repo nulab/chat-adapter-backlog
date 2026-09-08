@@ -1680,13 +1680,15 @@ for one scratch space is worse than requiring the two to share it.
   or `pullRequestCommentId`); read receipts; history paging (§7.1);
   `message.subject.type` being `"issue"` or `"pull_request"` (D-PR8); raw API
   and errors (§3.6, §8.5), with `api(host).listPullRequests` named as the route
-  to a repository's pull requests, and the 429 retry stated as a wait of up to
-  `rateLimit.maxWaitMs` that blocks the call — so a serverless deployment must
-  allow more execution time than `maxWaitMs` or lower it and handle
-  `AdapterRateLimitError` itself, with the two `warn` lines named as how the
-  wait becomes visible; testing with `createInMemoryBacklogApi`, with
-  `createApi` in the configuration table because that section passes it;
-  license.
+  to a repository's pull requests, `client(host)` named as the `backlog-js`
+  client for the endpoints the port does not — carrying the same buckets, retry
+  and errors, and throwing `NO_CLIENT` under a custom `createApi` — and the 429
+  retry stated as a wait of up to `rateLimit.maxWaitMs` that blocks the call —
+  so a serverless deployment must allow more execution time than `maxWaitMs` or
+  lower it and handle `AdapterRateLimitError` itself, with the two `warn` lines
+  named as how the wait becomes visible; testing with
+  `createInMemoryBacklogApi`, with `createApi` in the configuration table
+  because that section passes it; license.
   Every link into this repository is absolute
   (`https://github.com/nulab/chat-adapter-backlog/blob/main/…` for a file,
   `/tree/main/…` for a directory), never `./file`: README.md ships in the

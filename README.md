@@ -96,7 +96,7 @@ not a request to fall back.
 | `rateLimit.maxWaitMs` | `number` | `60_000` | Longest wait before a 429 retry. |
 | `rateLimit.maxRetries` | `number` | `1` | `0` disables retries. |
 | `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | Larger bodies get a 413. Description edits carry two full bodies. |
-| `createApi` | `(installation: ResolvedInstallation) => BacklogApi` | the `backlog-js`-backed port | Test seam: replaces the port every Backlog call goes through, so a consumer's suite needs no network — see **Testing**. Replacing it also takes the rate-limit accounting and the 429 retry with it. |
+| `createApi` | `(installation: ResolvedInstallation) => BacklogApi` | the `backlog-js`-backed port | Test seam: replaces the port every Backlog call goes through, so a consumer's suite needs no network — see **Testing**. Replacing it also takes the rate-limit accounting, the 429 retry and `client()` with it. |
 
 ### Several spaces
 
@@ -519,6 +519,23 @@ Issue listing and counting spend the **search** bucket, not `read` — the trap
 any polling loop falls into. Listing or counting **pull requests** spends `read`
 instead, so the two lists draw on different budgets and one being exhausted says
 nothing about the other.
+
+`api(host)` names only the endpoints this adapter itself needs. For anything
+else — custom fields, project settings, attachments — `client(host)` hands back
+the very [`backlog-js`](https://github.com/nulab/backlog-js) client the port
+speaks through, so those calls land in the same buckets, share the same 429
+retry and raise the same errors:
+
+```ts
+const client = adapter.client('example.backlog.com');
+const fields = await client.getCustomFields(500); // projectId
+```
+
+Build a Backlog client of your own instead and none of that holds: it spends
+the same per-user limit without counting it. `client()` is unavailable in
+exactly one configuration — a custom `createApi` replaces the
+`backlog-js`-backed port, so there is no client to hand out and `client()`
+throws an `AdapterError` with code `NO_CLIENT`.
 
 ### A 429 blocks the call for up to a minute
 
