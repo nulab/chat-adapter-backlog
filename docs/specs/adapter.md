@@ -1174,6 +1174,19 @@ converter with one cached Get Project lookup. Both the root and every comment
 set `formatted` through that converter; `text` remains the original Backlog
 text.
 
+A forward first page with `limit: 1` therefore spends one comment fetch
+whose result is discarded except for `hasMore`. That is the specified
+behaviour, confirmed 2026-09-08 rather than left open: the fetched comment is
+what separates "there are comments, come back with cursor `0`" from "this
+thread has none, you are done", so skipping it would make `nextCursor` always
+defined on that page and move the same call into the caller's next round trip.
+A comment-count endpoint does exist for both kinds
+([Count Comment](https://developer.nulab.com/docs/backlog/api/2/count-comment/),
+`getIssueCommentsCount` / `getPullRequestCommentsCount`, `read` bucket), so the
+alternative is a second call of the same cost answering a different question —
+the total, not whether anything lies past this cursor — and only ever for that
+one page.
+
 Guarantees (each is a test): pages are chronological; backward pages walk from
 newest to oldest; the union of all pages in either direction is root + every
 comment exactly once; a backward final page may contain only the root; forward

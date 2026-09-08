@@ -216,11 +216,15 @@ export interface FetchMessagesInput {
  * - `commentLimit` reserves one slot for the root message only on the very
  *   first forward page (`startsWithRoot`); every other page's `commentLimit`
  *   equals `limit`.
- * - `hasMore = comments.length >= count`: requesting one more than
- *   `commentLimit` would need is not how Backlog's `count` param works
- *   (there is no "count + 1" probe), so "did we get a full page" is the only
- *   signal available, and a full final page reads as "more" until the next
- *   page comes back empty — the documented root-only final page.
+ * - `hasMore = comments.length >= count`: `count` has no "one more than I
+ *   need" form, so the page's own length is the signal, and a full final page
+ *   reads as "more" until the next page comes back empty — the documented
+ *   root-only final page. A comment *count* endpoint does exist for both
+ *   kinds (`getIssueCommentsCount`, `getPullRequestCommentsCount`, `read`
+ *   bucket), so the alternative is a second call of the same cost answering a
+ *   different question: the total, not whether anything lies past this
+ *   cursor. Only the very first forward page could use it — see
+ *   `startsWithRoot` below.
  */
 export async function fetchMessages(
   input: FetchMessagesInput
@@ -233,6 +237,12 @@ export async function fetchMessages(
 
   const startsWithRoot = direction === 'forward' && cursor === undefined;
   const commentLimit = startsWithRoot ? limit - 1 : limit;
+  // `max(…, 1)` rather than skipping the request when `commentLimit` is 0: a
+  // forward `limit: 1` page holds only the root, and the single comment
+  // fetched here is what separates "there are comments, come back with cursor
+  // 0" from "this thread has none, you are done". Skipping it would leave
+  // `nextCursor` always defined on that page and move the same request into
+  // the caller's next round trip (confirmed 2026-09-08, §7.1).
   const count = Math.max(commentLimit, 1);
 
   const comments =
