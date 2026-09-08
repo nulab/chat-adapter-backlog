@@ -9,8 +9,9 @@ beyond §2.
 
 **P0 through P7b have landed** (§3 carries the status per phase). The phase
 sections are kept in the tense they were written in, as the record of what
-each PR was asked to do and what it cost; what is still open is P7d, the
-release itself, and §1 says which of the six done criteria hold today.
+each PR was asked to do and what it cost. What is still open is P7b's run
+against a real space and P7d, the release itself — both `0.1.0` blockers, and
+§1 says which of the six done criteria hold today.
 Decisions this plan assumed are settled in the spec's §15 register, not here
 (§6).
 

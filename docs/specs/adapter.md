@@ -2299,16 +2299,18 @@ One of three verdicts per row:
 
 Numbers 1–17 are the questions this section has carried since P0 and keep
 their numbers, so an existing "§15 question 7" reference still resolves;
-18–28 are decisions that until now lived only in a plan. Reviewed 2026-09-08
-against `main` at `72b0148`.
+18–31 are decisions that until now lived only in a plan, or in no document at
+all. Every open item has a row, so the Verdict column alone is a complete
+answer to "what is left to decide". Reviewed 2026-09-08 against `main` at
+`72b0148`.
 
 ### 15.1 Register
 
 | # | Decision | Verdict | Evidence |
 | --- | --- | --- | --- |
-| 1 | D1 config shape: single-space fields with env fallbacks **and** `installations[]` | **confirmed** — both shapes, mutually exclusive, a host-keyed map inside | The constructor rejects the two shapes together, an empty `installations[]`, two installations on one host, and an env credential that contradicts an explicit one (`src/adapter.ts`); `src/adapter.test.ts` "installations and single-space fields together are rejected", "two installations on the same host are rejected", "constructs from environment variables when config is empty" (#10, tightened by #88 and #90) |
-| 2 | D14 formatting-rule cache policy | **confirmed** — cache forever, no TTL; `fetchChannelInfo` replaces the entry | `BacklogAdapter.fetchChannelInfo` replaces the `projectCache` entry, drops the channel's cached issue defaults and clears every repository name cached for the host; `src/adapter.test.ts` "fetching channel info replaces the cached formatting rule", "clearing channel info forgets the host's repository names" (#16, #24) |
-| 3 | `renderFormatted(content, target?)` second parameter | **confirmed** — accepted, and used: a cached rule for the target's channel picks the converter, otherwise Markdown plus one `warn` | `BacklogAdapter.renderFormatted` and `channelIdOfTarget` (`src/adapter.ts`); `src/adapter.test.ts` "without a target renders Markdown and warns once", "rendering for an unparseable target warns and falls back to markdown" (#10, #72, #83) |
+| 1 | D1 config shape: single-space fields with env fallbacks **and** `installations[]` | **confirmed** — both shapes, mutually exclusive, a host-keyed map inside | The constructor rejects the two shapes together, an empty `installations[]`, two installations on one host, and both credential environment variables set together (`src/adapter.ts`) — while an explicit credential ignores the other's leftover variable rather than failing, which is #90's fix and not an oversight; `src/adapter.test.ts` "installations and single-space fields together are rejected", "two installations on the same host are rejected", "constructs from environment variables when config is empty", "rejects both credentials in the environment, naming the variables", "an explicit apiKey ignores an access token left in the environment" (#10, tightened by #88 and #90) |
+| 2 | D14 formatting-rule cache policy | **confirmed** — cache forever, no TTL; `fetchChannelInfo` replaces the entry | `BacklogAdapter.fetchChannelInfo` replaces the `projectCache` entry, drops the channel's cached issue defaults and clears every repository name cached for the host; `src/adapter.test.ts` "fetching channel info replaces the cached formatting rule", "clearing channel info forgets the host’s repository names" — the source spells that apostrophe `\u2019`, so grep for `repository names` (#16, #24) |
+| 3 | `renderFormatted(content, target?)` second parameter | **confirmed** — accepted, and used: a cached rule for the target's channel picks the converter, otherwise Markdown plus one `warn` | `BacklogAdapter.renderFormatted` and `channelIdOfTarget` (`src/adapter.ts`); `src/adapter.test.ts` "without a target renders Markdown and warns once", "rendering for an unparseable target warns and falls back to markdown" (#10, #83) |
 | 4 | Webhook before `initialize()` (§5.1 row 10) | **confirmed** — 503 `Adapter not initialized` | `BacklogAdapter.handleWebhook`; `src/adapter.test.ts` "a webhook before initialize() has run gets 503" (#12) |
 | 5 | Non-POST webhook request | **confirmed** — 405 `Method not allowed` | `src/webhook/verify.ts`; `src/webhook/verify.test.ts` "a non-POST request is rejected with 405" (#12) |
 | 6 | `maxWebhookBodyBytes` knob | **confirmed** — kept, 5 MiB default, 413 | `DEFAULT_MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024` (`src/adapter.ts`), checked against `Content-Length` and again while reading (`src/webhook/verify.ts`); `src/webhook/verify.test.ts` covers both paths, `src/adapter.test.ts` "rejects a maxWebhookBodyBytes of %s" (#12, buffering order fixed by #81) |
@@ -2321,7 +2323,7 @@ against `main` at `72b0148`.
 | 13 | D-PR10 pull-request comment attachment resolution | **confirmed** — lazy list-and-match by name, newest match wins | The type-20 / `changeLog` attachment builder in `src/subject/pull-request.ts` resolves `fetchData` through `GET …/pullRequests/:number/attachments` only when the consumer asks (#22) |
 | 14 | D-PR2 nested `subject` in the id grammar | **confirmed** — nested `BacklogSubjectRef`, kind keyword explicit for both kinds | `BacklogSubjectRef` (`src/types.ts`) is written and read only by `src/ids.ts` and dispatched only by `subjectClientFor` (`src/subject/client.ts`); `src/subject/containment.test.ts` fails the build on a third module that dispatches on `.kind` — a tripwire, not a proof, and its header lists what it cannot see (#22, weakened deliberately by #83) |
 | 15 | D-PR7 `listThreads` population | **confirmed** — issues only, documented, with the pull-request route named | `BacklogAdapter.listThreads` and its Why-not comment; a caller holding a repository uses `api(host).listPullRequests`, which spends `read` rather than `search` (measured 2026-09-06); README row (#24, #25) |
-| 16 | Webhook form of types 18–20 | **confirmed** — measured, and rule 4 gained the predicted mention; see §15.2 | Two captures on a deployed receiver, 2026-09-06, matched to their activities by id (`.claude/rules/backlog-pull-request-facts.md`); the schemas name `assignee`, `base`, `branch` and `diff`, and `assigneeIdOf` in `src/webhook/inbound.ts` is read on 18 only (#23, corrected to 18-only by #32) |
+| 16 | Webhook form of types 18–20 | **confirmed** — measured, and rule 4 gained the predicted mention; see §15.2 | Two captures on a deployed receiver, 2026-09-06, matched to their activities by id (`.claude/rules/backlog-pull-request-facts.md`); the schemas name `assignee`, `base`, `branch` and `diff`, and `assigneeIdOf` in `src/webhook/inbound.ts` is read on 18, not on 19 or 20 (#23, narrowed to the root activities by #32) |
 | 17 | D9 rule 6 accepts any `reason` | **confirmed** — measured; a watcher appears in no `notifications[]`; see §15.2 | Measured 2026-09-06 (`.claude/rules/backlog-webhook-facts.md`); `src/webhook/inbound.ts` reads every `reason` (#35) |
 | 18 | P0 documentation title scope: `docs(docs)` or `docs(adapter)` | **confirmed** — `docs(docs)`, and it is now history | #2 landed as `docs(docs): add adapter specification and implementation plan`; CLAUDE.md's scope table lists `docs` as covering `docs/`. Nothing is left to decide |
 | 19 | Optional CI job for the live suite (implementation plan P7c) | **confirmed** — skipped | `.github/workflows/ci.yml` has no live job and reads no `BACKLOG_*` secret. The suite is opt-in and self-skipping, so nothing in CI depends on it; revisit only alongside #52 |
@@ -2334,6 +2336,9 @@ against `main` at `72b0148`.
 | 26 | D-PR9 root message part tag | **confirmed** — `r` for both kinds | `src/ids.ts` encodes and parses `r`; `src/ids.test.ts` and the `threadIdContract` roundtrip cover it (#22) |
 | 27 | D15 version line | **confirmed 2026-09-07** — the package's own semver, starting at `0.1.0`; #17, which had it track `chat`'s line, is superseded | #58; §7 of the implementation plan and DEVELOPMENT.md "Versioning". The dependency **ranges** are the other half of D15 and are unchanged (§14) |
 | 28 | Repository visibility at publish time | **open — blocks `0.1.0`** | §15.4 |
+| 29 | Whether done criterion 3 stands: the live suite must run against a real space before `0.1.0` | **open — blocks `0.1.0`** | §15.4. The suite exists and self-skips (row 11); the run itself is issue #52 |
+| 30 | M9 and M12, the two pull-request questions left unmeasured | **open — does not block `0.1.0`** | §15.4; [docs/plans/pull-request-support.md](../plans/pull-request-support.md) §5. No code reads either |
+| 31 | Catalog listing: community or vendor-official | **open — does not block `0.1.0`** | §15.4. §13 holds the feature-matrix values a listing needs |
 
 ### 15.2 The four questions whose answer needed an argument
 
@@ -2460,7 +2465,7 @@ provenance attestation and is harder to undo, because the README published
 for a version is immutable. Either way the call has to be made **before** the
 first `release.yml` run (#82 carries the same note for the releaser).
 
-**The live suite has never been run — blocks `0.1.0`.** Criterion 3 of
+**29. The live suite has never been run — blocks `0.1.0`.** Criterion 3 of
 [docs/plans/adapter-implementation.md](../plans/adapter-implementation.md) §1
 requires it to have run at least once against a real space, with the result
 in the release PR, and §12.3 is written for that run. It needs credentials
@@ -2473,14 +2478,14 @@ should be taken in the same session rather than opened separately: the
 remaining item of **#51** (a schema fixture recorded from a real body, so the
 test doubles can catch drift) and the two measurements below.
 
-**M9 and M12 stay unmeasured — not a blocker.**
+**30. M9 and M12 stay unmeasured — not a blocker.**
 [docs/plans/pull-request-support.md](../plans/pull-request-support.md) §5: M9
 is a populated `pullRequest` / `pullRequestComment` in the bot's own
 notification feed, M12 is redelivery. Neither gates behaviour — `markAsRead`
 matches by kind either way, and redelivery is documentation — and both need
 the same space as the live suite.
 
-**Catalog listing: community or vendor-official — not a blocker.** Prepared
+**31. Catalog listing: community or vendor-official — not a blocker.** Prepared
 but never chosen (§13 holds the feature-matrix values; the implementation
 plan's §8 keeps it out of scope). Community listing needs a docs page and
 allowlist entries in `vercel/chat`; vendor-official additionally needs
