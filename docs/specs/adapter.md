@@ -832,8 +832,12 @@ succeeded before a failed comment are abandoned (Backlog deletes them after an
 hour). The caller's message object is never mutated.
 
 Unsupported `file.data` — anything but a `Buffer`, an `ArrayBuffer` or a
-`Blob` — is a `ValidationError("backlog", …)` naming the file, raised before
-the first upload. `@chat-adapter/shared`'s `toBuffer` is therefore called with
+`Blob` — is a `ValidationError("backlog", …)` naming the file. Step 1
+converts and uploads one file at a time, so the error is raised when that
+file's turn comes: the file itself is never uploaded, while attachments from
+earlier files in the same message have already been uploaded and are
+abandoned exactly like the mid-upload failures above.
+`@chat-adapter/shared`'s `toBuffer` is therefore called with
 `throwOnUnsupported: false`: its own error is named after a `PlatformName`, a
 union with no `"backlog"` member, so letting it throw would attribute the
 caller's mistake to another vendor's adapter.
@@ -1564,9 +1568,9 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   `fetchChannelInfo`, lookup failure not cached; `renderFormatted`/
   `parseMessage` honour a cached `backlog` rule and warn when uncached.
 - **egress**: `postMessage` markdown/raw/card/files/`notifiedUserId`;
-  mistyped extra → `ValidationError`; unsupported `file.data` →
-  `ValidationError` named `backlog` with nothing uploaded;
-  `editMessage` with files → error;
+  mistyped extra → `ValidationError`; an `ArrayBuffer` and a `Blob` upload
+  like a `Buffer`; unsupported `file.data` → `ValidationError` named
+  `backlog` with that file not uploaded; `editMessage` with files → error;
   `:r`/`:u:` rejected for edit/delete/star; `stream` buffers into one comment
   and never calls `editMessage`; reactions add (idempotent), remove own only,
   no-op without a star; `postChannelMessage` summary/description split,
