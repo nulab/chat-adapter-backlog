@@ -454,15 +454,30 @@ export function describeBacklogApiConformance(
         api.addPullRequestComment(pullRequestRef(), { content: '' })
       ).rejects.toBeInstanceOf(ValidationError);
 
+      // Own comments, so the update reaches the content check rather than
+      // stopping at the ownership one.
       const added = await api.addComment(ISSUE_ID, { content: 'Body' });
       await expect(
         api.updateComment(ISSUE_ID, added.id, '')
+      ).rejects.toBeInstanceOf(ValidationError);
+
+      const addedToPullRequest = await api.addPullRequestComment(
+        pullRequestRef(),
+        { content: 'Body' }
+      );
+      await expect(
+        api.updatePullRequestComment(
+          pullRequestRef(),
+          addedToPullRequest.id,
+          ''
+        )
       ).rejects.toBeInstanceOf(ValidationError);
     });
 
     it('a single space is a comment body, because that is what an empty stream posts', async () => {
       // `stream()` posts `" "` for a stream that yields nothing
-      // (docs/specs/adapter.md §6.4, `.claude/rules/chat-sdk-core-facts.md`),
+      // (docs/specs/adapter.md §4.2 `stream` and §15 question 7, settled;
+      // `.claude/rules/chat-sdk-core-facts.md` for the core's own fallback),
       // so an implementation that trimmed before rejecting an empty body
       // would refuse the adapter's own documented path.
       const api = await factory();
@@ -483,6 +498,12 @@ export function describeBacklogApiConformance(
           'fixture must seed a comment written by somebody other than the credential owner'
         );
       }
+      // Read out as a primitive before the refused call. An implementation
+      // may hand out live references to its own records, and comparing
+      // `foreign.content` afterwards would then compare a mutated value with
+      // itself — an implementation that wrote the content and only then
+      // refused would pass.
+      const contentBefore = foreign.content;
 
       await expect(
         api.updateComment(ISSUE_ID, foreign.id, 'rewritten')
@@ -496,11 +517,11 @@ export function describeBacklogApiConformance(
         order: 'asc',
       });
       expect(after.find((c) => c.id === foreign.id)?.content).toBe(
-        foreign.content
+        contentBefore
       );
     });
 
-    it("editing another user's pull request comment is a PermissionError", async () => {
+    it("editing another user's pull request comment is a PermissionError, and leaves it unchanged", async () => {
       const api = await factory();
       const seeded = await api.listPullRequestComments(pullRequestRef(), {
         count: 100,
@@ -512,10 +533,20 @@ export function describeBacklogApiConformance(
           'fixture must seed a pull request comment written by somebody other than the credential owner'
         );
       }
+      // A primitive snapshot, for the reason given on the issue-side test.
+      const contentBefore = foreign.content;
 
       await expect(
         api.updatePullRequestComment(pullRequestRef(), foreign.id, 'rewritten')
       ).rejects.toBeInstanceOf(PermissionError);
+
+      const after = await api.listPullRequestComments(pullRequestRef(), {
+        count: 100,
+        order: 'asc',
+      });
+      expect(after.find((c) => c.id === foreign.id)?.content).toBe(
+        contentBefore
+      );
     });
 
     it('issue types and priorities are readable', async () => {
