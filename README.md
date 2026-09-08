@@ -173,7 +173,17 @@ weaker than an HMAC — anyone who learns the URL can post to it.
 
 The adapter compares it in constant time and answers **401 with an identical
 body** for a missing token, a wrong token, an unknown host and a missing host,
-so an unauthenticated caller cannot map your configuration.
+so an unauthenticated caller cannot map your configuration. It also checks the
+token **before it reads the request body**, so a caller who has found the URL
+but not the secret cannot make your function buffer up to
+`maxWebhookBodyBytes` (5 MiB by default) per request — that request costs it a
+401 after its headers, and it never learns what the limit is.
+
+A `webhookVerifier` is the one case where the body is read first: the verifier
+is handed it, so it has to be. `maxWebhookBodyBytes` is then the only bound on
+what an unauthenticated request can make the process hold; lower it, or put
+the check in front of the function — a reverse proxy, an IP allowlist — if
+that matters for your deployment.
 
 Harden a deployment further with `webhookVerifier`, which replaces the secret
 check: an IP allowlist against

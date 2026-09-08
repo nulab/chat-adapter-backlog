@@ -420,7 +420,7 @@ secret" from "unknown host" (D2).
 | # | Check | Failure → status, body | Log |
 | --- | --- | --- | --- |
 | 1 | `request.method === "POST"` | 405 `Method not allowed` | debug |
-| 2 | Body readable as text and ≤ `maxWebhookBodyBytes` (also checked against `Content-Length` before reading) ⚑ | 400 `Unreadable body` / 413 `Payload too large` | warn `webhook rejected` `{reason}` |
+| 2 | Body readable as text and ≤ `maxWebhookBodyBytes` (also checked against `Content-Length` before reading) ⚑ — **runs after rows 4 and 5 when no `webhookVerifier` is configured**, see below | 400 `Unreadable body` / 413 `Payload too large` | warn `webhook rejected` `{reason}` |
 | 3 | If `webhookVerifier` is configured: `await verifier(request, rawBody)` is truthy and does not throw | 401 `Unauthorized` | warn `webhook rejected` `{reason: "verifier"}` (error message logged, never the body) |
 | 4 | Resolve installation: `?host=` (lowercased) is a configured host; when absent, exactly one installation is configured (D3) | 401 `Unauthorized` | warn `{reason: "unknown_host" \| "missing_host"}` |
 | 5 | If no verifier: `?token=` present and `timingSafeEqual` to the installation's `webhookSecret` after a byte-length check | 401 `Unauthorized` | warn `{reason: "missing_token" \| "token_mismatch"}` |
@@ -432,10 +432,21 @@ secret" from "unknown host" (D2).
 | 11 | `createdUser.id !== botUserId` | 200 `OK` (self message, nothing dispatched) | debug `self message skipped` |
 | 12 | Success | 200 `OK`, returned **before** processing completes | debug |
 
-Step 3 runs before step 4 so a verifier-protected deployment never reveals
-whether a host is configured; `connectWebhookContract` requires the verifier to
-receive `(Request, string)` and to win over a configured secret, which this
-order satisfies. Step 4 precedes step 5 because the secret is per installation.
+The rows above are the order a **verifier-protected** deployment runs them in:
+body, verifier, host, because the verifier is handed the body. Step 3 before
+step 4 keeps a verifier-protected deployment from revealing whether a host is
+configured, and `connectWebhookContract` requires the verifier to receive
+`(Request, string)` and to win over a configured secret, which this order
+satisfies.
+
+With **no verifier** the order is host, token, body — rows 4 and 5 before row
+2. Nothing before row 5 reads the body then, so buffering it first would let
+anyone who has found the URL make the process hold `maxWebhookBodyBytes` per
+request, and would answer 413 to a caller that never proved it knows the
+secret. Authenticating first costs an unauthenticated request nothing but its
+headers, and the observable difference is which 4xx an oversized unauthorised
+body gets: 401, not 413. Either way step 4 precedes step 5, because the secret
+being compared is per installation.
 
 No timestamp-staleness window is applied ⚑, deliberately departing from
 CLAUDE.md's "Don't" list: Backlog's payload timestamp is unsigned and therefore
@@ -1509,7 +1520,12 @@ plain text. Documented in README under "Limitations".
   any other host. HTTPS is always used; no redirects are followed for
   downloads.
 - **Body size**: bounded by `maxWebhookBodyBytes` (description edits can carry
-  two full bodies).
+  two full bodies). With no verifier configured, the body is not read until the
+  token has matched (§5.1), so an unauthenticated caller cannot make the
+  process buffer it. A verifier-protected deployment has to buffer first — the
+  verifier is given the body — and bounds the exposure with
+  `maxWebhookBodyBytes` alone; a deployment that cannot accept that puts the
+  check in front of the function (a reverse proxy, an IP allowlist) instead.
 - **Webhook URL hygiene**: README instructs registering
   `activityTypeIds: [1, 2, 3, 14, 18, 19, 20]` (plus 4 if deletion events are
   wanted; 21 was not observed and is not registered, D-PR5), never `allEvent`
@@ -1549,10 +1565,14 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   and not cached; `userName` default; `botUserName(host)` per installation,
   unchanged by a `userName` override, unknown host → `ResourceNotFoundError`.
 - **webhook**: one test per ladder row in §5.1 (405, 400 unreadable, 413, 401
-  verifier false/throw, 401 unknown host, 401 missing host with two
+  verifier false/throw/`undefined`/truthy non-boolean, 401 unknown host, 401
+  missing host with two
   installations, 200 missing host with one installation, 401 missing/wrong
   token, 400 invalid JSON, 400 no type, 200 ignored 14/17/99, 400 schema, 503
-  uninitialised, 200 self, 200 dispatched); identical 401 bodies; fixture-driven
+  uninitialised, 200 self, 200 dispatched); identical 401 bodies; both
+  orders of §5.1 rows 2/4/5 (with no verifier, an oversized body with a wrong
+  token or an unknown host is a 401 and `request.bodyUsed` is still `false`;
+  with a verifier, the same request is a 413 and the verifier never runs); fixture-driven
   mapping for: type 3 comment, type 1 with and without bot assignee, type 2
   status change, type 2 assignee change (`content: null`), type 2 description
   edit, type 2 attachment add via changelog comment, type 2 without comment
