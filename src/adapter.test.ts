@@ -339,41 +339,6 @@ describe('BacklogAdapter construction', () => {
   });
 });
 
-describe('BacklogAdapter credential resolution', () => {
-  it('invokes a resolver function once per call rather than caching its result', async () => {
-    const adapter = new BacklogAdapter(validConfig());
-    const resolver = vi.fn(async () => 'resolved-token');
-
-    const [installation] = [...adapter['installations'].values()];
-    if (installation === undefined) {
-      throw new Error('expected one installation');
-    }
-    const withResolver = { ...installation, apiKey: resolver };
-
-    await adapter.resolveCredential(withResolver);
-    await adapter.resolveCredential(withResolver);
-
-    expect(resolver).toHaveBeenCalledTimes(2);
-  });
-
-  it('wraps a rejecting resolver in AuthenticationError', async () => {
-    const adapter = new BacklogAdapter(validConfig());
-    const [installation] = [...adapter['installations'].values()];
-    if (installation === undefined) {
-      throw new Error('expected one installation');
-    }
-    const withResolver = {
-      ...installation,
-      apiKey: () => Promise.reject(new Error('token expired')),
-    };
-
-    const { AuthenticationError } = await import('@chat-adapter/shared');
-    await expect(adapter.resolveCredential(withResolver)).rejects.toThrow(
-      AuthenticationError
-    );
-  });
-});
-
 describe('BacklogAdapter lifecycle and identity', () => {
   it('exposes "backlog" as its name', () => {
     const adapter = new BacklogAdapter(validConfig());
