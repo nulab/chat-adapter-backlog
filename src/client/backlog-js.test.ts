@@ -415,6 +415,22 @@ describe('createBacklogJsApi', () => {
     expect(filename).toBe('100%.png');
   });
 
+  it('keeps a literal %20 in a plain filename, which is not an escape there', async () => {
+    const filename = await downloadNamed(
+      'attachment; filename="report%20v2.pdf"'
+    );
+
+    expect(filename).toBe('report%20v2.pdf');
+  });
+
+  it('strips the charset prefix whatever case it is written in', async () => {
+    const filename = await downloadNamed(
+      "attachment; filename*=utf-8''a%20b.png"
+    );
+
+    expect(filename).toBe('a b.png');
+  });
+
   it('falls back to the raw value when the extended form will not decode', async () => {
     const filename = await downloadNamed(
       "attachment; filename*=UTF-8''100%.png"
