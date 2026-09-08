@@ -181,10 +181,11 @@ export class BacklogNotationConverter extends BaseFormatConverter {
    * (docs/specs/adapter.md §6.1, §9.4). The bold marker cannot be passed in:
    * the base method takes no options, and `@chat-adapter/shared`'s
    * `cardToFallbackText` types `boldFormat` as `"*" | "**"` — neither can
-   * express `''`. So the two places a card is bold are re-rendered here and
-   * everything markup-free about a card (subtitle, text, tables, charts,
-   * sections) still comes from `super`, which is why this override repeats
-   * the base method's three-part assembly rather than replacing the walk.
+   * express `''`. So the places a card carries markup are re-rendered here
+   * and every other child (subtitle, text, tables, charts, sections) still
+   * comes from `super`, which is why this override repeats the base method's
+   * three-part assembly rather than replacing the walk. A title or label is
+   * emitted as written; §9.7 covers what notation cannot escape.
    */
   protected override cardToFallbackText(card: CardElement): string {
     const parts: string[] = [];
@@ -203,13 +204,26 @@ export class BacklogNotationConverter extends BaseFormatConverter {
     return parts.join('\n');
   }
 
+  /**
+   * `link` and `divider` are here for a different reason than `fields`:
+   * `chat@4.39.0`'s own card walk has no case for either and returns `null`,
+   * which drops a `CardLink`'s URL out of the message entirely. That is a
+   * loss of content, not of markup, so each routes through the §9.4 row it
+   * already has rather than through `super`.
+   */
   protected override cardChildToFallbackText(child: CardChild): string | null {
-    if (child.type === 'fields') {
-      return child.children
-        .map((field) => `${this.bold(field.label)}: ${field.value}`)
-        .join('\n');
+    switch (child.type) {
+      case 'fields':
+        return child.children
+          .map((field) => `${this.bold(field.label)}: ${field.value}`)
+          .join('\n');
+      case 'link':
+        return this.nodeToNotation(link(child.url, [text(child.label)]));
+      case 'divider':
+        return this.nodeToNotation({ type: 'thematicBreak' });
+      default:
+        return super.cardChildToFallbackText(child);
     }
-    return super.cardChildToFallbackText(child);
   }
 }
 

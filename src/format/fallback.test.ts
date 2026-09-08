@@ -91,6 +91,8 @@ describe('a card fallback under each formatting rule', () => {
     subtitle: 'ready to ship',
     children: [
       { type: 'text', content: 'Two blockers left.' },
+      { type: 'link', label: 'Open build', url: 'https://example.test/b/1' },
+      { type: 'divider' },
       {
         type: 'section',
         children: [
@@ -107,7 +109,7 @@ describe('a card fallback under each formatting rule', () => {
     ],
   };
 
-  it('bolds the title and every field label with Markdown asterisks', () => {
+  it('renders every child, bolding with Markdown asterisks', () => {
     const fallback = converterFor('markdown', createMockLogger(), context);
 
     expect(fallback.renderPostable(card)).toBe(
@@ -115,6 +117,8 @@ describe('a card fallback under each formatting rule', () => {
         '**Release 1.4**',
         'ready to ship',
         'Two blockers left.',
+        '[Open build](https://example.test/b/1)',
+        '---',
         '**Owner**: the release team',
         'Blocker',
         '-------',
@@ -123,7 +127,7 @@ describe('a card fallback under each formatting rule', () => {
     );
   });
 
-  it("bolds them with '' and leaves every other child untouched", () => {
+  it("renders every child, bolding with '' and never an asterisk", () => {
     const fallback = converterFor('backlog', createMockLogger(), context);
 
     expect(fallback.renderPostable(card)).toBe(
@@ -131,6 +135,8 @@ describe('a card fallback under each formatting rule', () => {
         "''Release 1.4''",
         'ready to ship',
         'Two blockers left.',
+        '[[Open build>https://example.test/b/1]]',
+        '----',
         "''Owner'': the release team",
         'Blocker',
         '-------',

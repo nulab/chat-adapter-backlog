@@ -516,6 +516,30 @@ describe('resolveSummaryAndDescription', () => {
       )
     ).toEqual({ summary: 'Deploy failed', description: 'staging, attempt 3' });
   });
+
+  it("a first line's own list or heading marker is not kept in the summary", () => {
+    const markers: Array<[string, string]> = [
+      ['1. First step', 'First step'],
+      ['# Heading summary', 'Heading summary'],
+      ['- bullet summary', 'bullet summary'],
+    ];
+
+    for (const [firstLine, summary] of markers) {
+      expect(
+        resolveSummaryAndDescription(
+          { card: CARD, fallbackText: `${firstLine}\nbody` },
+          markdownConverter()
+        )
+      ).toEqual({ summary, description: 'body' });
+    }
+
+    expect(
+      resolveSummaryAndDescription(
+        { card: CARD, fallbackText: '- bullet summary\nbody' },
+        notationConverter()
+      )
+    ).toEqual({ summary: 'bullet summary', description: 'body' });
+  });
 });
 
 describe('editComment', () => {
