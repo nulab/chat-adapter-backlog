@@ -298,6 +298,13 @@ describe('BacklogAdapter construction', () => {
     expect(adapter.userName).toBe('Chatbot');
   });
 
+  /**
+   * The next four cases are every way the two credential sources can combine.
+   * They are pinned together because the two arms used to disagree: an
+   * explicit `accessToken` suppressed `BACKLOG_API_KEY`, while an explicit
+   * `apiKey` left `BACKLOG_ACCESS_TOKEN` in play — so it was the API-key half
+   * that was rejected and the OAuth half that worked.
+   */
   it('rejects exactly one of apiKey or accessToken when both are given', () => {
     expect(
       () =>
@@ -310,6 +317,53 @@ describe('BacklogAdapter construction', () => {
           webhookSecret: 's',
         })
     ).toThrow(ValidationError);
+  });
+
+  it('an explicit apiKey ignores an access token left in the environment', () => {
+    process.env.BACKLOG_ACCESS_TOKEN = 'stale-oauth-token';
+    const createApi = vi.fn((_installation: ResolvedInstallation) =>
+      createInMemoryBacklogApi()
+    );
+    const adapter = new BacklogAdapter({ ...validConfig(), createApi });
+
+    adapter.api('example.backlog.com');
+
+    expect(createApi.mock.calls[0]?.[0].apiKey).toBe('test-api-key');
+    expect(createApi.mock.calls[0]?.[0].accessToken).toBeUndefined();
+  });
+
+  it('an explicit accessToken ignores an api key left in the environment', () => {
+    process.env.BACKLOG_API_KEY = 'stale-api-key';
+    const createApi = vi.fn((_installation: ResolvedInstallation) =>
+      createInMemoryBacklogApi()
+    );
+    const adapter = new BacklogAdapter({
+      host: 'example.backlog.com',
+      accessToken: 'test-access-token',
+      botUserId: 999,
+      botUserName: 'Chatbot',
+      webhookSecret: 'test-webhook-secret',
+      createApi,
+    });
+
+    adapter.api('example.backlog.com');
+
+    expect(createApi.mock.calls[0]?.[0].accessToken).toBe('test-access-token');
+    expect(createApi.mock.calls[0]?.[0].apiKey).toBeUndefined();
+  });
+
+  it('rejects both credentials in the environment, naming the variables', () => {
+    process.env.BACKLOG_HOST = 'example.backlog.com';
+    process.env.BACKLOG_API_KEY = 'env-api-key';
+    process.env.BACKLOG_ACCESS_TOKEN = 'env-access-token';
+    process.env.BACKLOG_BOT_USER_ID = '999';
+    process.env.BACKLOG_BOT_USER_NAME = 'Chatbot';
+    process.env.BACKLOG_WEBHOOK_SECRET = 'env-webhook-secret';
+
+    expect(() => createBacklogAdapter()).toThrow(ValidationError);
+    expect(() => createBacklogAdapter()).toThrow(
+      /BACKLOG_API_KEY or BACKLOG_ACCESS_TOKEN/
+    );
   });
 
   it('rejects a negative rateLimit.maxWaitMs', () => {
