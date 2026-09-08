@@ -25,6 +25,7 @@ const {
   bob,
   baseProject,
   baseIssue,
+  baseIssueTypes,
   baseComment,
   statusChangeLog,
   baseGitRepository,
@@ -57,7 +58,7 @@ function seed(): InMemoryBacklogSeed {
       }),
       baseComment({ id: 4, issueId: otherIssueId }),
     ],
-    issueTypes: { [projectId]: [{ id: 1, name: 'Task' }] },
+    issueTypes: { [projectId]: baseIssueTypes() },
     notifications: baseNotifications(),
     repositories: [
       baseGitRepository(),
@@ -202,5 +203,44 @@ describe('createInMemoryBacklogApi', () => {
     await expect(
       api.downloadPullRequestAttachment(pullRequestRef(), uploaded.id)
     ).resolves.toMatchObject({ filename: 'notes.txt' });
+  });
+
+  it('gives an uploaded file back byte for byte, on both download paths', async () => {
+    const api = createInMemoryBacklogApi(seed());
+    const uploaded = await api.uploadAttachment(
+      'notes.txt',
+      Buffer.from('hello'),
+      'text/plain'
+    );
+
+    const fromIssue = await api.downloadAttachment(issueId, uploaded.id);
+    const fromPullRequest = await api.downloadPullRequestAttachment(
+      pullRequestRef(),
+      uploaded.id
+    );
+
+    expect(fromIssue.data.toString()).toBe('hello');
+    expect(fromPullRequest.data.toString()).toBe('hello');
+    // The two downloads report the content type differently on a real space:
+    // the pull-request one answers the file's own, the issue one
+    // `application/octet-stream` (measured 2026-09-06,
+    // `.claude/rules/backlog-pull-request-facts.md` "Attachments").
+    expect(fromPullRequest.contentType).toBe('text/plain');
+    expect(fromIssue.contentType).toBe('application/octet-stream');
+  });
+
+  it('records the bytes an upload was given, as a copy the caller cannot rewrite', async () => {
+    const api = createInMemoryBacklogApi(seed());
+    const data = Buffer.from('hello');
+
+    await api.uploadAttachment('notes.txt', data, 'text/plain');
+    data.write('world');
+
+    expect(api.state.recordedInputs).toContainEqual({
+      method: 'uploadAttachment',
+      filename: 'notes.txt',
+      data: Buffer.from('hello'),
+      mimeType: 'text/plain',
+    });
   });
 });

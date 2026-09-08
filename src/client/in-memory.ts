@@ -1,4 +1,8 @@
-import { ResourceNotFoundError } from '@chat-adapter/shared';
+import {
+  PermissionError,
+  ResourceNotFoundError,
+  ValidationError,
+} from '@chat-adapter/shared';
 
 import type {
   AddCommentInput,
@@ -103,6 +107,11 @@ export type RecordedInput =
   | {
       method: 'uploadAttachment';
       filename: string;
+      /**
+       * A copy, so a caller that reuses one buffer across uploads cannot
+       * rewrite what this records — a real space keeps the bytes it was sent.
+       */
+      data: Buffer;
       mimeType: string | undefined;
     };
 
@@ -168,6 +177,14 @@ export function createInMemoryBacklogApi(
     ...seededPullRequestComments.flatMap((c) => c.stars),
   ];
   const uploads: BacklogUploadedFile[] = [];
+  /**
+   * The bytes and declared type of every upload, keyed by its id.
+   * `BacklogUploadedFile` carries only `{ id, name, size }`, so neither has
+   * anywhere to live on the state a consumer reads — but discarding them
+   * would let a port that uploads an empty body pass every assertion this
+   * fake can make.
+   */
+  const uploadedFiles = new Map<number, { data: Buffer; mimeType?: string }>();
   const recordedInputs: RecordedInput[] = [];
 
   const seededIds = [
@@ -230,6 +247,36 @@ export function createInMemoryBacklogApi(
       throw new ResourceNotFoundError('backlog', 'comment', String(commentId));
     }
     return comment;
+  }
+
+  /**
+   * Refuses a comment body Backlog refuses. `content` is a required parameter
+   * on all four comment endpoints, and a missing one is a 400 code 7
+   * (`.claude/rules/backlog-api-facts.md` "Writes";
+   * `code 7 "No comment content."` was measured on the issue side).
+   * Whitespace is deliberately *not* trimmed first: `stream()` posts a single
+   * space for an empty stream (docs/specs/adapter.md §6.4), so a fake that
+   * trimmed would fail the adapter's own documented path on a claim no
+   * measurement supports.
+   */
+  function requireCommentContent(content: string): void {
+    if (content === '') {
+      throw new ValidationError('backlog', 'No comment content.');
+    }
+  }
+
+  /**
+   * Refuses to write another user's comment. Update and Delete are documented
+   * as the caller's own comments only — "Authenticated user can update his own
+   * comments" on both the issue and the pull-request endpoint
+   * (`.claude/rules/backlog-api-facts.md` "Writes") — and a real space answers
+   * 403 code 5, which the port maps to `PermissionError`
+   * (docs/specs/adapter.md §8.5).
+   */
+  function requireOwnComment(comment: BacklogComment, action: string): void {
+    if (comment.createdUser.id !== me.id) {
+      throw new PermissionError('backlog', action);
+    }
   }
 
   function findUser(userId: number): BacklogUserRef {
@@ -350,14 +397,20 @@ export function createInMemoryBacklogApi(
       findProject(input.projectId);
       const issueType = (issueTypesByProject.get(input.projectId) ?? []).find(
         (t) => t.id === input.issueTypeId
-      ) ?? {
-        id: input.issueTypeId,
-        name: 'Task',
-      };
-      const priority = priorities.find((p) => p.id === input.priorityId) ?? {
-        id: input.priorityId,
-        name: 'Normal',
-      };
+      );
+      if (issueType === undefined) {
+        throw new ValidationError(
+          'backlog',
+          `issueTypeId ${input.issueTypeId} is not an issue type of project ${input.projectId}`
+        );
+      }
+      const priority = priorities.find((p) => p.id === input.priorityId);
+      if (priority === undefined) {
+        throw new ValidationError(
+          'backlog',
+          `priorityId ${input.priorityId} is not a priority of this space`
+        );
+      }
       const assignee =
         input.assigneeId === undefined ? null : findUser(input.assigneeId);
       const createdAt = now();
@@ -403,6 +456,7 @@ export function createInMemoryBacklogApi(
     async addComment(issueId, input: AddCommentInput) {
       recordedInputs.push({ method: 'addComment', issueId, input });
       findIssue(issueId);
+      requireCommentContent(input.content);
       const createdAt = now();
       const comment: BacklogIssueComment = {
         id: allocateId(),
@@ -426,6 +480,8 @@ export function createInMemoryBacklogApi(
         content,
       });
       const comment = findComment(issueId, commentId);
+      requireOwnComment(comment, 'update a comment');
+      requireCommentContent(content);
       comment.content = content;
       comment.updated = now();
       return comment;
@@ -434,6 +490,7 @@ export function createInMemoryBacklogApi(
     async deleteComment(issueId, commentId) {
       recordedInputs.push({ method: 'deleteComment', issueId, commentId });
       const comment = findComment(issueId, commentId);
+      requireOwnComment(comment, 'delete a comment');
       comments.splice(comments.indexOf(comment), 1);
       return comment;
     },
@@ -477,6 +534,7 @@ export function createInMemoryBacklogApi(
     async addPullRequestComment(ref, input: AddPullRequestCommentInput) {
       recordedInputs.push({ method: 'addPullRequestComment', ref, input });
       findPullRequest(ref);
+      requireCommentContent(input.content);
       const createdAt = now();
       const comment: BacklogComment = {
         id: allocateId(),
@@ -510,6 +568,8 @@ export function createInMemoryBacklogApi(
           String(commentId)
         );
       }
+      requireOwnComment(comment, 'update a pull request comment');
+      requireCommentContent(content);
       comment.content = content;
       comment.updated = now();
       return comment;
@@ -541,10 +601,16 @@ export function createInMemoryBacklogApi(
           String(attachmentId)
         );
       }
+      const uploaded = uploadedFiles.get(attachment.id);
       return {
         filename: attachment.name,
-        contentType: 'application/octet-stream',
-        data: Buffer.alloc(0),
+        // A pull-request attachment download answers the file's **real**
+        // content type, where the issue-side download answers
+        // `application/octet-stream` (measured 2026-09-06,
+        // `.claude/rules/backlog-pull-request-facts.md` "Attachments"). The
+        // two are not the same call and the fake does not make them agree.
+        contentType: uploaded?.mimeType ?? 'application/octet-stream',
+        data: uploaded?.data ?? Buffer.alloc(attachment.size),
       };
     },
 
@@ -600,14 +666,24 @@ export function createInMemoryBacklogApi(
       notification.resourceAlreadyRead = true;
     },
 
-    async uploadAttachment(filename, _data, mimeType) {
-      recordedInputs.push({ method: 'uploadAttachment', filename, mimeType });
+    async uploadAttachment(filename, data, mimeType) {
+      const bytes = Buffer.from(data);
+      recordedInputs.push({
+        method: 'uploadAttachment',
+        filename,
+        data: bytes,
+        mimeType,
+      });
       const file: BacklogUploadedFile = {
         id: allocateId(),
         name: filename,
-        size: _data.byteLength,
+        size: bytes.byteLength,
       };
       uploads.push(file);
+      uploadedFiles.set(file.id, {
+        data: bytes,
+        ...(mimeType !== undefined && { mimeType }),
+      });
       return file;
     },
 
@@ -627,7 +703,7 @@ export function createInMemoryBacklogApi(
       return {
         filename: upload.name,
         contentType: 'application/octet-stream',
-        data: Buffer.alloc(0),
+        data: uploadedFiles.get(upload.id)?.data ?? Buffer.alloc(upload.size),
       };
     },
 
