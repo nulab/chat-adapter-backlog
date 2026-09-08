@@ -20,7 +20,8 @@ Conventions: "the core" is the `Chat` class in `chat@4.39.0`; "the port" is the
 internal `BacklogApi` interface (§8); "installation" is one configured Backlog
 space. `MUST`/`MUST NOT` are requirements; `SHOULD` is a default an implementer
 may deviate from with a Why-not comment. Items marked ⚑ are decisions the
-maintainer has not yet confirmed (§15).
+register in §15 tracks; each one has a verdict there — confirmed, changed or
+still open — so a ⚑ means "§15 has the answer", not "nobody has decided".
 
 ## 1. Purpose and scope
 
@@ -2275,102 +2276,224 @@ for one scratch space is worse than requiring the two to share it.
 | — | Self messages are not dispatched by the adapter | `selfMessageContract` asserts nothing is dispatched; the core's own `isMe` skip is a second line of defence. | Relying on the core alone. |
 | — ⚑ | No timestamp-staleness window | See §5.1: unsigned timestamps give no protection and would drop measured late redeliveries. | Rejecting payloads older than N minutes. |
 
-## 15. Open questions (⚑)
+## 15. Decision register (⚑)
 
-1. **D1 config shape**: keep shape A + B as specified, or installations-only
-   with a documented env-loading helper?
-2. **D14 cache policy**: cache forever with `fetchChannelInfo` refresh
-   (assumed), or a TTL (which one)?
-3. **`renderFormatted(content, target?)`**: accept the optional second
-   parameter (type-compatible with `Adapter`) so callers can render for a
-   specific thread, or keep the bare signature and always render Markdown?
-4. **Uninitialised webhook** (§5.1 row 10): 503 (assumed; the only status
-   that could trigger a redelivery, though Backlog documents no retry policy)
-   or 200 with an error log?
-5. **Non-POST**: 405 (assumed) or ignore method.
-6. **`maxWebhookBodyBytes`**: keep the knob with a 5 MiB default (assumed) or
-   drop it.
-7. ~~**Empty stream** (§4.2 `stream`): post `" "` like the core fallback
-   (assumed) or return `null` after consumption.~~ **Settled**: `" "` stands.
-   An empty stream is not hypothetical — `fromFullStream` in `chat` yields
-   only strings, `markdown_text`/`task_update`/`plan_update` and `text-delta`
-   and drops every other chunk type (read in 4.39.0,
-   `.claude/rules/chat-sdk-core-facts.md`), so an AI SDK `fullStream` whose
-   model failed arrives here empty rather than throwing. `" "` keeps the
-   contract every caller can rely on (`stream()` resolves to a `SentMessage`
-   the handler can edit or delete) and matches the core's own fallback for the
-   same input; `null` after consumption is a shape no measurement covers, and
-   it would hand `thread.post(stream)` a null the caller has to branch on for
-   a case they cannot distinguish from success. The cost is a comment holding
-   one space, which is visible in Backlog and therefore documented in README's
-   Streaming limitation rather than hidden. The same answer covers an
-   `options.signal` abort that buffered nothing: the caller cannot tell the two
-   apart, and §6.4 said "if non-empty" only because it was written before this
-   question was settled.
-8. **Empty summary** in `postChannelMessage`: `ValidationError` (assumed) or a
-   placeholder summary.
-9. ~~**Type 4 deletion**: ship in the first release or defer.~~ **Settled**:
-   shipped. Type 4 is dispatched unconditionally as
-   `chat.processMessageDeleted`; there is no option to turn it off, and the
-   registration guidance still leaves 4 optional so a project that does not
-   want deletions simply does not subscribe to it.
-10. **Retry default** `maxRetries: 1`, `maxWaitMs: 60_000` (assumed) or
-    `maxRetries: 0`.
-11. **Live suite variables**: `BACKLOG_HOST`, `BACKLOG_API_KEY`,
-    `BACKLOG_LIVE_ISSUE_ID` (assumed).
-12. **No staleness window** (§5.1) — accept the documented departure from
-    CLAUDE.md's "Don't" list.
-13. **D-PR10 attachment resolution by name**: lazy list-and-match (assumed),
-    eager list per comment, or no `fetchData` for pull-request comment
-    attachments?
-14. **D-PR2 nested `subject`** versus a flat thread-id shape — confirm before
-    the id grammar lands (docs/plans/pull-request-support.md P2).
-15. **D-PR7 `listThreads` issues only** — confirm, or name the alternative.
-16. ~~**Webhook form of types 18–20**: the activity API form is measured; if a
-    webhook body turns out to add `content.assignee` (as type 1 does), rule 4
-    of §5.4 gains an assignment-at-creation mention.~~ **Settled**: it does.
-    The measurement waived before P3 (it needs a receiver Backlog's servers
-    can reach) was taken afterwards on a deployed receiver, with every
-    delivery matched to the same activity by activity id and diffed in both
-    directions (measured on a development space, 2026-09-06). The webhook
-    `content` is the activity key set plus `assignee`, `base`, `branch` and
-    `diff`, on all three types, and the keys the two forms share hold equal
-    values.
+Every ⚑ in this document points here, and so do the decision sections of both
+plans ([docs/plans/adapter-implementation.md](../plans/adapter-implementation.md)
+§6 and [docs/plans/pull-request-support.md](../plans/pull-request-support.md)
+§8), which no longer carry verdicts of their own. This is the **one place a
+verdict is recorded**, so somebody deciding whether to release does not have
+to reconcile three tables that can drift apart — the way they had by
+2026-09-07, when the code had implemented every default the spec assumed and
+all three documents still said the decision was open. A ⚑ elsewhere in this
+document therefore means "§15 has the answer", not "nobody has decided".
 
-    Rule 4 gained the assignment-at-creation mention on 18 as predicted. What
-    the question did not anticipate is that the same key is on 19 and 20 as
-    the **standing** assignee, and on issue types 2 and 3 as well — repeated
-    on every delivery whether or not the assignment changed. It is therefore
-    read on 18 alone: a multi-field `PATCH` that changed no assignee carried
-    the bot in `content.assignee` and notified nobody, so reading it on 19
-    would make every edit of a bot-assigned pull request a mention. An
-    assignment on any other type reports itself in `changes[]`, and one
-    `changes[]` leaves out is covered by rule 6, which reads whom Backlog
-    notified.
+One of three verdicts per row:
 
-    `base`, `branch` and `diff` change no behaviour; the schemas name them as
-    the record of the measurement (§5.2). What remains unmeasured is narrower
-    and recorded as such in `.claude/rules/backlog-pull-request-facts.md`:
-    the webhook deliveries for a merge, a close and a comment with
-    `attachmentId[]`, whose `changes[]` shapes are still activity-form
-    measurements. A merge and a close have no API, so capturing them needs a
-    git push or the UI (docs/plans/pull-request-support.md §4 P3, §5 M1).
-17. ~~**D9 rule 6 accepts any `reason`** — confirm, or name the reason codes
-    to exclude.~~ **Settled**: any `reason` stands, and the candidate false
-    positive has been measured away. A second account watching an issue it
-    was neither assigned to nor named in appears in **no** `notifications[]`:
-    a plain comment, a priority-only `PATCH` and a description-only `PATCH`
-    on that issue all arrived with `notifications: []`, while the control —
-    the same kind of comment on the same issue, addressing a user who was not
-    watching it — carried that user with `reason: 2` (measured on a
-    development space, 2026-09-06). Watching is a separate mechanism end to
-    end: it creates no entry in the watcher's own `GET /notifications`
-    either, and `POST /watchings` produced no delivery on a hook registered
-    for types 1, 2, 3, 4, 14 and 17 — the issue types; no other type was
-    subscribed. So `notifications[]` names only users somebody addressed, as
-    far as the acts measured here, and every `reason` observed on a delivery
-    is an explicit act — 1 and 10 an assignment (issue, pull request), 2 and
-    11 a comment's notification field or a mention in its text. `<@project>`
-    is not a counter-example: it addresses every project member deliberately,
-    so a bot that is a project member is being spoken to by the same
-    definition rule 1 already uses for a hand-typed `@Chatbot`.
+- **confirmed** — the assumed default stands, and code and tests implement it.
+  The Evidence column names the module and the test; a row whose evidence is
+  an intention rather than a file is not confirmed.
+- **changed** — a different answer shipped. The row says what to, and why.
+- **open** — the maintainer still has to decide. §15.4 gives each open item a
+  recommendation and says whether it blocks `0.1.0`.
+
+Numbers 1–17 are the questions this section has carried since P0 and keep
+their numbers, so an existing "§15 question 7" reference still resolves;
+18–28 are decisions that until now lived only in a plan. Reviewed 2026-09-08
+against `main` at `72b0148`.
+
+### 15.1 Register
+
+| # | Decision | Verdict | Evidence |
+| --- | --- | --- | --- |
+| 1 | D1 config shape: single-space fields with env fallbacks **and** `installations[]` | **confirmed** — both shapes, mutually exclusive, a host-keyed map inside | The constructor rejects the two shapes together, an empty `installations[]`, two installations on one host, and an env credential that contradicts an explicit one (`src/adapter.ts`); `src/adapter.test.ts` "installations and single-space fields together are rejected", "two installations on the same host are rejected", "constructs from environment variables when config is empty" (#10, tightened by #88 and #90) |
+| 2 | D14 formatting-rule cache policy | **confirmed** — cache forever, no TTL; `fetchChannelInfo` replaces the entry | `BacklogAdapter.fetchChannelInfo` replaces the `projectCache` entry, drops the channel's cached issue defaults and clears every repository name cached for the host; `src/adapter.test.ts` "fetching channel info replaces the cached formatting rule", "clearing channel info forgets the host's repository names" (#16, #24) |
+| 3 | `renderFormatted(content, target?)` second parameter | **confirmed** — accepted, and used: a cached rule for the target's channel picks the converter, otherwise Markdown plus one `warn` | `BacklogAdapter.renderFormatted` and `channelIdOfTarget` (`src/adapter.ts`); `src/adapter.test.ts` "without a target renders Markdown and warns once", "rendering for an unparseable target warns and falls back to markdown" (#10, #72, #83) |
+| 4 | Webhook before `initialize()` (§5.1 row 10) | **confirmed** — 503 `Adapter not initialized` | `BacklogAdapter.handleWebhook`; `src/adapter.test.ts` "a webhook before initialize() has run gets 503" (#12) |
+| 5 | Non-POST webhook request | **confirmed** — 405 `Method not allowed` | `src/webhook/verify.ts`; `src/webhook/verify.test.ts` "a non-POST request is rejected with 405" (#12) |
+| 6 | `maxWebhookBodyBytes` knob | **confirmed** — kept, 5 MiB default, 413 | `DEFAULT_MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024` (`src/adapter.ts`), checked against `Content-Length` and again while reading (`src/webhook/verify.ts`); `src/webhook/verify.test.ts` covers both paths, `src/adapter.test.ts` "rejects a maxWebhookBodyBytes of %s" (#12, buffering order fixed by #81) |
+| 7 | Empty stream posts `" "` | **confirmed**, and widened to an abort that buffered nothing — see §15.2 | `BacklogAdapter.stream` posts `" "` whenever the buffer is empty (#84) |
+| 8 | Empty summary in `postChannelMessage` | **confirmed** — `ValidationError`, no placeholder | `createChannelIssue` in `src/egress.ts` throws before the port call; `src/adapter.test.ts` "an empty summary is a validation error" (#16) |
+| 9 | Type-4 deletion in the first release | **confirmed** — shipped; see §15.2 | `DISPATCHED_ACTIVITY_TYPES` includes 4 and dispatches `chat.processMessageDeleted` unconditionally (`src/webhook/payload.ts`) (#12) |
+| 10 | Retry defaults | **confirmed** — `maxRetries: 1`, `maxWaitMs: 60_000`, both overridable, `maxRetries: 0` supported | `DEFAULT_MAX_RETRIES` / `DEFAULT_MAX_WAIT_MS` in `src/client/rate-limit.ts`, validated in `src/adapter.ts`; `src/client/rate-limit.test.ts` "retries once when the reset is within maxWaitMs", "gives up without waiting when the wait would exceed maxWaitMs", "maxRetries: 0 never retries even with an imminent reset" (#9, bounded further by #71) |
+| 11 | Live-suite variables | **changed** — four, not three: `BACKLOG_LIVE_PULL_REQUEST=<repositoryId>:<number>` joined `BACKLOG_HOST`, `BACKLOG_API_KEY`, `BACKLOG_LIVE_ISSUE_ID` | `src/test/live.test.ts` reads all four and skips the pull-request half independently of the issue half, because a pull request needs a Git-enabled project and two coordinates an issue id cannot carry (#15, #24). The suite itself has still never been run — §15.4 |
+| 12 | No timestamp-staleness window | **confirmed** — accepted, with the departure documented rather than CLAUDE.md amended | `src/webhook/verify.ts` applies no timestamp check; §5.1 states the departure and its reason (unsigned timestamps give no protection and would drop measured late redeliveries). The plan's rider "amend CLAUDE.md wording for this adapter" was **not** taken up: CLAUDE.md's "Don't" list is generic adapter guidance, and the reader who needs this adapter's choice is reading §5.1 (#12) |
+| 13 | D-PR10 pull-request comment attachment resolution | **confirmed** — lazy list-and-match by name, newest match wins | The type-20 / `changeLog` attachment builder in `src/subject/pull-request.ts` resolves `fetchData` through `GET …/pullRequests/:number/attachments` only when the consumer asks (#22) |
+| 14 | D-PR2 nested `subject` in the id grammar | **confirmed** — nested `BacklogSubjectRef`, kind keyword explicit for both kinds | `BacklogSubjectRef` (`src/types.ts`) is written and read only by `src/ids.ts` and dispatched only by `subjectClientFor` (`src/subject/client.ts`); `src/subject/containment.test.ts` fails the build on a third module that dispatches on `.kind` — a tripwire, not a proof, and its header lists what it cannot see (#22, weakened deliberately by #83) |
+| 15 | D-PR7 `listThreads` population | **confirmed** — issues only, documented, with the pull-request route named | `BacklogAdapter.listThreads` and its Why-not comment; a caller holding a repository uses `api(host).listPullRequests`, which spends `read` rather than `search` (measured 2026-09-06); README row (#24, #25) |
+| 16 | Webhook form of types 18–20 | **confirmed** — measured, and rule 4 gained the predicted mention; see §15.2 | Two captures on a deployed receiver, 2026-09-06, matched to their activities by id (`.claude/rules/backlog-pull-request-facts.md`); the schemas name `assignee`, `base`, `branch` and `diff`, and `assigneeIdOf` in `src/webhook/inbound.ts` is read on 18 only (#23, corrected to 18-only by #32) |
+| 17 | D9 rule 6 accepts any `reason` | **confirmed** — measured; a watcher appears in no `notifications[]`; see §15.2 | Measured 2026-09-06 (`.claude/rules/backlog-webhook-facts.md`); `src/webhook/inbound.ts` reads every `reason` (#35) |
+| 18 | P0 documentation title scope: `docs(docs)` or `docs(adapter)` | **confirmed** — `docs(docs)`, and it is now history | #2 landed as `docs(docs): add adapter specification and implementation plan`; CLAUDE.md's scope table lists `docs` as covering `docs/`. Nothing is left to decide |
+| 19 | Optional CI job for the live suite (implementation plan P7c) | **confirmed** — skipped | `.github/workflows/ci.yml` has no live job and reads no `BACKLOG_*` secret. The suite is opt-in and self-skipping, so nothing in CI depends on it; revisit only alongside #52 |
+| 20 | D-PR1 channel of a pull-request thread | **confirmed** — the project, exactly as for issues | `channelIdFromThreadId` is the first three segments for both kinds (`src/ids.ts`); the formatting rule and the project cache are per project, and a repository has neither (#22) |
+| 21 | D-PR3 `deleteMessage` on a pull-request thread | **confirmed** — `AdapterError` with `UNSUPPORTED_OPERATION`, thrown before any call | `deleteComment` in `src/subject/pull-request.ts` rejects without a request, citing the measured 400/6 `Undefined resource`; the subject client carries `capabilities: { deleteComment: false }` so no member has to ask what kind it holds, and the README row is what tells a consumer (#22, #25) |
+| 22 | D-PR4 adapter option to enable or disable pull requests | **confirmed** — none; the webhook subscription is the switch | No `subjects` field exists on `BacklogAdapterConfig` (`src/types.ts`); leaving 18–20 out of `activityTypeIds[]` is the documented way to decline them, and 14 is declined the same way (#22, #23) |
+| 23 | D-PR5 type 21 | **confirmed** — 200 Ignored, and absent from the registration guidance | `DISPATCHED_ACTIVITY_TYPES` excludes 21 (`src/webhook/payload.ts`); `src/webhook/payload.test.ts` "a git push and a type-21 activity are not among them" cites the two measurements that never saw one, the second with 21 subscribed (#23) |
+| 24 | D-PR6 a pull request linked to an issue | **confirmed** — its own thread; the link is metadata and never routes | the `issue` key of `threadMetadata` in `src/subject/pull-request.ts`, and `raw.payload.content.issue`; `src/webhook/payload.test.ts` "a pull request linked to an issue is still its own subject" (#23) |
+| 25 | D-PR8 `fetchSubject().type` for a pull request | **confirmed** — `'pull_request'` | `subjectType: 'pull_request'` in `src/subject/pull-request.ts`, documented on `SubjectClient` (`src/subject/client.ts`); `src/reads.test.ts` and `src/subject/pull-request.test.ts` assert it (#22) |
+| 26 | D-PR9 root message part tag | **confirmed** — `r` for both kinds | `src/ids.ts` encodes and parses `r`; `src/ids.test.ts` and the `threadIdContract` roundtrip cover it (#22) |
+| 27 | D15 version line | **confirmed 2026-09-07** — the package's own semver, starting at `0.1.0`; #17, which had it track `chat`'s line, is superseded | #58; §7 of the implementation plan and DEVELOPMENT.md "Versioning". The dependency **ranges** are the other half of D15 and are unchanged (§14) |
+| 28 | Repository visibility at publish time | **open — blocks `0.1.0`** | §15.4 |
+
+### 15.2 The four questions whose answer needed an argument
+
+The rows above point here for the four that were settled with reasoning
+rather than by writing the code. The text is the record of how each was
+decided, kept as it was written.
+
+**Question 7.**
+~~**Empty stream** (§4.2 `stream`): post `" "` like the core fallback
+(assumed) or return `null` after consumption.~~ **Settled**: `" "` stands.
+An empty stream is not hypothetical — `fromFullStream` in `chat` yields
+only strings, `markdown_text`/`task_update`/`plan_update` and `text-delta`
+and drops every other chunk type (read in 4.39.0,
+`.claude/rules/chat-sdk-core-facts.md`), so an AI SDK `fullStream` whose
+model failed arrives here empty rather than throwing. `" "` keeps the
+contract every caller can rely on (`stream()` resolves to a `SentMessage`
+the handler can edit or delete) and matches the core's own fallback for the
+same input; `null` after consumption is a shape no measurement covers, and
+it would hand `thread.post(stream)` a null the caller has to branch on for
+a case they cannot distinguish from success. The cost is a comment holding
+one space, which is visible in Backlog and therefore documented in README's
+Streaming limitation rather than hidden. The same answer covers an
+`options.signal` abort that buffered nothing: the caller cannot tell the two
+apart, and §6.4 said "if non-empty" only because it was written before this
+question was settled.
+
+**Question 9.**
+~~**Type 4 deletion**: ship in the first release or defer.~~ **Settled**:
+shipped. Type 4 is dispatched unconditionally as
+`chat.processMessageDeleted`; there is no option to turn it off, and the
+registration guidance still leaves 4 optional so a project that does not
+want deletions simply does not subscribe to it.
+
+**Question 16.**
+~~**Webhook form of types 18–20**: the activity API form is measured; if a
+webhook body turns out to add `content.assignee` (as type 1 does), rule 4
+of §5.4 gains an assignment-at-creation mention.~~ **Settled**: it does.
+The measurement waived before P3 (it needs a receiver Backlog's servers
+can reach) was taken afterwards on a deployed receiver, with every
+delivery matched to the same activity by activity id and diffed in both
+directions (measured on a development space, 2026-09-06). The webhook
+`content` is the activity key set plus `assignee`, `base`, `branch` and
+`diff`, on all three types, and the keys the two forms share hold equal
+values.
+
+Rule 4 gained the assignment-at-creation mention on 18 as predicted. What
+the question did not anticipate is that the same key is on 19 and 20 as
+the **standing** assignee, and on issue types 2 and 3 as well — repeated
+on every delivery whether or not the assignment changed. It is therefore
+read on 18 alone: a multi-field `PATCH` that changed no assignee carried
+the bot in `content.assignee` and notified nobody, so reading it on 19
+would make every edit of a bot-assigned pull request a mention. An
+assignment on any other type reports itself in `changes[]`, and one
+`changes[]` leaves out is covered by rule 6, which reads whom Backlog
+notified.
+
+`base`, `branch` and `diff` change no behaviour; the schemas name them as
+the record of the measurement (§5.2). What remains unmeasured is narrower
+and recorded as such in `.claude/rules/backlog-pull-request-facts.md`:
+the webhook deliveries for a merge, a close and a comment with
+`attachmentId[]`, whose `changes[]` shapes are still activity-form
+measurements. A merge and a close have no API, so capturing them needs a
+git push or the UI (docs/plans/pull-request-support.md §4 P3, §5 M1).
+
+**Question 17.**
+~~**D9 rule 6 accepts any `reason`** — confirm, or name the reason codes
+to exclude.~~ **Settled**: any `reason` stands, and the candidate false
+positive has been measured away. A second account watching an issue it
+was neither assigned to nor named in appears in **no** `notifications[]`:
+a plain comment, a priority-only `PATCH` and a description-only `PATCH`
+on that issue all arrived with `notifications: []`, while the control —
+the same kind of comment on the same issue, addressing a user who was not
+watching it — carried that user with `reason: 2` (measured on a
+development space, 2026-09-06). Watching is a separate mechanism end to
+end: it creates no entry in the watcher's own `GET /notifications`
+either, and `POST /watchings` produced no delivery on a hook registered
+for types 1, 2, 3, 4, 14 and 17 — the issue types; no other type was
+subscribed. So `notifications[]` names only users somebody addressed, as
+far as the acts measured here, and every `reason` observed on a delivery
+is an explicit act — 1 and 10 an assignment (issue, pull request), 2 and
+11 a comment's notification field or a mention in its text. `<@project>`
+is not a counter-example: it addresses every project member deliberately,
+so a bot that is a project member is being spoken to by the same
+definition rule 1 already uses for a hand-typed `@Chatbot`.
+
+### 15.3 Settled in the release review of 2026-09-08
+
+Decisions this section never carried a ⚑ for, settled while the `v0.1.0`
+milestone was being cleared. They are here so this register is the whole
+picture on that date; the behaviour itself is specified in the section the
+named PR amends, which is where it must be read from.
+
+| Decision | Verdict | Where it is specified |
+| --- | --- | --- |
+| A forward first page fetches one comment (`limit: 1`) | **confirmed** — as it stands | §7.1. The one comment is what distinguishes "there are comments, so restart at cursor 0" from "there are none, so this is the end". Backlog does expose Count Comment, but it costs the same one `read`, so asking it instead saves nothing (#88) |
+| `ThreadInfo.metadata` timestamps | **changed** — ISO strings, not `Date` (breaking) | §7.3. `metadata` is `Record<string, unknown>`, so a `Date` in it is invisible to the type and turns into a string in any consumer that round-trips the object through JSON — the same reason `src/types.ts`'s raw shapes carry ISO strings while `src/client/port.ts` carries `Date` (#88) |
+| Ids, hosts and numeric config the adapter cannot honour | **changed** — rejected with a `ValidationError` instead of being carried into a request (breaking) | §2 grammar, §3.2 config table (#88) |
+| `dist/index.d.ts.map` | **changed** — no longer emitted; the JavaScript map stays | `files` does not ship `src/`, so a declaration map could only point at sources that are not published (#95, split out of #82) |
+| The d.ts pass under TypeScript 7 | **confirmed** — as it stands | attw at the `esm-only` profile, publint and `scripts/check-published-types.mjs` all pass on the current output; the follow-up #95 named — asserting that the built `.d.ts` still *declares* the package's entry points — is described in that PR and not yet filed (§15.4) |
+| What `parseMessage` accepts | **changed** — all five raw shapes, the ones the adapter itself produces included | §4.1 (#91, issue #49) |
+| `webhookSecret` minimum length | **changed** — under 16 bytes is a hard `ValidationError`, not a warning | §3.2 config table, §11 (#81) |
+| An unknown `textFormattingRule` | **confirmed** — treated as Markdown, as §9.2 already specified | §9.2 (#83) |
+| What `src/subject/containment.test.ts` proves | **changed** — it is a tripwire, not a proof: it matches only a receiver it can name | The test's own header lists what it cannot see, and CLAUDE.md says the same (#83) |
+| Card fallback text | **changed** — rendered in the project's own notation rather than always Markdown | §9.4 (#85) |
+| Backlog-notation escaping in user text | **not implemented, and carved out** — documented as a limitation | §9.7 (#86). The escape syntax exists; applying it needs a measurement on a notation project, so it is issue **#92**, waiting on the same space as #52 |
+
+### 15.4 Open
+
+Four items are still the maintainer's to decide, in the order they would stop
+a release: the first two block `0.1.0`, the last two do not. A closing
+paragraph names what the same review carved into follow-up issues instead,
+because those are work, not decisions.
+
+**28. Repository visibility at publish time — blocks `0.1.0`.** The
+repository is `internal` while `release.yml` runs
+`npm publish --access public`. On the day the package appears on the registry
+its README is served to anonymous readers, and every absolute link in it, the
+license badge's target and `package.json`'s `homepage` resolve to a 404 for
+them; `--provenance` from a non-public repository is also unverified here.
+Recommendation: make the repository public before running the release, which
+settles all four at once. The alternative — publishing from an internal
+repository with relative links and no badge — costs the package its
+provenance attestation and is harder to undo, because the README published
+for a version is immutable. Either way the call has to be made **before** the
+first `release.yml` run (#82 carries the same note for the releaser).
+
+**The live suite has never been run — blocks `0.1.0`.** Criterion 3 of
+[docs/plans/adapter-implementation.md](../plans/adapter-implementation.md) §1
+requires it to have run at least once against a real space, with the result
+in the release PR, and §12.3 is written for that run. It needs credentials
+and a Git-enabled project on a development space (**#52**). Recommendation:
+keep the criterion. The suite is the only thing that ever executes the port
+against Backlog's real wire shapes, and #19 (`fix(client): use the wire
+shapes Backlog actually sends and accepts`) is what that class of mistake
+looks like when it is found late. Two other items ride along on that run and
+should be taken in the same session rather than opened separately: the
+remaining item of **#51** (a schema fixture recorded from a real body, so the
+test doubles can catch drift) and the two measurements below.
+
+**M9 and M12 stay unmeasured — not a blocker.**
+[docs/plans/pull-request-support.md](../plans/pull-request-support.md) §5: M9
+is a populated `pullRequest` / `pullRequestComment` in the bot's own
+notification feed, M12 is redelivery. Neither gates behaviour — `markAsRead`
+matches by kind either way, and redelivery is documentation — and both need
+the same space as the live suite.
+
+**Catalog listing: community or vendor-official — not a blocker.** Prepared
+but never chosen (§13 holds the feature-matrix values; the implementation
+plan's §8 keeps it out of scope). Community listing needs a docs page and
+allowlist entries in `vercel/chat`; vendor-official additionally needs
+catalog and scaffold entries, a changeset, product docs and an announcement.
+Recommendation: publish `0.1.0` first and list it as community, because the
+vendor-official path asks for an announcement of an adapter nobody has
+installed yet. Record whichever is chosen in README's "Status" section.
+
+**Carved out rather than left open.** Three defects and one build check found
+in the same review are follow-up issues, not decisions, and none of them
+blocks `0.1.0`: **#92** (apply Backlog notation's `\` escape to user text —
+needs #52's space), **#93** (a `Blob` whose `arrayBuffer()` rejects leaks an
+unattributed exception), **#94** (a heading marker with no text is an empty
+heading, unlike a list marker), and the export assertion for
+`scripts/check-published-types.mjs` described in #95's follow-up section,
+which has no issue yet.

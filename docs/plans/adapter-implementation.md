@@ -7,6 +7,13 @@ says **what**; this plan says in which order, with which acceptance bar, and
 Repository rules are in [CLAUDE.md](../../CLAUDE.md) and are not repeated
 beyond §2.
 
+**P0 through P7b have landed** (§3 carries the status per phase). The phase
+sections are kept in the tense they were written in, as the record of what
+each PR was asked to do and what it cost; what is still open is P7d, the
+release itself, and §1 says which of the six done criteria hold today.
+Decisions this plan assumed are settled in the spec's §15 register, not here
+(§6).
+
 ## 1. Goal and definition of done
 
 The project is done when all of the following hold on `main`:
@@ -24,6 +31,14 @@ The project is done when all of the following hold on `main`:
    the CI smoke test match the code (§13).
 6. `0.1.0` is published from `release.yml` and installs into a consumer that
    imports `createBacklogAdapter` under Node 20 (§7).
+
+**Status, 2026-09-08** (`main` at `72b0148`): 1, 2, 4 and 5 hold. 3 holds in
+its first half only — `pnpm test` needs no network and the live suite skips
+itself, but it has never been run against a real space, which needs the
+credentials issue #52 is waiting on. 6 has not happened: the package is
+unreleased (#53), and the repository's visibility has to be settled before
+`release.yml` runs at all (spec §15.4). Those two are the whole distance
+between here and the first release.
 
 ## 2. Ground rules recap
 
@@ -61,11 +76,23 @@ stack never grows. P4 branches from `main` and can be developed in parallel
 with P1–P3 by a second contributor. P5 starts when P2, P3 and P4 are on
 `main`. P6 stacks on P5. P7 stacks on P6 or follows it.
 
-Until P7 the package is unreleased (`0.0.0`, no tag), so `main` may hold a
-compiling adapter whose not-yet-implemented required members throw
-`AdapterError("backlog", "not implemented", "NOT_IMPLEMENTED")`; every PR still
-passes all five gates on its own. Nothing is published before the definition
-of done is met.
+That ordering held. The package is still unreleased (`0.0.0`, no tag), and the
+licence the plan took — that `main` may hold a compiling adapter whose
+not-yet-implemented required members throw
+`AdapterError("backlog", "not implemented", "NOT_IMPLEMENTED")` — was never
+used: no phase left a required member throwing it. Every PR passed all five
+gates on its own, and nothing is published before the definition of done is
+met.
+
+**Status per phase, 2026-09-08.** P0 (#2) through P6 are on `main`, and so is
+the whole pull-request stack that followed them
+([pull-request-support.md](./pull-request-support.md) §4), which rewrote the
+id grammar P2 introduced. P7 is described below with its own status: P7a and
+P7b have landed, P7c is decided against, P7d is the release. A further
+sixteen PRs (#77–#95) landed on 2026-09-08 out of the first-release review.
+They opened no new phase; the eleven decisions among them that change what
+this adapter does are rows in the spec's §15.3, and the defects they left
+behind are issues #92, #93 and #94 (spec §15.4).
 
 Size estimates are lines of non-test TypeScript, to calibrate review effort,
 not a commitment.
@@ -366,10 +393,31 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
 | P7c | `ci(ci): run the live suite on manual dispatch only` (optional) | none | A `workflow_dispatch` input that provides `BACKLOG_*` from repository secrets; never on PRs from forks. Skip if the maintainer prefers local-only. |
 | P7d | `chore(release): publish the first release` | none | Verify Trusted Publishing and the `production` environment exist (DEVELOPMENT.md prerequisites), then run `release.yml` with `minor` (§7). |
 
+**Status, 2026-09-08.**
+
+- **P7a — landed, and then some.** All six deliverables are tracked and
+  describe the two-kind adapter; the release review added #77 (what the
+  adapter actually delivers) and #82 (the README links npm cannot follow, and
+  the project status), so the acceptance bar below is met for everything
+  except the release itself.
+- **P7b — written, never run.** `src/test/live.test.ts` exists and
+  self-skips (#15, extended for pull requests by #24), so criterion 3 of §1
+  holds in its first half only. The run against a real space, and the
+  `rateLimit(host)` snapshot that goes in the release PR, are issue **#52**;
+  the remaining item of **#51** (a schema fixture recorded from a real body)
+  and the two unmeasured pull-request questions (M9, M12) belong to the same
+  session.
+- **P7c — decided against.** No live job exists in `.github/workflows/ci.yml`
+  and none reads a `BACKLOG_*` secret; the suite is opt-in, so nothing in CI
+  depends on it (spec §15.1 row 19).
+- **P7d — not started.** Issue **#53** carries it, and the repository's
+  visibility has to be settled first (spec §15.4).
+
 - **Acceptance**: `npm pack --dry-run` contains only `dist/`, `package.json`,
   `README.md`, `LICENSE`; a scratch consumer on Node 20 imports the package
   and constructs the adapter from env; the GitHub release notes are correctly
-  categorised (every `feat` PR carried `enhancement`).
+  categorised (every `feat` PR carried `enhancement`). None of the three has
+  been checked yet — they are P7d's own verification and belong in #53.
 - **Catalog decision**: community listing needs only a docs page and
   allowlist entries in `vercel/chat`; vendor-official additionally needs the
   catalog/scaffold entries, a changeset, product docs and an announcement.
@@ -413,26 +461,25 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
 | `chat` minor release changes the `Adapter` type | Typecheck breaks on `^4.39.0` consumers | Peer range per D15; Dependabot bumps `chat` dev dependency weekly so drift surfaces in CI, not at a consumer. |
 | Stack rebases after squash merges | Conflicts, duplicated diffs | Depth ≤ 3; record parent tips; `git rebase --onto`; merge P1 promptly. |
 
-## 6. Decisions to confirm with the maintainer (⚑)
+## 6. Decisions this plan assumed
 
-Each entry names the default assumed by the spec and the phase it blocks.
+All fourteen are settled, and their verdicts are **not repeated here**: they
+are rows 1–12, 18 and 19 of the decision register in
+[docs/specs/adapter.md](../specs/adapter.md) §15, alongside the pull-request
+stack's, each with the module and the test that implement it. One register is
+the point — the table this section used to carry and the spec's had drifted
+into saying "not yet confirmed" about defaults the code had long since
+implemented and tested, which is what issue #54 was filed for.
 
-| # | Decision | Default assumed | Blocks |
-| --- | --- | --- | --- |
-| 1 | D1 config shape: single-space fields with env fallbacks **and** `installations[]` | Both shapes, mutually exclusive | P2 |
-| 2 | D14 formatting-rule cache | Cache forever; `fetchChannelInfo` refreshes | P5 |
-| 3 | `renderFormatted(content, target?)` optional second parameter | Accept it | P2 (signature), P5 |
-| 4 | Webhook before `initialize()` | 503 with `error` log | P3 |
-| 5 | Non-POST webhook request | 405 | P3 |
-| 6 | `maxWebhookBodyBytes` knob | Keep, default 5 MiB, 413 | P3 |
-| 7 | Empty stream | Post `" "` like the core fallback | P5 |
-| 8 | Empty summary in `postChannelMessage` | `ValidationError` | P6 |
-| 9 | Type-4 deletion → `processMessageDeleted` in the first release | Yes, in P6 | P6 |
-| 10 | Retry defaults | `maxRetries: 1`, `maxWaitMs: 60_000` | P1 |
-| 11 | Live-suite variables | `BACKLOG_HOST`, `BACKLOG_API_KEY`, `BACKLOG_LIVE_ISSUE_ID` | P7b |
-| 12 | No timestamp-staleness window despite CLAUDE.md's "Don't" | Accept and amend CLAUDE.md wording for this adapter | P3 |
-| 13 | P0 title scope `docs(docs)` vs `docs(adapter)` | `docs(docs)` (scope table now lists `docs/`) | P0 |
-| 14 | Optional P7c CI live job | Skip unless secrets exist | P7 |
+What a reader of *this* plan needs from it: eleven of the fourteen shipped as
+the default assumed here; two were only ever about this plan's own process
+(the `docs(docs)` title scope of P0, and P7c's optional CI live job, which is
+skipped); and one **changed** — the live suite reads a fourth variable,
+`BACKLOG_LIVE_PULL_REQUEST`, because a pull request needs a Git-enabled
+project and two coordinates an issue id cannot carry. No phase was ever
+blocked waiting for an answer, and none of the eleven was answered by
+anything other than the code being written — which is the thing worth
+noticing next time a plan opens with fourteen questions.
 
 ## 7. Versioning
 

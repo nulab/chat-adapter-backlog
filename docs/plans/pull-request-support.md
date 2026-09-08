@@ -6,15 +6,18 @@ body is the root message, its comments are messages, `thread.post()` comments
 on it, and the activity types 18–20 reach `Chat` handlers the way 1–4 do
 today. This plan states the target design, the order of work, the acceptance
 bar per PR, and what has to be measured on a real space before code depends on
-it. The behavioural contract itself is amended in
+it. The behavioural contract itself was amended in
 [docs/specs/adapter.md](../specs/adapter.md) by the first PR of the stack
-(§6, P0); until then this document is the specification of record for
-pull-request behaviour, and section references (§n) without a prefix point
-into the current spec.
+(§4, P0), so **that spec is the specification of record** for pull-request
+behaviour now, not this document; section references (§n) without a prefix
+point into it. What this plan still carries is the stack's status (§4), the
+rationale per PR, the measurements (§5) and the one measurement that was
+waived rather than satisfied.
 
-The package is unreleased. Nothing below preserves the current id grammar,
-raw-message shapes or exported types; where the cleanest model needs a
-breaking rewrite, it is chosen and the PR title carries `!`.
+The whole stack has merged (§4). The package is still unreleased. Nothing
+below preserved the current id grammar, raw-message shapes or exported types;
+where the cleanest model needed a breaking rewrite it was chosen, and P2's
+title carries `!`.
 
 ## 1. Goal and definition of done
 
@@ -38,10 +41,18 @@ Done means all of the following hold on `main`:
    developer.nulab.com page or measured and recorded in
    `.claude/rules/backlog-pull-request-facts.md` with a date (§5). The
    activity-API form of every pull-request operation was measured on
-   2026-09-06 and is in that file; the webhook form is the one measurement
-   still open.
+   2026-09-06, and so was the webhook form — twice, on a deployed receiver,
+   after the gate on it was waived (§5 M1; spec §15 row 16). What is still
+   uncaptured is narrower: the webhook bodies of a merge, a close and a
+   comment with `attachmentId[]`, plus M9 and M12 (§5).
 7. README, `sample-messages.md`, DEVELOPMENT.md, `.env.example`, CLAUDE.md
    and the CI smoke test describe the two-kind adapter.
+
+**Status, 2026-09-08**: all seven hold on `main`. 6 holds in the sense it
+was written in — every fact the code relies on is cited or dated. The three
+webhook bodies named above, M9 and M12 are still uncaptured, but no code
+relies on them, which is why they are follow-ups on #52 rather than blockers
+(spec §15.4).
 
 Non-goals (declared, not deferred): creating or merging pull requests from
 Chat (`postChannelMessage` keeps creating issues; Backlog documents no status
@@ -442,27 +453,29 @@ same key on 19 and 20 is the standing assignee, and a fallback built on it
 over-reports a mention on any multi-field edit, so only 18 reads it
 (`fix(webhook)`, §5 M1).
 
-**Status** (2026-09-06, as this plan's P5 is written):
+**Status** (2026-09-08): the stack is **fully merged**, bottom-up and in
+order; the eight squash commits below are the whole of it.
 
-| PR | Branch | State |
+| PR | Landed as | Squash commit |
 | --- | --- | --- |
-| P0 docs | `lollipop-onl/PR-activity-support` | **merged to `main`** (`fe5a75b`) |
-| P1 client | `lollipop-onl/pr-client` | written and pushed; below P5 in the stack, not yet on `main` |
-| P2 adapter | `lollipop-onl/pr-subject-layer` | written and pushed; not yet on `main` |
-| P3 webhook | `lollipop-onl/pr-webhook` | written and pushed; not yet on `main` — shipped with **M1's webhook half waived, not measured** |
-| P4 adapter | `lollipop-onl/pr-optional-members` | written and pushed; not yet on `main` |
-| P5 docs | `lollipop-onl/pr-docs` | this PR |
+| — ci | #21 `ci(ci): run checks on every pull request, not only those based on main` | `cf68eae` |
+| — client fix | #19 `fix(client): use the wire shapes Backlog actually sends and accepts` | `5954cc3` |
+| P0 docs | #18 `docs(docs): specify pull request threads` | `fe5a75b` |
+| P1 client | #20 `feat(client): add pull request, repository and star-target endpoints to the port` | `5175e1d` |
+| P2 adapter | #22 `feat(adapter)!: address issues and pull requests through one subject layer` | `3286565` |
+| P3 webhook | #23 `feat(webhook): dispatch pull request activities 18-20` | `cc4ba70` — shipped with **M1's webhook half waived, not measured**; captured afterwards and corrected by #32 |
+| P4 adapter | #24 `test(adapter): pin read receipts, cache invalidation and live coverage for pull requests` | `a9b43d4` |
+| P5 docs | #25 `docs(docs): document pull request threads, ids and limitations` | `f215cfd` |
 
-Two things differ from the plan above and are worth knowing before the next
-rebase. The stack is six deep, not three: `ci(ci): run checks on every pull
-request, not only those based on main` and `fix(client): use the wire shapes
-Backlog actually sends and accepts` sit **below** P1, the first because CI
-skipped stacked PRs entirely and the second because P1's conformance work
-found the issue-side wire shapes wrong. And P4 and P5 were branched on top of
-P3 instead of off `main`, because P4 touches `fetchChannelInfo` and
-`markAsRead`, both of which P2 rewrote, and P5 documents what P3 dispatches —
-so every squash below still costs a `git rebase --onto` on everything above it
-(CLAUDE.md "Stacked PRs"). Nothing in the stack may merge out of order.
+Two things differed from the plan above, and both are worth knowing the next
+time a stack this deep is opened. The stack was six deep, not three: #21 and
+#19 sat **below** P1, the first because CI skipped stacked PRs entirely and
+the second because P1's conformance work found the issue-side wire shapes
+wrong. And P4 and P5 were branched on top of P3 instead of off `main`,
+because P4 touches `fetchChannelInfo` and `markAsRead`, both of which P2
+rewrote, and P5 documents what P3 dispatches — so every squash below cost a
+`git rebase --onto` on everything above it (CLAUDE.md "Stacked PRs"). Nothing
+merged out of order.
 
 Every PR: five gates green, title with scope, label from type, squash body
 written on purpose, stack declared in the first line of the body (CLAUDE.md
@@ -679,10 +692,10 @@ vocabulary `example.backlog.com`, project 500, repository 700, pull request
 | M6 | Comment id sequences | **Measured**: separate sequences (7-digit vs 9-digit); overlap possible. |
 | M7 | `pullRequest.issue` shape | **Measured**: a full Issue on list and get alike; the list page's stub example is wrong. |
 | M8 | `attachmentId[]` on a PR comment | **Measured**: accepted; appears in `changeLog[field="attachment"]` by name only and in `GET …/attachments` with an id. |
-| M9 | Notifications with `pullRequest`/`pullRequestComment` in the bot's feed | **UNMEASURED** (fields exist on every item; a populated one needs a second user to mention or assign the bot). Gates nothing: `markAsRead` matches the field by kind either way. |
+| M9 | Notifications with `pullRequest`/`pullRequestComment` in the bot's feed | **UNMEASURED**, and staying that way until #52 (fields exist on every item; a populated one needs a second user to mention or assign the bot). Gates nothing: `markAsRead` matches the field by kind either way, so it does not block `0.1.0` (spec §15.4). |
 | M10 | Bucket of PR list/count | **Measured**: `read`. |
 | M11 | Does editing a PR comment fire an activity? | **Measured**: no. |
-| M12 | Redelivery | UNMEASURED; documentation only. |
+| M12 | Redelivery | **UNMEASURED**, and staying that way until #52; documentation only, so it does not block `0.1.0` (spec §15.4). |
 
 Two facts the questions did not anticipate, both recorded: creating a pull
 request with `notifiedUserId[]` produces a system comment that no activity
@@ -725,20 +738,23 @@ The CLAUDE.md checklist, plus for this stack:
 | Read-bucket cost of PR reads (get + list per page) | Same as issues; PR list is `read` not `search`, so lighter | Documented; `rateLimit(host)` exposes it. |
 | Deep stack (P1→P2→P3) | Rebase churn after each squash | Merge P1 the moment it is green; P2 records P1's tip; `git rebase --onto`. |
 
-## 8. Decisions to confirm with the maintainer (⚑)
+## 8. Decisions this plan assumed
 
-| # | Decision | Default assumed | Rejected | Blocks |
-| --- | --- | --- | --- | --- |
-| D-PR1 | Channel of a pull-request thread | The **project**, like issues: webhooks carry `project.id`, the formatting rule is per project, and `channelIdFromThreadId` stays "first three segments". | The repository (would make `listThreads` list PRs but splits one project into N+1 channels and has no formatting rule of its own). | P0, P2 |
-| D-PR2 | Thread-id shape | Nested `subject: BacklogSubjectRef` shared with message ids and raws; kind keyword explicit for **both** kinds (`issue:`, `pr:`). | Flat `{ kind, issueId?, repositoryId?, number? }`; keeping issues unmarked (`4 segments = issue`) for brevity — the GitHub debt, chosen deliberately not to inherit. | P2 |
-| D-PR3 | `deleteMessage` on a PR thread | `AdapterError(…, "backlog", "UNSUPPORTED_OPERATION")` before any call. | `ValidationError` (mislabels a correct call); silent success (forbidden: fabricated success); omitting `deleteMessage` (it is a required member). | P2 |
-| D-PR4 | Adapter option to enable/disable pull requests | None; the webhook subscription is the switch. | `subjects: ('issue' \| 'pullRequest')[]` config (duplicates what registration already decides; a mismatch would silently drop delivered events). | P0 |
-| D-PR5 | Type 21 handling | 200 Ignored, not in the registration guidance: it was not observed (merge and close are 19 status changes, no delete operation exists, measured). | `processMessageDeleted` on 21 (nothing to test it against); guessing from `backlog-js`'s enum name. | P3 |
-| D-PR6 | A PR linked to an issue | Its own thread; the link is metadata (`fetchThread.metadata.issue`, `raw.payload.content.issue`). | Routing PR activity into the linked issue's thread (a PR can be re-linked; the thread would move). | P3 |
-| D-PR7 | `listThreads` population | Issues only, documented; `api(host).listPullRequests` for PRs. | Interleaving issues and every repository's PRs (N+1 reads, two cursor shapes in one string); listing PRs only (breaks the current behaviour with nothing gained). | P4, P5 |
-| D-PR8 | `fetchSubject().type` for a pull request | `'pull_request'` (GitHub's convention; the core leaves `type` free). | `'pullRequest'` (matches our `kind` but not the ecosystem a bot author already handles). | P2 |
-| D-PR9 | Root message part tag | `r` for both kinds (was `i`, which meant "issue"). | Keep `i` (misleading on a PR); no tag (irregular grammar). | P2 |
-| D-PR10 | PR comment attachments have no id in `changeLog` | Lazy: `fetchData` lists `…/attachments`, matches by name (newest wins), downloads. | No `fetchData` (loses the file); an eager list per comment (a read per message). | P2 |
+All ten are settled, and their verdicts are **not repeated here**: D-PR1 to
+D-PR10 are rows 20, 14, 21, 22, 23, 24, 15, 25, 26 and 13 of the decision
+register in [docs/specs/adapter.md](../specs/adapter.md) §15, each with the
+module and the test that implement it. One register is the point — the table
+this section used to carry, the implementation plan's and the spec's had all
+drifted into saying "to confirm" about defaults the code had long since
+implemented and tested, which is what issue #54 was filed for.
+
+What a reader of *this* plan needs from it: every one of the ten shipped as
+the default assumed here, none was answered by anything other than the code
+being written, and the alternative each rejected is recorded in the spec's
+§14 (rows D-PR1 to D-PR10) rather than lost. Two are worth re-reading before
+extending the subject layer — D-PR2 (the nested `subject` in the id grammar,
+which the containment test polices as a tripwire rather than a proof) and
+D-PR5 (type 21 stays 200 Ignored until a payload is seen).
 
 ## 9. Out of scope / later
 
