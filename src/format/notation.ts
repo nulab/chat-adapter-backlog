@@ -53,6 +53,11 @@ export class BacklogNotationConverter extends BaseFormatConverter {
       case 'paragraph':
         return this.inlineChildren(node);
       case 'text':
+        // Not escaped, although notation does have a `\` escape: which
+        // characters it covers, and what it does before an ordinary one, are
+        // undocumented and unmeasured, so escaping here would be a guess that
+        // eats a caller's backslashes (docs/specs/adapter.md §9.7). Measure
+        // against a real space before adding one.
         return getNodeValue(node);
       case 'strong':
         return `''${this.inlineChildren(node)}''`;

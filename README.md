@@ -315,6 +315,21 @@ Limitations worth knowing before you build on this:
   inline code becomes plain text and table column alignment is dropped.
   `&color()`, `#contents`, `#rev`, `#attach`, `#thumbnail`, wiki links and
   issue-key auto-links pass through as text.
+- **Notation markers in your own text become decoration.** Backlog notation has
+  a documented escape — a `\` before a special character prints it literally,
+  so `\%\%Not Striked\%\%` renders as `%%Not Striked%%` — but this adapter does
+  **not** apply it when rendering a message to a `backlog` project. Whatever
+  markers your text already contains are markup by the time Backlog draws it:
+  `price is ''100''` puts `100` in bold, `50%% off, %%today` strikes text
+  through, `[[TICKET-1]]` becomes a link, a line opening with `* ` becomes an
+  H1, and a line that is just `{code}` opens a code macro that swallows the
+  rest. Model-generated replies hit this without trying. Escaping is not
+  applied because the guide documents the rule for `%` and `\` only and does
+  not say which other characters `\` covers, what it does before an ordinary
+  character, or how an escaped comment should read back in — getting that
+  wrong would eat your backslashes instead. If you need a literal marker
+  today, post a `{ raw }` postable: it bypasses the converter and reaches
+  Backlog verbatim, so you can apply `\` yourself.
 - **A hand-typed `@Chatbot` is indistinguishable from a real mention.** Backlog
   rewrites mentions to resolved display text before storing them, so a text
   match cannot tell a real mention from someone typing the bot's name. False

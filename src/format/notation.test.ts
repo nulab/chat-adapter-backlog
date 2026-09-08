@@ -217,6 +217,18 @@ describe('BacklogNotationConverter outbound (fromAst)', () => {
     // emitted unchanged — indistinguishable from plain text once rendered.
     expect(converter.fromAst(ast)).toBe('const x');
   });
+
+  it('a text node carrying notation markers is emitted unescaped', () => {
+    const ast: RootNode = root([
+      paragraph([text("price is ''100'' and 50%% off [[x]]")]),
+    ]);
+
+    // §9.7: Backlog notation does have a `\` escape, but `fromAst` does not
+    // apply it, so these markers decorate the rendered comment. Pinned here so
+    // the day the escape is measured and implemented, this test has to be
+    // rewritten rather than quietly kept passing.
+    expect(converter.fromAst(ast)).toBe("price is ''100'' and 50%% off [[x]]");
+  });
 });
 
 describe('BacklogNotationConverter inbound (toAst)', () => {

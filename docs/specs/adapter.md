@@ -1399,7 +1399,7 @@ must fail, not silently post garbage).
 | --- | --- |
 | `heading` depth n | `*` × n, space, inline content |
 | `paragraph` | inline children, blank line between blocks |
-| `text` | value |
+| `text` | value, with notation markers left unescaped (§9.7) |
 | `strong` | `''…''` |
 | `emphasis` | `'''…'''` |
 | `delete` | `%%…%%` |
@@ -1466,6 +1466,59 @@ every list open above it ends at the first line that is not one.
 Inline code and table alignment outbound to notation; colour, revision links,
 TOC and attachment macros inbound; the summary of a created issue is always
 plain text. Documented in README under "Limitations".
+
+### 9.7 Notation projects: user text reaches Backlog unescaped
+
+Backlog notation **does** have an escape. A `\` written before a special
+character outputs that character literally, and `\\` outputs one `\`:
+`\%\%Not Striked\%\%` renders as `%%Not Striked%%`. One backslash escapes one
+character, so a two-character marker needs two of them. Markdown projects carry
+the same escape. (Backlog user guide, "特殊な文字のエスケープ" — notation
+<https://backlog.com/ja/enterprise-help/userguide/userguide1862/>, Markdown
+<https://backlog.com/ja/enterprise-help/userguide/userguide1865/>; read
+2026-09-08. The rendered result was not measured; see below.)
+
+`fromAst` does not apply it. §9.4's `text` row emits the node's value unchanged,
+so whatever notation markers a caller's prose happens to contain are markup by
+the time Backlog renders the comment:
+
+| A `text` node containing | is rendered by a `backlog` project as |
+| --- | --- |
+| `price is ''100'' before tax` | `100` in bold, the quotes gone |
+| `50%% off, %%today only` | `off, ` struck through |
+| `'''do not ship'''` | `do not ship` in italics |
+| `see [[TICKET-1]] first` | `TICKET-1` as a link |
+| `* required` opening a line | an H1 heading |
+| `- one` opening a line | a list item |
+| `{code}` alone on a line | an open code macro that swallows what follows |
+| `\\server\share` | one backslash short — `\\` is the documented escape for `\` |
+
+Generated text is the realistic trigger rather than a contrived one: a model
+that writes `50%%` or quotes a value as `''100''` decorates a comment nobody
+asked to decorate.
+
+This is recorded as a limitation instead of fixed because the fix needs
+measurements this repository does not have. The user guide demonstrates the
+escape for `%` and `\` only, and four things it does not state each change what
+a correct implementation would emit:
+
+1. Which characters `\` actually escapes. `'`, `[`, `*`, `{`, `|`, `>`, `-` and
+   `+` are all load-bearing in §9.4's table and none of them is documented as
+   escapable.
+2. What a `\` before an ordinary character does — dropped, or kept. This decides
+   the whole shape of the fix: escaping too widely eats a caller's own
+   backslashes, escaping too narrowly lets markers through.
+3. Whether the escape reaches the line-anchored block constructs (`\*` heading,
+   `\-` list, `\|` table row, `\{code\}`) or only inline markers.
+4. What `toAst` owes a `\` a human typed. §9.5 carries it through as literal
+   text today, so an escaped comment read back out of Backlog shows its
+   backslashes in the Markdown a handler sees.
+
+Escaping is therefore not inferred from the documentation; the set has to be
+measured against a real space first. Until it is, a caller who needs a literal
+marker has `postMessage`'s `{ raw }` postable, which bypasses the converter
+(§9.4 is not consulted) and reaches Backlog verbatim, so the caller can apply
+`\` itself.
 
 ## 10. Observability and logging
 
@@ -1578,7 +1631,9 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   open depths, a marker with no text — at the outer depth, nested, and
   separated by several spaces — a `----` adjacent to a list with and without a
   trailing space, and a CRLF line ending; an unterminated
-  `''`/`'''`/`%%`/`[[`; a `|` inside a table cell's link; `toAst` throwing →
+  `''`/`'''`/`%%`/`[[`; a `|` inside a table cell's link; a `text` node whose
+  own value holds notation markers, emitted unescaped per §9.7; `toAst`
+  throwing →
   plain paragraph + warn; rule cache primed by webhook path, replaced by
   `fetchChannelInfo`, lookup failure not cached; `renderFormatted`/
   `parseMessage` honour a cached `backlog` rule and warn when uncached.
