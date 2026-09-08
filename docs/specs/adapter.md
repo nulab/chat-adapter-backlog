@@ -1471,18 +1471,36 @@ plain text. Documented in README under "Limitations".
 
 Backlog notation **does** have an escape. A `\` written before a special
 character outputs that character literally, and `\\` outputs one `\`:
-`\%\%Not Striked\%\%` renders as `%%Not Striked%%`. One backslash escapes one
-character, so a two-character marker needs two of them. Markdown projects carry
-the same escape. (Backlog user guide, "特殊な文字のエスケープ" — notation
+`\%\%Not Striked\%\%` renders as `%%Not Striked%%`, and `\\Homehogehoge2`
+renders as `\Homehogehoge2`. One backslash escapes one character, so a
+two-character marker needs two of them. Markdown projects carry the same
+escape. (Backlog user guide, "特殊な文字のエスケープ" — notation
 <https://backlog.com/ja/enterprise-help/userguide/userguide1862/>, Markdown
 <https://backlog.com/ja/enterprise-help/userguide/userguide1865/>; read
-2026-09-08. The rendered result was not measured; see below.)
+2026-09-08. Cite the `ja` pages: the English paths for both are 404.)
 
-`fromAst` does not apply it. §9.4's `text` row emits the node's value unchanged,
-so whatever notation markers a caller's prose happens to contain are markup by
-the time Backlog renders the comment:
+The guide names the escape character as `\` glossed with a yen sign —
+`「\(¥¥)」を特殊な文字の前に書くことで` on the notation page, `(¥)」を…` on the
+Markdown one. That gloss is the ordinary Japanese way of writing "backslash,
+the key printed ¥ on a JIS keyboard", and U+005C is what a JIS font draws as
+`¥`. Whether Backlog *also* accepts a literal yen sign — half-width U+00A5 or
+full-width U+FFE5 — as an escape character is a different question, and it is
+unmeasured (unknown 5 below). It is not an academic one: `¥100` is ordinary
+Japanese prose, and either answer has a cost.
 
-| A `text` node containing | is rendered by a `backlog` project as |
+One caveat about the Markdown page itself: Backlog's CMS has eaten its
+backslashes. `userguide1865` prints its first example with input
+`*Not Striked*` and result `*Not Striked*` — identical, because the input
+should read `\*Not Striked\*` — and its lead sentence has lost the opening
+`「\`, leaving `(¥)」を…`. The rule and the `\\` → `\` row survive intact, and
+that is all "Markdown projects carry the same escape" rests on; the first
+example is evidence of nothing. `userguide1862` is undamaged.
+
+`fromAst` does not apply the escape. §9.4's `text` row emits the node's value
+unchanged, so whatever notation markers a caller's prose happens to contain are
+markup by the time Backlog renders the comment:
+
+| A `text` node containing | would render as |
 | --- | --- |
 | `price is ''100'' before tax` | `100` in bold, the quotes gone |
 | `50%% off, %%today only` | `off, ` struck through |
@@ -1491,7 +1509,16 @@ the time Backlog renders the comment:
 | `* required` opening a line | an H1 heading |
 | `- one` opening a line | a list item |
 | `{code}` alone on a line | an open code macro that swallows what follows |
-| `\\server\share` | one backslash short — `\\` is the documented escape for `\` |
+
+**The right-hand column is inferred from §9.4, not observed.** Every row was
+round-tripped through this package's converter, so the notation that reaches
+Backlog is exactly what the left column says; how Backlog then draws it follows
+from the syntax the guide documents and was not measured against a live space.
+
+Backslashes a caller already holds are a second hazard, and a less determinate
+one. `\\` collapsing to a single `\` is documented, so a Windows UNC path such
+as `\\server\share` arrives one character short. What becomes of the surviving
+`\s` is unknown 2 below, so the rest of that string is not settled either.
 
 Generated text is the realistic trigger rather than a contrived one: a model
 that writes `50%%` or quotes a value as `''100''` decorates a comment nobody
@@ -1499,7 +1526,7 @@ asked to decorate.
 
 This is recorded as a limitation instead of fixed because the fix needs
 measurements this repository does not have. The user guide demonstrates the
-escape for `%` and `\` only, and four things it does not state each change what
+escape for `%` and `\` only, and five things it does not state each change what
 a correct implementation would emit:
 
 1. Which characters `\` actually escapes. `'`, `[`, `*`, `{`, `|`, `>`, `-` and
@@ -1513,6 +1540,11 @@ a correct implementation would emit:
 4. What `toAst` owes a `\` a human typed. §9.5 carries it through as literal
    text today, so an escaped comment read back out of Backlog shows its
    backslashes in the Markdown a handler sees.
+5. Whether a literal `¥` (U+00A5 or U+FFE5) escapes, as the guide's gloss can be
+   read to promise. If it does, `¥100` in a Japanese sentence is already being
+   mangled today and an implementation has to escape the yen sign as well; if it
+   does not, escaping it would corrupt every price a comment mentions. The two
+   answers demand opposite code, so this one is measured before either.
 
 Escaping is therefore not inferred from the documentation; the set has to be
 measured against a real space first. Until it is, a caller who needs a literal

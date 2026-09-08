@@ -326,8 +326,10 @@ Limitations worth knowing before you build on this:
   rest. Model-generated replies hit this without trying. Escaping is not
   applied because the guide documents the rule for `%` and `\` only and does
   not say which other characters `\` covers, what it does before an ordinary
-  character, or how an escaped comment should read back in — getting that
-  wrong would eat your backslashes instead. If you need a literal marker
+  character, how an escaped comment should read back in, or whether a literal
+  `¥` escapes the way its `\(¥¥)` gloss can be read to promise — which would
+  put `¥100` in a Japanese sentence at risk. Getting that set wrong would eat
+  your backslashes instead of fixing anything. If you need a literal marker
   today, post a `{ raw }` postable: it bypasses the converter and reaches
   Backlog verbatim, so you can apply `\` yourself.
 - **A hand-typed `@Chatbot` is indistinguishable from a real mention.** Backlog
