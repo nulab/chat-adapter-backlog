@@ -500,6 +500,14 @@ are in DEVELOPMENT.md ("Versioning"). `package.json` stays at `0.0.0` on
 `release.yml` with `minor` from the implicit `v0.0.0`. The dependency ranges
 are D15's and are independent of the version number.
 
+Whether the *mechanism* around that number should change before the first
+release is a separate, open proposal:
+[docs/plans/release-mechanism.md](./release-mechanism.md) verifies what
+trusted publishing and provenance actually require, evaluates release-please
+and its alternatives against D15, and recommends keeping the
+`workflow_dispatch` while making the publish job re-runnable. Nothing in it is
+adopted yet; until it is, this section and P7d describe what happens.
+
 ## 8. Out of scope / later
 
 - ~~**Pull requests as threads**~~ — **done**, by the stack in
