@@ -469,8 +469,7 @@ recipients to an **already existing** comment via
 `POST /issues/:id/comments/:commentId/notifications` produces a type 17 that
 repeats that comment's own id and text
 (`.claude/rules/backlog-webhook-facts.md`). What else may emit it is not
-established here. It is not the "project notifications" of the package
-description. **21** is documented as "Pull Request Deleted" and typed by
+established here. **21** is documented as "Pull Request Deleted" and typed by
 `backlog-js` as `PullRequestMerged`; it was not observed — merge and close
 both arrive as type 19 status changes, and no delete operation exists in the
 UI or the API (`.claude/rules/backlog-pull-request-facts.md`), so it is
