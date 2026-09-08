@@ -26,9 +26,24 @@ request belongs, and nowhere else: `subjectClientFor` in
 as `decode -> subjectClientFor -> one code path for both kinds`. Exactly one
 other module may ask what kind a subject is: the codec `src/ids.ts`, which has
 to write `issue:<id>` versus `pr:<repositoryId>:<number>` and has no port to
-route through. `src/subject/containment.test.ts` greps `src/` for a
-dispatch on `.kind` and fails on a third module, so the rule is executable
-rather than remembered (D-PR2, docs/specs/adapter.md §14).
+route through. `src/subject/containment.test.ts` greps `src/` for the shapes
+a dispatch on `kind` is written in — a `switch`, a comparison (`?.`,
+`['kind']`, `==` and a backticked kind included) and a `{ kind }`
+destructuring — and fails on a third module, so the rule is at least partly
+executable rather than only remembered (D-PR2, docs/specs/adapter.md §14). It
+is a tripwire, not a proof: it matches only a receiver it can *name*, because
+its exemptions for `raw` and `source` are by name, so a check whose receiver
+has no name on the line — `(await …).kind`, a parameter pattern, a predicate —
+passes it. That file's header lists what it does not see; read it before
+trusting a green run.
+
+It reads the **text** of a line, not parsed code, which is why a comment is
+stripped before matching: a Why-not sentence about D-PR2 is safe to write, and
+`src/webhook/bulk.ts` and `src/subject/url.ts` already carry one. A string
+literal is not stripped, though, so prose written *outside* a comment — a log
+message, a test fixture, a doc string — must keep the `kind` read and the
+subject-kind literal on separate lines, or the scan reports the sentence and
+tells its author to move a comment onto `SubjectClient`.
 
 One split is worth knowing before you touch either side: `src/client/port.ts`
 owns the **API domain** types, which carry `Date` objects, while `src/types.ts`

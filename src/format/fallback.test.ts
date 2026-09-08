@@ -1,4 +1,5 @@
 import { createMockLogger } from '@chat-adapter/tests';
+import type { Types } from 'backlog-js';
 import { paragraph, root, text } from 'chat';
 import type { BaseFormatConverter, CardElement, Root as RootNode } from 'chat';
 import { describe, expect, it, vi } from 'vitest';
@@ -80,6 +81,17 @@ describe('converterFor', () => {
     expect(fallback.toAst("''bold''").children).toEqual(
       new BacklogNotationConverter().toAst("''bold''").children
     );
+  });
+
+  it('assumes markdown for a rule the formatting enum does not name', () => {
+    // Unreachable through the port, which validates `textFormattingRule`
+    // against a closed enum (`src/client/schemas.ts`), so the cast stands in
+    // for a rule Backlog adds after that enum is widened.
+    const unnamedRule = 'asciidoc' as unknown as Types.TextFormattingRule;
+
+    const fallback = converterFor(unnamedRule, createMockLogger(), context);
+
+    expect(fallback.renderPostable({ markdown: '*x*   y' })).toBe('*x*   y');
   });
 });
 

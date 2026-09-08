@@ -63,9 +63,16 @@ export function converterFor(
   logger: Logger,
   context: FormatConversionContext
 ): FallbackFormatConverter {
+  // Not `rule === 'markdown' ? … : notation`: an unrecognised rule has to
+  // assume Markdown (docs/specs/adapter.md §9.1), and the two ways one can
+  // arrive must not disagree. `src/client/schemas.ts` rejects an unknown
+  // `textFormattingRule` at the API boundary, so a rule Backlog adds later
+  // fails the project lookup, which already logs `textFormattingRule lookup
+  // failed; assuming markdown` and renders Markdown. Widening that enum
+  // instead must reach the same converter, not Backlog notation.
   const inner =
-    rule === 'markdown'
-      ? new BacklogMarkdownConverter()
-      : new BacklogNotationConverter();
+    rule === 'backlog'
+      ? new BacklogNotationConverter()
+      : new BacklogMarkdownConverter();
   return new FallbackFormatConverter(inner, logger, context);
 }
