@@ -1373,6 +1373,12 @@ web URL needs the `projectKey` and its REST object does not carry one (§7.3):
 - Lookup failure (`PermissionError`, `NetworkError`, …) → `warn`
   `textFormattingRule lookup failed; assuming markdown` and Markdown for that
   call only; nothing is cached.
+- A `textFormattingRule` that is neither of the two documented values is
+  Markdown as well, so the two ways one can arrive agree.
+  `src/client/schemas.ts` validates the field against a closed enum, so a rule
+  Backlog adds later arrives as a lookup failure and takes the row above;
+  widening that enum without teaching the converters the new rule must land on
+  Markdown too, never on Backlog notation.
 - `renderFormatted(content, target?)` and `parseMessage(raw)` are synchronous
   and consult only the cache; uncached → Markdown plus one `warn`. The webhook
   factory awaits the lookup before calling `parseMessage`, so the webhook path
@@ -1621,8 +1627,9 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   `pullRequestComment.id` and ignores an issue notification with the same
   numeric id; `rehydrateAttachment` accepts both URL shapes; a dispatch on a
   subject's kind exists only in `src/subject/client.ts` and the id codec
-  `src/ids.ts` (`src/subject/containment.test.ts` greps `src/` and fails on a
-  third).
+  `src/ids.ts` (`src/subject/containment.test.ts` greps `src/` for the line
+  shapes its header enumerates and fails on a third module — a tripwire over
+  the shapes a dispatch is written in, not a proof that none exists).
 
 ### 12.3 Opt-in live suite
 
@@ -1699,7 +1706,8 @@ for one scratch space is worse than requiring the two to share it.
   the layout paragraph naming `src/subject/*` and saying that kind-specific
   behaviour lives there and nowhere else, with the two-module containment rule
   (`src/subject/client.ts` and `src/ids.ts`,
-  `src/subject/containment.test.ts` failing on a third); the raw-versus-domain
+  `src/subject/containment.test.ts` failing on a third for the shapes it can
+  see); the raw-versus-domain
   paragraph pointing at `src/index.ts`'s header rather than restating it; the
   smoke-test paragraph updated to the new assertion.
 - **CI smoke test** (`ci.yml`): asserts `typeof m.createBacklogAdapter === "function"`
