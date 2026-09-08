@@ -151,7 +151,7 @@ Runtime: `BacklogAdapter` (class), `createBacklogAdapter(config?)`,
 `BacklogNotationConverter`, `createInMemoryBacklogApi(seed?)`.
 
 Types: `BacklogAdapterConfig`, `BacklogInstallation`, `ResolvedInstallation`,
-`Resolvable`, `BacklogThreadId`, `BacklogChannelId`, `BacklogSubjectRef`,
+`ResolvedCredential`, `Resolvable`, `BacklogThreadId`, `BacklogChannelId`, `BacklogSubjectRef`,
 `BacklogMessageId`, `BacklogMessagePart`, `BacklogUserId`, `BacklogRawMessage`,
 `BacklogPostableExtras`, `BacklogChannelPostableExtras`,
 `BacklogWebhookPayload`, `BacklogWebhookVerifier`, `BacklogApi` and the domain
@@ -275,6 +275,32 @@ combinations resolve as:
 Otherwise a deployment that moved from OAuth to an API key, wrote `apiKey` in
 `config` and forgot to unset `BACKLOG_ACCESS_TOKEN` would be refused with a
 message blaming the config it had just written.
+
+`ResolvedInstallation` is what validation produced, not a second name for
+`BacklogInstallation`, and it says so in the type:
+
+```ts
+type ResolvedCredential =
+  | { apiKey: Resolvable; accessToken?: never }
+  | { accessToken: Resolvable; apiKey?: never };
+
+type ResolvedInstallation = {
+  host: string;             // lowercased, §2.1 host grammar
+  botUserId: number;
+  botUserName: string;
+  webhookSecret?: string;
+} & ResolvedCredential;
+```
+
+So an installation carrying both credentials or neither is a type error, and
+`createApi` receives a value whose exclusivity no reader has to take on trust.
+The input type stays permissive on purpose: config is assembled from
+`process.env` and JSON the compiler knows nothing about, and one
+`ValidationError` naming the field is a better report than a type error raised
+where the object was built. `host` stays a plain `string` rather than a brand
+— every construction site, fixtures and consumer test doubles included, would
+have to cast into one, and its only producer is the shared host validator in
+`src/ids.ts`.
 
 Credential resolvers are invoked on **every** outbound call and their result is
 never cached by the adapter (vendor-official requirement, verified in the

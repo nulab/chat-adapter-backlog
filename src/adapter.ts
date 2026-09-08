@@ -60,6 +60,7 @@ import type {
   BacklogThreadId,
   BacklogWebhookPayload,
   Resolvable,
+  ResolvedCredential,
   ResolvedInstallation,
 } from './types';
 import {
@@ -142,23 +143,23 @@ interface AdapterTransport {
   client?: Backlog;
 }
 
+/**
+ * There is no "neither credential" branch, and none is reachable: an
+ * installation is a `ResolvedCredential`, so the compiler narrows the second
+ * test to `never` and a third case would be dead code the reader has to
+ * reason about (this function used to end in an unreachable `throw`).
+ *
+ * Each resolvable is copied into a local first because the closure outlives
+ * the narrowing — reading `installation.apiKey` inside the arrow would widen
+ * back to `Resolvable | undefined`.
+ */
 function toCredentials(installation: ResolvedInstallation): BacklogCredentials {
-  // The constructor already rejected an installation carrying neither
-  // credential, so the fallback below is unreachable; it exists because the
-  // port's union type cannot express "exactly one of these two" in a way the
-  // compiler can narrow from `ResolvedInstallation`.
   if (installation.apiKey !== undefined) {
     const apiKey = installation.apiKey;
     return { apiKey: () => resolve(apiKey) };
   }
-  if (installation.accessToken !== undefined) {
-    const accessToken = installation.accessToken;
-    return { accessToken: () => resolve(accessToken) };
-  }
-  throw new ValidationError(
-    'backlog',
-    `installation ${installation.host} has no apiKey or accessToken`
-  );
+  const accessToken = installation.accessToken;
+  return { accessToken: () => resolve(accessToken) };
 }
 
 function resolve(resolvable: Resolvable): string | Promise<string> {
@@ -281,21 +282,7 @@ function validateInstallation(
 ): ResolvedInstallation {
   const host = validateHost(candidate.host, 'host');
 
-  const hasApiKey = candidate.apiKey !== undefined;
-  const hasAccessToken = candidate.accessToken !== undefined;
-  if (hasApiKey === hasAccessToken) {
-    fail(
-      hasApiKey
-        ? 'exactly one of apiKey or accessToken is allowed, not both'
-        : 'exactly one of apiKey or accessToken is required'
-    );
-  }
-  if (typeof candidate.apiKey === 'string') {
-    validateApiKey(candidate.apiKey, 'apiKey');
-  }
-  if (typeof candidate.accessToken === 'string') {
-    validateApiKey(candidate.accessToken, 'accessToken');
-  }
+  const credential = resolveCredential(candidate);
 
   const botUserId = validateBotUserId(candidate.botUserId, 'botUserId');
   const botUserName = validateBotUserName(candidate.botUserName, 'botUserName');
@@ -315,17 +302,41 @@ function validateInstallation(
     host,
     botUserId,
     botUserName,
+    ...credential,
   };
-  if (candidate.apiKey !== undefined) {
-    resolved.apiKey = candidate.apiKey;
-  }
-  if (candidate.accessToken !== undefined) {
-    resolved.accessToken = candidate.accessToken;
-  }
   if (candidate.webhookSecret !== undefined) {
     resolved.webhookSecret = candidate.webhookSecret;
   }
   return resolved;
+}
+
+/**
+ * The one place "exactly one of `apiKey`/`accessToken`" is decided
+ * (docs/specs/adapter.md §3.2). It returns the credential as a
+ * `ResolvedCredential` rather than reporting a verdict about the candidate,
+ * so the exclusivity leaves this function as a type and no later reader has
+ * to trust that it was checked.
+ */
+function resolveCredential(candidate: {
+  apiKey?: Resolvable;
+  accessToken?: Resolvable;
+}): ResolvedCredential {
+  if (candidate.apiKey !== undefined && candidate.accessToken !== undefined) {
+    fail('exactly one of apiKey or accessToken is allowed, not both');
+  }
+  if (candidate.apiKey !== undefined) {
+    if (typeof candidate.apiKey === 'string') {
+      validateApiKey(candidate.apiKey, 'apiKey');
+    }
+    return { apiKey: candidate.apiKey };
+  }
+  if (candidate.accessToken !== undefined) {
+    if (typeof candidate.accessToken === 'string') {
+      validateApiKey(candidate.accessToken, 'accessToken');
+    }
+    return { accessToken: candidate.accessToken };
+  }
+  fail('exactly one of apiKey or accessToken is required');
 }
 
 function resolveShapeA(

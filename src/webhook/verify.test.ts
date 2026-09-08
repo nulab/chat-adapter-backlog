@@ -9,8 +9,13 @@ const HOST = 'example.backlog.com';
 const OTHER_HOST = 'other.backlog.jp';
 const SECRET = 's3cret-path-token';
 
+/**
+ * `overrides` cannot name a credential: `ResolvedInstallation` carries exactly
+ * one, so an override that added `accessToken` beside this fixture's `apiKey`
+ * would not type-check anyway. Nothing in this file needs one.
+ */
 function installation(
-  overrides: Partial<ResolvedInstallation> = {}
+  overrides: Partial<Omit<ResolvedInstallation, 'apiKey' | 'accessToken'>> = {}
 ): ResolvedInstallation {
   return {
     host: HOST,

@@ -23,6 +23,16 @@
  * reachable through `BacklogRawMessage` itself, where they are structurally
  * inlined.
  *
+ * The two installation types are both exported and are not two names for one
+ * shape: `BacklogInstallation` is the config a consumer writes, where a
+ * credential is optional because the constructor is what reports a missing or
+ * doubled one, and `ResolvedInstallation` is what `config.createApi` receives
+ * after that check — its host lowercased and its credential a
+ * `ResolvedCredential`, the union that says exactly one of
+ * `apiKey`/`accessToken` is there. `ResolvedCredential` is exported because
+ * the resolved type is built from it; a consumer implementing `createApi`
+ * only reads it.
+ *
  * Not exported: the internal subject layer (`SubjectClient`,
  * `subjectClientFor`), which selects the issue or pull-request endpoint
  * family for a thread. It is a seam egress, reads and the webhook path are
@@ -79,6 +89,7 @@ export type {
   BacklogWebhookPayload,
   BacklogWebhookVerifier,
   Resolvable,
+  ResolvedCredential,
   ResolvedInstallation,
 } from './types';
 
