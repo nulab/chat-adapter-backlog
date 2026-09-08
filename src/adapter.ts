@@ -1,6 +1,5 @@
 import {
   AdapterError,
-  AuthenticationError,
   ResourceNotFoundError,
   toBuffer,
   ValidationError,
@@ -709,35 +708,6 @@ export class BacklogAdapter implements Adapter<
       throw new ResourceNotFoundError('backlog', 'installation', host);
     }
     return installation;
-  }
-
-  /**
-   * Resolves an installation's credential fresh on every call rather than
-   * caching it on the instance, so a resolver function can rotate an OAuth
-   * access token without the adapter being reconstructed (docs/specs/adapter.md
-   * §3.2, vendor-official requirement in CLAUDE.md "Conventions to follow").
-   * A rejecting or throwing resolver becomes `AuthenticationError` rather than
-   * an unhandled rejection reaching the caller.
-   */
-  async resolveCredential(installation: ResolvedInstallation): Promise<string> {
-    const resolvable = installation.apiKey ?? installation.accessToken;
-    if (resolvable === undefined) {
-      throw new AuthenticationError(
-        'backlog',
-        'no credential configured for this installation'
-      );
-    }
-    if (typeof resolvable === 'string') {
-      return resolvable;
-    }
-    try {
-      return await resolvable();
-    } catch (cause) {
-      throw new AuthenticationError(
-        'backlog',
-        cause instanceof Error ? cause.message : 'credential resolver failed'
-      );
-    }
   }
 
   api(host: string): BacklogApi {

@@ -119,6 +119,44 @@ describe('createBacklogJsApi', () => {
     );
   });
 
+  it('an async resolver sends its awaited value, resolved afresh for every request', async () => {
+    const sent: string[] = [];
+    const server = createFakeBacklogServer({
+      validApiKeys: ['resolved-token'],
+      onRequest: ({ headers }) =>
+        sent.push(headers.get('Backlog-API-Key') ?? ''),
+    });
+    const resolver = vi.fn(async () => 'resolved-token');
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: resolver },
+      fetch: server.fetch,
+    });
+
+    await api.getIssue(issueId);
+    await api.getIssue(issueId);
+
+    expect(resolver).toHaveBeenCalledTimes(2);
+    expect(sent).toEqual(['resolved-token', 'resolved-token']);
+  });
+
+  // Separate from the throwing resolver above because `BacklogCredentials`
+  // declares `() => MaybeAsync<string>`: a resolver that returns a rejected
+  // promise reaches the port as a rejection rather than a synchronous throw,
+  // so collapsing the two tests would stop covering the async form entirely.
+  it('a resolver whose promise rejects becomes AuthenticationError, as a throwing one does', async () => {
+    const server = createFakeBacklogServer();
+    const api = createBacklogJsApi({
+      host,
+      credentials: { apiKey: () => Promise.reject(new Error('token expired')) },
+      fetch: server.fetch,
+    });
+
+    await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(
+      AuthenticationError
+    );
+  });
+
   it('a resolver-produced API key containing CR/LF is an authentication failure, not a transport one', async () => {
     const fetchStub = vi.fn<typeof globalThis.fetch>();
     const api = createBacklogJsApi({
