@@ -51,7 +51,7 @@ describe('package entry point', () => {
       apiKey: 'key',
       botUserId: 999,
       botUserName: 'Chatbot',
-      webhookSecret: 'secret',
+      webhookSecret: 'test-webhook-secret',
     });
 
     // The config key in `new Chat({ adapters: { backlog } })` must equal this,

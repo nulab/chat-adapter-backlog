@@ -128,7 +128,7 @@ describe('BacklogAdapter construction', () => {
           apiKey: '',
           botUserId: 999,
           botUserName: 'Chatbot',
-          webhookSecret: 'secret',
+          webhookSecret: 'test-webhook-secret',
         })
     ).toThrow(ValidationError);
   });
@@ -144,7 +144,7 @@ describe('BacklogAdapter construction', () => {
               apiKey: 'k',
               botUserId: 999,
               botUserName: 'Chatbot',
-              webhookSecret: 's',
+              webhookSecret: 'first-webhook-secret',
             },
           ],
         })
@@ -161,14 +161,14 @@ describe('BacklogAdapter construction', () => {
               apiKey: 'k1',
               botUserId: 999,
               botUserName: 'Chatbot',
-              webhookSecret: 's1',
+              webhookSecret: 'first-webhook-secret',
             },
             {
               host: 'EXAMPLE.backlog.com',
               apiKey: 'k2',
               botUserId: 998,
               botUserName: 'Chatbot2',
-              webhookSecret: 's2',
+              webhookSecret: 'second-webhook-secret',
             },
           ],
         })
@@ -198,6 +198,42 @@ describe('BacklogAdapter construction', () => {
     ).toThrow(ValidationError);
   });
 
+  it('a webhookSecret shorter than 16 bytes is rejected', () => {
+    // The secret is the whole of webhook authenticity without a verifier, and
+    // Backlog signs nothing (§11), so a guessable one is a way in — not a
+    // preference the library leaves to a deployment.
+    expect(
+      () => new BacklogAdapter({ ...validConfig(), webhookSecret: 'short' })
+    ).toThrow(ValidationError);
+    expect(
+      () => new BacklogAdapter({ ...validConfig(), webhookSecret: 'short' })
+    ).toThrow(/16 bytes/);
+  });
+
+  it('a 16-byte webhookSecret is accepted', () => {
+    expect(
+      () =>
+        new BacklogAdapter({
+          ...validConfig(),
+          webhookSecret: '0123456789abcdef',
+        })
+    ).not.toThrow();
+  });
+
+  it('a short webhookSecret is rejected even when a webhookVerifier is set', () => {
+    // A verifier replaces the secret check on the ladder, but the secret is
+    // still there to be used the moment the verifier is removed, so a weak one
+    // is not made acceptable by configuring one.
+    expect(
+      () =>
+        new BacklogAdapter({
+          ...validConfig(),
+          webhookSecret: 'short',
+          webhookVerifier: () => true,
+        })
+    ).toThrow(ValidationError);
+  });
+
   it('a missing webhookSecret is accepted when a webhookVerifier is set', () => {
     const config = validConfig();
     expect(
@@ -220,7 +256,7 @@ describe('BacklogAdapter construction', () => {
           host: 'example.backlog.com',
           apiKey: 'k',
           botUserName: 'Chatbot',
-          webhookSecret: 's',
+          webhookSecret: 'first-webhook-secret',
         })
     ).toThrow(ValidationError);
   });
@@ -253,14 +289,14 @@ describe('BacklogAdapter construction', () => {
           apiKey: 'k1',
           botUserId: 999,
           botUserName: 'Chatbot',
-          webhookSecret: 's1',
+          webhookSecret: 'first-webhook-secret',
         },
         {
           host: 'two.backlog.jp',
           apiKey: 'k2',
           botUserId: 998,
           botUserName: 'Helperbot',
-          webhookSecret: 's2',
+          webhookSecret: 'second-webhook-secret',
         },
       ],
     });
@@ -292,7 +328,7 @@ describe('BacklogAdapter construction', () => {
     process.env.BACKLOG_API_KEY = 'env-api-key';
     process.env.BACKLOG_BOT_USER_ID = '999';
     process.env.BACKLOG_BOT_USER_NAME = 'Chatbot';
-    process.env.BACKLOG_WEBHOOK_SECRET = 'env-secret';
+    process.env.BACKLOG_WEBHOOK_SECRET = 'env-webhook-secret';
 
     const adapter = createBacklogAdapter();
     expect(adapter.userName).toBe('Chatbot');
@@ -307,7 +343,7 @@ describe('BacklogAdapter construction', () => {
           accessToken: 'a',
           botUserId: 999,
           botUserName: 'Chatbot',
-          webhookSecret: 's',
+          webhookSecret: 'first-webhook-secret',
         })
     ).toThrow(ValidationError);
   });
@@ -609,7 +645,7 @@ describe('BacklogAdapter port wiring', () => {
     host: 'example.backlog.com',
     botUserId: 999,
     botUserName: 'Chatbot',
-    webhookSecret: 'secret',
+    webhookSecret: 'test-webhook-secret',
   } as const;
 
   it('builds a port for a configured host without being given one', () => {
@@ -833,7 +869,7 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
           apiKey: 'k2',
           botUserId: 998,
           botUserName: 'Chatbot2',
-          webhookSecret: 'other-secret',
+          webhookSecret: 'other-webhook-secret',
         },
       ],
     });
@@ -1451,7 +1487,7 @@ describe('BacklogAdapter.handleWebhook — fixture-driven §5.3 mapping', () => 
           apiKey: 'k2',
           botUserId: 998,
           botUserName: 'Chatbot2',
-          webhookSecret: 'other-secret',
+          webhookSecret: 'other-webhook-secret',
         },
       ],
       createApi,
@@ -1482,7 +1518,7 @@ describe('BacklogAdapter.handleWebhook — fixture-driven §5.3 mapping', () => 
     await adapter.handleWebhook(
       webhookRequest(issueCommented(), {
         host: FIXTURE.otherHost,
-        token: 'other-secret',
+        token: 'other-webhook-secret',
       })
     );
     await vi.waitFor(() => expect(capturedMessages).toHaveLength(2));
@@ -1750,7 +1786,7 @@ describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () 
           apiKey: 'k2',
           botUserId: 998,
           botUserName: 'Chatbot2',
-          webhookSecret: 'other-secret',
+          webhookSecret: 'other-webhook-secret',
         },
       ],
       createApi,
@@ -1763,7 +1799,7 @@ describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () 
     await adapter.handleWebhook(
       webhookRequest(pullRequestAdded(), {
         host: FIXTURE.otherHost,
-        token: 'other-secret',
+        token: 'other-webhook-secret',
       })
     );
     await vi.waitFor(() => expect(dispatched).toHaveLength(2));

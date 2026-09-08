@@ -226,7 +226,7 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 | `accessToken` | `Resolvable` | — | `BACKLOG_ACCESS_TOKEN` | As above. Refresh is the caller's job (resolver form). |
 | `botUserId` | `number` | — | `BACKLOG_BOT_USER_ID` | Positive integer; env value must parse as one. |
 | `botUserName` | `string` | — | `BACKLOG_BOT_USER_NAME` | Non-empty after trim (an empty name would make every `@` a mention). |
-| `webhookSecret` | `string` | — | `BACKLOG_WEBHOOK_SECRET` | Non-empty. Required on every installation unless `webhookVerifier` is set (D2). |
+| `webhookSecret` | `string` | — | `BACKLOG_WEBHOOK_SECRET` | Non-empty and at least **16 bytes** (UTF-8), validated whether or not a verifier is configured. Required on every installation unless `webhookVerifier` is set (D2). |
 | `installations` | `BacklogInstallation[]` | — | none | Non-empty; no duplicate hosts (after lowercasing); each element validated as above. Rejected if any shape-A field is also present. |
 | `webhookVerifier` | function | — | none | When set, replaces the secret check for every installation (D2). |
 | `userName` | `string` | first installation's `botUserName` | none | Non-empty. Exposed to the core as `adapter.userName`. |
@@ -1496,8 +1496,11 @@ plain text. Documented in README under "Limitations".
   Thrown errors and logs carry `BacklogApiErrorDetail.url` with the query
   string stripped.
 - **Webhook authenticity** (D2): every installation has a `webhookSecret` or a
-  `webhookVerifier` exists, enforced at construction. The secret is compared
-  with `crypto.timingSafeEqual` after a length check. Backlog offers no HMAC
+  `webhookVerifier` exists, enforced at construction. A secret shorter than 16
+  bytes is a construction-time `ValidationError` — it is the whole of the
+  check, so a guessable one is a way in, and config resolution has no logger to
+  warn into. The secret is compared with `crypto.timingSafeEqual` after a
+  length check. Backlog offers no HMAC
   ([Add Webhook](https://developer.nulab.com/docs/backlog/api/2/add-webhook/)
   accepts only `name`, `description`, `hookUrl`, `allEvent`,
   `activityTypeIds[]`), so the secret in `?token=` is the strongest available

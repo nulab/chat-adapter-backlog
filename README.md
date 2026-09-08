@@ -60,7 +60,7 @@ not a request to fall back.
 | `BACKLOG_ACCESS_TOKEN` | one of the two | OAuth 2.0 bearer token instead of a key. |
 | `BACKLOG_BOT_USER_ID` | yes | Numeric id of the bot user; `GET /api/v2/users/myself` reports it. |
 | `BACKLOG_BOT_USER_NAME` | yes | The bot's display name, as Backlog renders it in a comment. |
-| `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter. |
+| `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter. At least 16 bytes. |
 
 ## Configuration
 
@@ -70,7 +70,7 @@ not a request to fall back.
 | `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | — | Exactly one per installation. The function form is resolved on **every** call and never cached, so an expiring token can be refreshed without reconstructing the adapter. |
 | `botUserId` | `number` | — | Positive integer. Recognises the adapter's own messages and assignment to the bot. |
 | `botUserName` | `string` | — | Non-empty. Mentions arrive as resolved text, so this is what the mention pattern matches. |
-| `webhookSecret` | `string` | — | Required on every installation unless `webhookVerifier` is set. |
+| `webhookSecret` | `string` | — | Required on every installation unless `webhookVerifier` is set. **At least 16 bytes**, checked when the adapter is constructed — it is the only thing standing between the URL and your projects, so a short one is refused rather than warned about. |
 | `installations` | `BacklogInstallation[]` | — | Several spaces in one adapter. Mutually exclusive with the fields above. |
 | `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check entirely — for a reverse-proxy assertion, mTLS or an IP allowlist. |
 | `userName` | `string` | first installation's `botUserName` | Exposed to the core as `adapter.userName`. One string for the whole adapter; per space, read `adapter.botUserName(host)`. |
@@ -123,7 +123,8 @@ core's `@<id>` pattern would be wrong for every space but one.
    section is missing, an administrator must enable API access for the space.
 3. **Find its numeric id.** `GET /api/v2/users/myself` with that key reports
    `id` — that is `botUserId`, not the login name.
-4. **Generate a webhook secret**: `openssl rand -hex 32`.
+4. **Generate a webhook secret**: `openssl rand -hex 32`. Anything under 16
+   bytes is rejected at construction.
 5. **Register a webhook per project** (Project Settings → Integrations →
    Webhook, or
    [Add Webhook](https://developer.nulab.com/docs/backlog/api/2/add-webhook/)):
