@@ -1236,7 +1236,8 @@ outlive the request timeout.
 documented example), `notifications`, `repositories`, `pullRequests`,
 `pullRequestComments` (keyed by `{ repositoryId, number }`), `me` (the bot
 user), `now()`. It exposes
-`state` (issues, comments, stars, uploads, recorded inputs) for assertions,
+`state` (issues, comments, stars, uploads, recorded inputs, and the seeded
+`issueTypes` and `priorities`) for assertions,
 allocates ids from a single counter initialised above every seeded id (issues
 included), applies exclusive `minId`/`maxId`, sorts by `order`, mirrors
 `deleteStar` in `state`, and throws the same error classes as §8.2 — not only
@@ -1247,9 +1248,14 @@ empty comment body is a `ValidationError` on add and on update (a single space
 is a body — §6.4 posts one), and updating or deleting a comment whose
 `createdUser` is not `me` is a `PermissionError`. `uploadAttachment` keeps the
 bytes it was handed: `size` reports their length, `recordedInputs` carries a
-copy, and a download of that id returns them. Both `rateLimit()` and
-`getRateLimit()` answer with the documented example figures, so either is
-testable without modelling consumption.
+copy, and a download of that id returns them.
+
+`state.issueTypes` and `state.priorities` are the lists `createIssue`
+validates against, so removing an entry is how a test models a project whose
+settings changed under a cached default (§6.7) — no stub of the port's own
+method required. Both `rateLimit()` and `getRateLimit()` answer with the
+documented example figures, so either is testable without modelling
+consumption.
 
 ### 8.4 Rate-limit tracking and retry (D5)
 

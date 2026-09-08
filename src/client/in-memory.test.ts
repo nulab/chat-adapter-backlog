@@ -101,8 +101,10 @@ describe('createInMemoryBacklogApi', () => {
   it('records a pull-request comment against the three coordinates it was addressed with', async () => {
     const api = createInMemoryBacklogApi(seed());
     const ref = pullRequestRef();
-    await api.addPullRequestComment(ref, { content: 'Recorded' });
-    await api.updatePullRequestComment(ref, pullRequestCommentIds[0], 'Edited');
+    // Edits its own comment rather than a seeded one: the port refuses to
+    // update another user's, as Backlog does.
+    const added = await api.addPullRequestComment(ref, { content: 'Recorded' });
+    await api.updatePullRequestComment(ref, added.id, 'Edited');
     expect(api.state.recordedInputs).toContainEqual({
       method: 'addPullRequestComment',
       ref,
@@ -111,7 +113,7 @@ describe('createInMemoryBacklogApi', () => {
     expect(api.state.recordedInputs).toContainEqual({
       method: 'updatePullRequestComment',
       ref,
-      commentId: pullRequestCommentIds[0],
+      commentId: added.id,
       content: 'Edited',
     });
   });

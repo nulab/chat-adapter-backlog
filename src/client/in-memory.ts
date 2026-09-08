@@ -71,6 +71,14 @@ export interface InMemoryBacklogState {
   users: BacklogUserRef[];
   repositories: BacklogGitRepository[];
   pullRequests: BacklogPullRequest[];
+  /**
+   * The project's issue types, keyed as the seed is, and the space's
+   * priorities. Both are live: a `createIssue` refuses an id they do not
+   * hold, so removing an entry is how a test models a project whose settings
+   * changed under a cached default (`src/egress.ts`).
+   */
+  issueTypes: Record<number, BacklogIssueType[]>;
+  priorities: BacklogPriority[];
   /** Keyed as the seed is, and holding added comments alongside the seeded ones. */
   pullRequestComments: Record<string, BacklogComment[]>;
   stars: BacklogStar[];
@@ -162,8 +170,8 @@ export function createInMemoryBacklogApi(
   const issues = [...(seed.issues ?? [])];
   const comments = [...(seed.comments ?? [])];
   const users = [...(seed.users ?? [])];
-  const issueTypesByProject = new Map(
-    Object.entries(seed.issueTypes ?? {}).map(([k, v]) => [Number(k), [...v]])
+  const issueTypes: Record<number, BacklogIssueType[]> = copyKeyedLists(
+    seed.issueTypes
   );
   const priorities = [...(seed.priorities ?? DEFAULT_PRIORITIES)];
   const notifications = [...(seed.notifications ?? [])];
@@ -395,7 +403,7 @@ export function createInMemoryBacklogApi(
     async createIssue(input: CreateIssueInput) {
       recordedInputs.push({ method: 'createIssue', input });
       findProject(input.projectId);
-      const issueType = (issueTypesByProject.get(input.projectId) ?? []).find(
+      const issueType = (issueTypes[input.projectId] ?? []).find(
         (t) => t.id === input.issueTypeId
       );
       if (issueType === undefined) {
@@ -434,7 +442,7 @@ export function createInMemoryBacklogApi(
 
     async listIssueTypes(projectId) {
       findProject(projectId);
-      return [...(issueTypesByProject.get(projectId) ?? [])];
+      return [...(issueTypes[projectId] ?? [])];
     },
 
     async listPriorities() {
@@ -722,6 +730,8 @@ export function createInMemoryBacklogApi(
       users,
       repositories,
       pullRequests,
+      issueTypes,
+      priorities,
       pullRequestComments,
       stars,
       uploads,
