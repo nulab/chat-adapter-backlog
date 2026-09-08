@@ -125,6 +125,97 @@ export interface VerifyWebhookRequestInput {
   logger: Logger;
 }
 
+type InstallationResolution =
+  | { ok: true; host: string; installation: ResolvedInstallation }
+  | { ok: false; rejection: WebhookRejection };
+
+/** Response-ladder row 4 (docs/specs/adapter.md §5.1). */
+function resolveInstallation(
+  url: URL,
+  installations: Map<string, ResolvedInstallation>,
+  logger: Logger
+): InstallationResolution {
+  const hostParam = url.searchParams.get('host');
+  let host: string;
+  if (hostParam !== null) {
+    host = hostParam.toLowerCase();
+    if (!installations.has(host)) {
+      logger.warn('webhook rejected', { reason: 'unknown_host' });
+      return {
+        ok: false,
+        rejection: {
+          status: 401,
+          body: UNAUTHORIZED_BODY,
+          reason: 'unknown_host',
+        },
+      };
+    }
+  } else if (installations.size === 1) {
+    // D3: the host parameter is optional only when it is unambiguous —
+    // exactly one installation configured.
+    const [onlyHost] = installations.keys();
+    host = onlyHost as string;
+  } else {
+    logger.warn('webhook rejected', { reason: 'missing_host' });
+    return {
+      ok: false,
+      rejection: {
+        status: 401,
+        body: UNAUTHORIZED_BODY,
+        reason: 'missing_host',
+      },
+    };
+  }
+
+  const installation = installations.get(host);
+  if (installation === undefined) {
+    // Unreachable: `host` above is either a key already confirmed present in
+    // `installations` or the map's only key. Guards `noUncheckedIndexedAccess`
+    // rather than asserting past it with a non-null assertion.
+    logger.warn('webhook rejected', { reason: 'unknown_host' });
+    return {
+      ok: false,
+      rejection: {
+        status: 401,
+        body: UNAUTHORIZED_BODY,
+        reason: 'unknown_host',
+      },
+    };
+  }
+
+  return { ok: true, host, installation };
+}
+
+/**
+ * Response-ladder row 5 (docs/specs/adapter.md §5.1), or `undefined` when the
+ * request carries the installation's secret.
+ */
+function checkPathSecret(
+  url: URL,
+  installation: ResolvedInstallation,
+  logger: Logger
+): WebhookRejection | undefined {
+  const token = url.searchParams.get('token');
+  if (token === null) {
+    logger.warn('webhook rejected', { reason: 'missing_token' });
+    return {
+      status: 401,
+      body: UNAUTHORIZED_BODY,
+      reason: 'missing_token',
+    };
+  }
+  const expected = installation.webhookSecret;
+  if (expected === undefined || !tokenMatches(token, expected)) {
+    logger.warn('webhook rejected', { reason: 'token_mismatch' });
+    return {
+      status: 401,
+      body: UNAUTHORIZED_BODY,
+      reason: 'token_mismatch',
+    };
+  }
+  return undefined;
+}
+
 /**
  * Runs response-ladder rows 1–5 (docs/specs/adapter.md §5.1): method, body
  * size, the optional verifier, installation resolution, and — only when no
@@ -133,10 +224,21 @@ export interface VerifyWebhookRequestInput {
  * message) depend on the parsed body and the adapter's `chat`/`botUserId`
  * state, so they run in `handleWebhook` itself.
  *
- * Step 3 (verifier) runs before step 4 (host resolution) so a
- * verifier-protected deployment never reveals whether a host is configured;
- * step 4 runs before step 5 because the secret being compared is per
- * installation, so the adapter needs to know which installation first.
+ * The rows run in two orders, decided by whether a verifier is configured,
+ * because only the verifier is given the body:
+ *
+ * - **With a verifier**: body, verifier, host. Step 3 before step 4 so a
+ *   verifier-protected deployment never reveals whether a host is configured,
+ *   which is also what `connectWebhookContract` requires — the verifier
+ *   receives `(Request, string)` and wins over a configured secret.
+ * - **Without one**: host, token, body. Nothing before step 5 needs the body,
+ *   so reading it first would let any caller who has found the URL make the
+ *   process buffer `maxWebhookBodyBytes` per request, and would answer 413 to
+ *   a caller that never proved it knows the secret. Authenticating first
+ *   costs an unauthenticated request nothing but its headers.
+ *
+ * Either way step 4 precedes step 5, because the secret being compared is per
+ * installation.
  */
 export async function verifyWebhookRequest(
   input: VerifyWebhookRequestInput
@@ -158,97 +260,72 @@ export async function verifyWebhookRequest(
     });
   }
 
+  const url = new URL(request.url);
+
+  if (webhookVerifier === undefined) {
+    const resolved = resolveInstallation(url, installations, logger);
+    if (!resolved.ok) {
+      return reject(resolved.rejection);
+    }
+    const rejection = checkPathSecret(url, resolved.installation, logger);
+    if (rejection !== undefined) {
+      return reject(rejection);
+    }
+    const bodyResult = await readBody(request, maxWebhookBodyBytes, logger);
+    if (!bodyResult.ok) {
+      return reject(bodyResult.rejection);
+    }
+    return {
+      ok: true,
+      host: resolved.host,
+      installation: resolved.installation,
+      rawBody: bodyResult.rawBody,
+    };
+  }
+
   const bodyResult = await readBody(request, maxWebhookBodyBytes, logger);
   if (!bodyResult.ok) {
     return reject(bodyResult.rejection);
   }
   const { rawBody } = bodyResult;
 
-  if (webhookVerifier !== undefined) {
-    let verified: unknown;
-    try {
-      verified = await webhookVerifier(request, rawBody);
-    } catch (cause) {
-      logger.warn('webhook rejected', { reason: 'verifier' });
-      logger.error(
-        cause instanceof Error ? cause.message : 'webhook verifier threw'
-      );
-      return reject({
-        status: 401,
-        body: UNAUTHORIZED_BODY,
-        reason: 'verifier',
-      });
-    }
-    if (!verified) {
-      logger.warn('webhook rejected', { reason: 'verifier' });
-      return reject({
-        status: 401,
-        body: UNAUTHORIZED_BODY,
-        reason: 'verifier',
-      });
-    }
-  }
-
-  const url = new URL(request.url);
-  const hostParam = url.searchParams.get('host');
-  let host: string;
-  if (hostParam !== null) {
-    host = hostParam.toLowerCase();
-    if (!installations.has(host)) {
-      logger.warn('webhook rejected', { reason: 'unknown_host' });
-      return reject({
-        status: 401,
-        body: UNAUTHORIZED_BODY,
-        reason: 'unknown_host',
-      });
-    }
-  } else if (installations.size === 1) {
-    // D3: the host parameter is optional only when it is unambiguous —
-    // exactly one installation configured.
-    const [onlyHost] = installations.keys();
-    host = onlyHost as string;
-  } else {
-    logger.warn('webhook rejected', { reason: 'missing_host' });
+  let verified: unknown;
+  try {
+    verified = await webhookVerifier(request, rawBody);
+  } catch (cause) {
+    logger.warn('webhook rejected', { reason: 'verifier' });
+    logger.error(
+      cause instanceof Error ? cause.message : 'webhook verifier threw'
+    );
     return reject({
       status: 401,
       body: UNAUTHORIZED_BODY,
-      reason: 'missing_host',
+      reason: 'verifier',
     });
   }
-
-  const installation = installations.get(host);
-  if (installation === undefined) {
-    // Unreachable: `host` above is either a key already confirmed present in
-    // `installations` or the map's only key. Guards `noUncheckedIndexedAccess`
-    // rather than asserting past it with a non-null assertion.
-    logger.warn('webhook rejected', { reason: 'unknown_host' });
+  // Truthiness, not `=== true`: the verifier is typed to return `unknown`
+  // (§3.2) so a deployment can hand back whatever its own check produces —
+  // a matched header string, a resolved assertion object. `undefined`, the
+  // return of a function that forgot to return at all, is falsy and so
+  // rejects, which is the safe direction.
+  if (!verified) {
+    logger.warn('webhook rejected', { reason: 'verifier' });
     return reject({
       status: 401,
       body: UNAUTHORIZED_BODY,
-      reason: 'unknown_host',
+      reason: 'verifier',
     });
   }
 
-  if (webhookVerifier === undefined) {
-    const token = url.searchParams.get('token');
-    if (token === null) {
-      logger.warn('webhook rejected', { reason: 'missing_token' });
-      return reject({
-        status: 401,
-        body: UNAUTHORIZED_BODY,
-        reason: 'missing_token',
-      });
-    }
-    const expected = installation.webhookSecret;
-    if (expected === undefined || !tokenMatches(token, expected)) {
-      logger.warn('webhook rejected', { reason: 'token_mismatch' });
-      return reject({
-        status: 401,
-        body: UNAUTHORIZED_BODY,
-        reason: 'token_mismatch',
-      });
-    }
+  const resolved = resolveInstallation(url, installations, logger);
+  if (!resolved.ok) {
+    return reject(resolved.rejection);
   }
 
-  return { ok: true, host, installation, rawBody };
+  return {
+    ok: true,
+    host: resolved.host,
+    installation: resolved.installation,
+    rawBody,
+  };
 }

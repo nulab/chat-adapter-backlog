@@ -226,7 +226,7 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 | `accessToken` | `Resolvable` | — | `BACKLOG_ACCESS_TOKEN` | As above. Refresh is the caller's job (resolver form). |
 | `botUserId` | `number` | — | `BACKLOG_BOT_USER_ID` | Positive integer; env value must parse as one. |
 | `botUserName` | `string` | — | `BACKLOG_BOT_USER_NAME` | Non-empty after trim (an empty name would make every `@` a mention). |
-| `webhookSecret` | `string` | — | `BACKLOG_WEBHOOK_SECRET` | Non-empty. Required on every installation unless `webhookVerifier` is set (D2). |
+| `webhookSecret` | `string` | — | `BACKLOG_WEBHOOK_SECRET` | Non-empty and at least **16 bytes** (UTF-8), validated whether or not a verifier is configured. Required on every installation unless `webhookVerifier` is set (D2). |
 | `installations` | `BacklogInstallation[]` | — | none | Non-empty; no duplicate hosts (after lowercasing); each element validated as above. Rejected if any shape-A field is also present. |
 | `webhookVerifier` | function | — | none | When set, replaces the secret check for every installation (D2). |
 | `userName` | `string` | first installation's `botUserName` | none | Non-empty. Exposed to the core as `adapter.userName`. |
@@ -430,29 +430,51 @@ adapter never throws its own "not supported".
 
 ### 5.1 Response ladder
 
-Steps run in order; the first failure returns. Bodies are plain text. Every 401
-uses the identical body so an unauthenticated caller cannot distinguish "wrong
-secret" from "unknown host" (D2).
+The first failure returns. Bodies are plain text. Every 401 uses the identical
+body so an unauthenticated caller cannot distinguish "wrong secret" from
+"unknown host" (D2).
 
-| # | Check | Failure → status, body | Log |
-| --- | --- | --- | --- |
-| 1 | `request.method === "POST"` | 405 `Method not allowed` | debug |
-| 2 | Body readable as text and ≤ `maxWebhookBodyBytes` (also checked against `Content-Length` before reading) ⚑ | 400 `Unreadable body` / 413 `Payload too large` | warn `webhook rejected` `{reason}` |
-| 3 | If `webhookVerifier` is configured: `await verifier(request, rawBody)` is truthy and does not throw | 401 `Unauthorized` | warn `webhook rejected` `{reason: "verifier"}` (error message logged, never the body) |
-| 4 | Resolve installation: `?host=` (lowercased) is a configured host; when absent, exactly one installation is configured (D3) | 401 `Unauthorized` | warn `{reason: "unknown_host" \| "missing_host"}` |
-| 5 | If no verifier: `?token=` present and `timingSafeEqual` to the installation's `webhookSecret` after a byte-length check | 401 `Unauthorized` | warn `{reason: "missing_token" \| "token_mismatch"}` |
-| 6 | `JSON.parse(rawBody)` succeeds and yields an object | 400 `Invalid JSON` | warn |
-| 7 | Envelope `{ type: number }` | 400 `Invalid payload` | warn |
-| 8 | `type ∈ {1, 2, 3, 4, 14, 18, 19, 20}` — `DISPATCHED_ACTIVITY_TYPES` in `src/webhook/payload.ts`, with no switch: 4 is always dispatched when it arrives, 14 fans out to one message per issue (D22), and 21 never is (D-PR5) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
-| 9 | Type-specific schema (§5.2) | 400 `Invalid payload` | warn with zod issue paths (no values) |
-| 10 | `initialize()` has run | 503 `Adapter not initialized` ⚑ (a 5xx is the only answer that could make Backlog redeliver; whether it does is undocumented) | error |
-| 11 | `createdUser.id !== botUserId` | 200 `OK` (self message, nothing dispatched) | debug `self message skipped` |
-| 12 | Success | 200 `OK`, returned **before** processing completes | debug |
+**`#` names a row; it is not the order the rows run in.** Rows 1–5 run in one
+of two orders, decided by whether a `webhookVerifier` is configured, and the
+**Position** column gives both. Read the one your deployment has:
 
-Step 3 runs before step 4 so a verifier-protected deployment never reveals
-whether a host is configured; `connectWebhookContract` requires the verifier to
-receive `(Request, string)` and to win over a configured secret, which this
-order satisfies. Step 4 precedes step 5 because the secret is per installation.
+- **`webhookVerifier` configured**: `1 → 2 → 3 → 4`, then rows 6–12 in order.
+  Row 5 never runs.
+- **no verifier** (the shared-secret deployment): `1 → 4 → 5 → 2`, then rows
+  6–12 in order. Row 3 never runs.
+
+| # | Position (verifier / no verifier) | Check | Failure → status, body | Log |
+| --- | --- | --- | --- | --- |
+| 1 | 1 / 1 | `request.method === "POST"` | 405 `Method not allowed` | debug |
+| 2 | 2 / **4** | Body readable as text and ≤ `maxWebhookBodyBytes` (also checked against `Content-Length` before reading) ⚑ | 400 `Unreadable body` / 413 `Payload too large` | warn `webhook rejected` `{reason}` |
+| 3 | 3 / — | If `webhookVerifier` is configured: `await verifier(request, rawBody)` is truthy and does not throw | 401 `Unauthorized` | warn `webhook rejected` `{reason: "verifier"}` (error message logged, never the body) |
+| 4 | 4 / **2** | Resolve installation: `?host=` (lowercased) is a configured host; when absent, exactly one installation is configured (D3) | 401 `Unauthorized` | warn `{reason: "unknown_host" \| "missing_host"}` |
+| 5 | — / **3** | If no verifier: `?token=` present and `timingSafeEqual` to the installation's `webhookSecret` after a byte-length check | 401 `Unauthorized` | warn `{reason: "missing_token" \| "token_mismatch"}` |
+| 6 | 5 / 5 | `JSON.parse(rawBody)` succeeds and yields an object | 400 `Invalid JSON` | warn |
+| 7 | 6 / 6 | Envelope `{ type: number }` | 400 `Invalid payload` | warn |
+| 8 | 7 / 7 | `type ∈ {1, 2, 3, 4, 14, 18, 19, 20}` — `DISPATCHED_ACTIVITY_TYPES` in `src/webhook/payload.ts`, with no switch: 4 is always dispatched when it arrives, 14 fans out to one message per issue (D22), and 21 never is (D-PR5) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
+| 9 | 8 / 8 | Type-specific schema (§5.2) | 400 `Invalid payload` | warn with zod issue paths (no values) |
+| 10 | 9 / 9 | `initialize()` has run | 503 `Adapter not initialized` ⚑ (a 5xx is the only answer that could make Backlog redeliver; whether it does is undocumented) | error |
+| 11 | 10 / 10 | `createdUser.id !== botUserId` | 200 `OK` (self message, nothing dispatched) | debug `self message skipped` |
+| 12 | 11 / 11 | Success | 200 `OK`, returned **before** processing completes | debug |
+
+**Why the split.** The verifier is handed the body, so a verifier-protected
+deployment cannot authenticate before buffering it; row 3 before row 4 also
+keeps that deployment from revealing whether a host is configured.
+`connectWebhookContract` requires only that the verifier be called with
+`(Request, string)` — a buffered body, hence row 2 before row 3 — and that a
+verifier win over a configured secret; the position of row 4 is this
+adapter's choice, not the contract's.
+
+With no verifier, nothing before row 5 reads the body, so buffering it first
+would let anyone who has found the URL make the process hold
+`maxWebhookBodyBytes` per request, and would answer 413 to a caller that never
+proved it knows the secret. Authenticating first costs an unauthenticated
+request nothing but its headers. The observable difference is which 4xx an
+oversized unauthorised body gets — 401, not 413 — so the statuses such a
+caller can distinguish shrink from {405, 400, 413, 401} to {405, 401}. Either
+way row 4 precedes row 5, because the secret being compared is per
+installation.
 
 No timestamp-staleness window is applied ⚑, deliberately departing from
 CLAUDE.md's "Don't" list: Backlog's payload timestamp is unsigned and therefore
@@ -483,7 +505,11 @@ keys** everywhere (`field_text`, `type` inside `changes[]`,
 `shared_files`, `status`, `priority` … are all seen in real payloads) and
 `raw.payload` is the parsed body as received, not a stripped copy.
 
-Required (400 when missing): `type` number; `created` string; `project.id`
+Required (400 when missing): `type` number; `created` a string that names an
+instant — `Date.parse` yields a finite value, which is the property the two
+readers of it need (`:u:<created>` message ids in `src/ids.ts` and
+`metadata.dateSent`), not a grammar: a form Backlog widens to milliseconds or
+a numeric offset parses, `""` and `"yesterday"` are the 400; `project.id`
 number; `createdUser.id` number; `createdUser.name` string; `content.id`
 number; for types 18–20 additionally `content.number` number and
 `content.repository.id` number; for type 14 `content.link[]` **instead of**
@@ -498,13 +524,37 @@ absent array and an array in a shape not measured here both mean "this
 delivery says nothing about who was notified", and neither is worth losing a
 message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
 
+Two more fields cannot make a body invalid, for the same reason and with the
+same consequence — a 400 loses the comment the delivery carries, and Backlog
+never sends it again:
+
+- `changes[].new_value` and `.old_value` fall back to `null` when the value is
+  neither a string nor a number. The value system is Backlog's own and only
+  partly measured (a status as an id string, an assignee as a display name),
+  so a custom attribute serialised some other way reads as "no value here"
+  rather than costing the message. `raw.payload` still carries what was sent.
+- `attachments[].size` is optional and falls back to absent: `null` and any
+  other shape read as "this delivery says no size". It reaches
+  `Attachment.size` and nothing else; only `attachments[].id` addresses the
+  file.
+
+`attachments[].name`, by contrast, stays required, and the asymmetry with the
+REST side — where `src/client/schemas.ts` makes `name` and `size` both
+optional — is deliberate. There, two Backlog doc pages disagree about which
+keys a `changeLog` attachment carries at all; here every measured payload
+names its files. And the fallbacks are not comparable: an absent `size` loses
+nothing a consumer can act on, while an absent `name` would leave the adapter
+either inventing a file name or dropping the file list. A measurement of an
+unnamed webhook attachment is what would change this, not the symmetry with
+the other schema.
+
 | Field | Type 1 | Type 2/3 | Type 4 | Type 18 | Type 19/20 |
 | --- | --- | --- | --- | --- | --- |
 | `content.summary`, `content.description` | read (`description` nullable) | ignored | — | read | ignored |
 | `content.assignee` | `{ id, name, … } \| null`; always sent on a webhook, `null` when unassigned (measured 2026-09-06), optional in the schema because the activity form omits it | sent, same shape; ignored — the **current** assignee, repeated on every delivery, so an assignment is read from `changes` instead | — | `{ id, name, … } \| null`, webhook-only (measured 2026-09-06); the assignment at creation, read as a mention | sent, same shape; ignored — the **current** assignee, as on 2/3 |
 | `content.comment` | absent | `{ id: number, content: string \| null } \| null` | — | `null` | `{ id, content } \| null` |
-| `content.changes[]` | absent | `{ field: string, new_value?: string \| number \| null, old_value?: … }[]` optional | — | `[]` | same shape as 2/3 |
-| `content.attachments[]` | `{ id, name, size }[]` optional | same | — | optional (not measured on the activity form) | optional |
+| `content.changes[]` | absent | `{ field: string, new_value?: string \| number \| null, old_value?: … }[]` optional; a value of any other type reads as `null` | — | `[]` | same shape as 2/3 |
+| `content.attachments[]` | `{ id, name, size? }[]` optional | same | — | optional (not measured on the activity form) | optional |
 | `content.number`, `content.repository.{id,name}` | — | — | — | required / required + optional | same |
 | `content.issue` | — | — | — | `{ id, key_id, issue_key?, summary, description } \| null`, the linked issue; display data (D-PR6) | same |
 | `createdUser.userId` | `string \| null` optional (Nulab-account users have none) | same | same | same | same |
@@ -1700,8 +1750,11 @@ marker has `postMessage`'s `{ raw }` postable, which bypasses the converter
   Thrown errors and logs carry `BacklogApiErrorDetail.url` with the query
   string stripped.
 - **Webhook authenticity** (D2): every installation has a `webhookSecret` or a
-  `webhookVerifier` exists, enforced at construction. The secret is compared
-  with `crypto.timingSafeEqual` after a length check. Backlog offers no HMAC
+  `webhookVerifier` exists, enforced at construction. A secret shorter than 16
+  bytes is a construction-time `ValidationError` — it is the whole of the
+  check, so a guessable one is a way in, and config resolution has no logger to
+  warn into. The secret is compared with `crypto.timingSafeEqual` after a
+  length check. Backlog offers no HMAC
   ([Add Webhook](https://developer.nulab.com/docs/backlog/api/2/add-webhook/)
   accepts only `name`, `description`, `hookUrl`, `allEvent`,
   `activityTypeIds[]`), so the secret in `?token=` is the strongest available
@@ -1724,7 +1777,12 @@ marker has `postMessage`'s `{ raw }` postable, which bypasses the converter
   any other host. HTTPS is always used; no redirects are followed for
   downloads.
 - **Body size**: bounded by `maxWebhookBodyBytes` (description edits can carry
-  two full bodies).
+  two full bodies). With no verifier configured, the body is not read until the
+  token has matched (§5.1), so an unauthenticated caller cannot make the
+  process buffer it. A verifier-protected deployment has to buffer first — the
+  verifier is given the body — and bounds the exposure with
+  `maxWebhookBodyBytes` alone; a deployment that cannot accept that puts the
+  check in front of the function (a reverse proxy, an IP allowlist) instead.
 - **Webhook URL hygiene**: README instructs registering
   `activityTypeIds: [1, 2, 3, 14, 18, 19, 20]` (plus 4 if deletion events are
   wanted; 21 was not observed and is not registered, D-PR5), never `allEvent`
@@ -1764,10 +1822,14 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   and not cached; `userName` default; `botUserName(host)` per installation,
   unchanged by a `userName` override, unknown host → `ResourceNotFoundError`.
 - **webhook**: one test per ladder row in §5.1 (405, 400 unreadable, 413, 401
-  verifier false/throw, 401 unknown host, 401 missing host with two
+  verifier false/throw/`undefined`/truthy non-boolean, 401 unknown host, 401
+  missing host with two
   installations, 200 missing host with one installation, 401 missing/wrong
   token, 400 invalid JSON, 400 no type, 200 ignored 14/17/99, 400 schema, 503
-  uninitialised, 200 self, 200 dispatched); identical 401 bodies; fixture-driven
+  uninitialised, 200 self, 200 dispatched); identical 401 bodies; both
+  orders of §5.1 rows 2/4/5 (with no verifier, an oversized body with a wrong
+  token or an unknown host is a 401 and `request.bodyUsed` is still `false`;
+  with a verifier, the same request is a 413 and the verifier never runs); fixture-driven
   mapping for: type 3 comment, type 1 with and without bot assignee, type 2
   status change, type 2 assignee change (`content: null`), type 2 description
   edit, type 2 attachment add via changelog comment, type 2 without comment

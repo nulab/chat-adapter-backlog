@@ -120,7 +120,7 @@ export interface SubjectClient {
   webhookAttachment(attachment: {
     id: number;
     name: string;
-    size: number;
+    size?: number | undefined;
   }): Attachment;
   /**
    * The file a webhook `changes[]` entry names, for a kind whose payload

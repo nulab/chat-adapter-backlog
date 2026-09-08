@@ -285,7 +285,7 @@ You need a Backlog space and a personal API key.
    | `BACKLOG_ACCESS_TOKEN`  | one of these two        | OAuth 2.0 bearer token instead of a key. Expires after an hour; the adapter runs no OAuth flow, so use the resolver form long-term.  |
    | `BACKLOG_BOT_USER_ID`   | yes                     | Numeric id of the bot user. `GET /api/v2/users/myself` reports it for the key above. Recognises the bot's own messages.              |
    | `BACKLOG_BOT_USER_NAME` | yes                     | The bot's display name as Backlog renders it. Mentions arrive as resolved text, so this is what the mention pattern matches.         |
-   | `BACKLOG_WEBHOOK_SECRET`| unless a verifier is set| Secret carried in the webhook URL's `token` parameter. Backlog signs nothing, so this is the only sender-side check available.       |
+   | `BACKLOG_WEBHOOK_SECRET`| unless a verifier is set| Secret carried in the webhook URL's `token` parameter, at least 16 bytes. Backlog signs nothing, so this is the only sender-side check available. |
    | `BACKLOG_LIVE_ISSUE_ID` | live suite only         | Numeric id of a scratch issue the opt-in live suite comments on.                                                                     |
    | `BACKLOG_LIVE_PULL_REQUEST` | live suite only     | `<repositoryId>:<number>` of a scratch pull request in the same project as `BACKLOG_LIVE_ISSUE_ID`. The suite comments on it and cannot clean up: Backlog has no delete. |
 

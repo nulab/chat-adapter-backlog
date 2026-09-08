@@ -78,7 +78,7 @@ not a request to fall back.
 | `BACKLOG_ACCESS_TOKEN` | one of the two | OAuth 2.0 bearer token instead of a key. |
 | `BACKLOG_BOT_USER_ID` | yes | Numeric id of the bot user; `GET /api/v2/users/myself` reports it. |
 | `BACKLOG_BOT_USER_NAME` | yes | The bot's display name, as Backlog renders it in a comment. |
-| `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter. |
+| `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter. At least 16 bytes. |
 
 ## Configuration
 
@@ -88,7 +88,7 @@ not a request to fall back.
 | `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | — | Exactly one per installation. The function form is resolved on **every** call and never cached, so an expiring token can be refreshed without reconstructing the adapter. |
 | `botUserId` | `number` | — | Positive integer. Recognises the adapter's own messages and assignment to the bot. |
 | `botUserName` | `string` | — | Non-empty. Mentions arrive as resolved text, so this is what the mention pattern matches. |
-| `webhookSecret` | `string` | — | Required on every installation unless `webhookVerifier` is set. |
+| `webhookSecret` | `string` | — | Required on every installation unless `webhookVerifier` is set. **At least 16 bytes**, checked when the adapter is constructed — it is the only thing standing between the URL and your projects, so a short one is refused rather than warned about. |
 | `installations` | `BacklogInstallation[]` | — | Several spaces in one adapter. Mutually exclusive with the fields above. |
 | `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check entirely — for a reverse-proxy assertion, mTLS or an IP allowlist. |
 | `userName` | `string` | first installation's `botUserName` | Exposed to the core as `adapter.userName`. One string for the whole adapter; per space, read `adapter.botUserName(host)`. |
@@ -142,7 +142,8 @@ core's `@<id>` pattern would be wrong for every space but one.
    section is missing, an administrator must enable API access for the space.
 3. **Find its numeric id.** `GET /api/v2/users/myself` with that key reports
    `id` — that is `botUserId`, not the login name.
-4. **Generate a webhook secret**: `openssl rand -hex 32`.
+4. **Generate a webhook secret**: `openssl rand -hex 32`. Anything under 16
+   bytes is rejected at construction.
 5. **Register a webhook per project** (Project Settings → Integrations →
    Webhook, or
    [Add Webhook](https://developer.nulab.com/docs/backlog/api/2/add-webhook/)):
@@ -192,7 +193,17 @@ weaker than an HMAC — anyone who learns the URL can post to it.
 
 The adapter compares it in constant time and answers **401 with an identical
 body** for a missing token, a wrong token, an unknown host and a missing host,
-so an unauthenticated caller cannot map your configuration.
+so an unauthenticated caller cannot map your configuration. It also checks the
+token **before it reads the request body**, so a caller who has found the URL
+but not the secret cannot make your function buffer up to
+`maxWebhookBodyBytes` (5 MiB by default) per request — that request costs it a
+401 after its headers, and it never learns what the limit is.
+
+A `webhookVerifier` is the one case where the body is read first: the verifier
+is handed it, so it has to be. `maxWebhookBodyBytes` is then the only bound on
+what an unauthenticated request can make the process hold; lower it, or put
+the check in front of the function — a reverse proxy, an IP allowlist — if
+that matters for your deployment.
 
 Harden a deployment further with `webhookVerifier`, which replaces the secret
 check: an IP allowlist against
@@ -617,7 +628,8 @@ const adapter = createBacklogAdapter({
   apiKey: 'test',
   botUserId: 999,
   botUserName: 'Chatbot',
-  webhookSecret: 'test',
+  // 16 bytes minimum, in a test too: the check runs in the constructor.
+  webhookSecret: 'test-webhook-secret',
   createApi: () => api,
 });
 ```

@@ -117,13 +117,24 @@ function changeAttachments(
   return attachments;
 }
 
+/**
+ * An absent key, an explicit `null` and a value in a shape the schema could
+ * not read (`src/webhook/payload.ts` `changeValueSchema`) all mean the same
+ * thing: this entry names no such value. `String()` alone would turn the last
+ * two into the text `"null"`, which `changeAttachments` above then reports as
+ * a file called `null`.
+ */
+function changeValue(value: string | number | null | undefined): string | null {
+  return value === undefined || value === null ? null : String(value);
+}
+
 export function normaliseChanges(
   raw: ActivityChange[] | undefined
 ): BacklogChange[] {
   return (raw ?? []).map((change) => ({
     field: change.field,
-    newValue: change.new_value === undefined ? null : String(change.new_value),
-    oldValue: change.old_value === undefined ? null : String(change.old_value),
+    newValue: changeValue(change.new_value),
+    oldValue: changeValue(change.old_value),
   }));
 }
 

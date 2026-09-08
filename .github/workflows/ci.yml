@@ -98,7 +98,7 @@ jobs:
               apiKey: 'smoke-test',
               botUserId: 999,
               botUserName: 'Chatbot',
-              webhookSecret: 'smoke-test',
+              webhookSecret: 'smoke-test-webhook-secret',
             });
             if (adapter.name !== 'backlog') {
               throw new Error(\`adapter.name is \${adapter.name}, not backlog\`);

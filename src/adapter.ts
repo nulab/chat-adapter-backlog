@@ -226,9 +226,26 @@ function validateBotUserName(value: string, label: string): string {
   return value;
 }
 
+/**
+ * The webhook secret is the whole of webhook authenticity when no
+ * `webhookVerifier` is configured: Backlog signs nothing, so anyone who can
+ * guess the URL can post a payload the adapter will act on
+ * (docs/specs/adapter.md §11). Sixteen bytes is the floor at which guessing
+ * is not the cheap attack, and it is a construction-time `ValidationError`
+ * rather than a warning because config resolution has no logger to warn into
+ * and a library must not decide for a deployment that a weak secret is
+ * acceptable — the README's `openssl rand -hex 32` produces 64.
+ */
+const MIN_WEBHOOK_SECRET_BYTES = 16;
+
 function validateWebhookSecret(value: string, label: string): string {
   if (value.length === 0) {
     fail(`${label} must not be empty`);
+  }
+  if (Buffer.byteLength(value, 'utf8') < MIN_WEBHOOK_SECRET_BYTES) {
+    fail(
+      `${label} must be at least ${MIN_WEBHOOK_SECRET_BYTES} bytes; generate one with \`openssl rand -hex 32\``
+    );
   }
   return value;
 }

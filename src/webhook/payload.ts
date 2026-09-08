@@ -42,6 +42,34 @@ export function parseEnvelope(value: object): WebhookEnvelope | null {
  */
 const identitySchema = z.number().int().positive();
 
+/**
+ * The delivery's timestamp, which is not display data: an update carrying no
+ * comment id has the message id `<host>:<subject>:u:<created>` (`src/ids.ts`)
+ * and every message's `metadata.dateSent` is `new Date(created)`. `created: ""`
+ * therefore produced an id no `decodeMessageId` could read back and an
+ * `Invalid Date` on the envelope, both behind a 200 — so a value the two
+ * readers cannot use is a 400 (§5.1 step 9) instead.
+ *
+ * The check is "names an instant", not a grammar. `z.iso.datetime()` would
+ * reject a delivery that added milliseconds or a `+09:00` offset, and Backlog
+ * documents no format for this field at all — every measured value is
+ * `2026-09-03T04:05:06Z` (`.claude/rules/backlog-webhook-facts.md`), which is
+ * a measurement, not a promise. Both readers handle any form `Date` accepts,
+ * so rejecting past that would lose real events to buy nothing.
+ *
+ * That makes the accepted set **loose and engine-defined** on purpose:
+ * `Date.parse` also takes `"2026"` and `"Sep 3 2026"`, and what it takes
+ * beyond ISO 8601 is implementation-specific. Nothing downstream is harmed by
+ * that — both readers build the same `new Date(created)`, and `src/ids.ts`
+ * rejoins the `u:` tail whatever it contains, so any non-empty value
+ * round-trips through the message id. Tightening this to a fixed grammar
+ * would turn a widened Backlog timestamp into lost events, which is the
+ * failure this check exists to prevent; re-measure before narrowing it.
+ */
+const createdSchema = z
+  .string()
+  .refine((value) => Number.isFinite(Date.parse(value)));
+
 const createdUserSchema = z.object({
   id: identitySchema,
   name: z.string(),
@@ -51,19 +79,53 @@ const createdUserSchema = z.object({
 /** `createdUser` shape shared by every activity type §5.2 requires it on. */
 export type ActivityCreatedUser = z.infer<typeof createdUserSchema>;
 
+/**
+ * One `changes[]` value. `.catch(null)` rather than the bare union: the value
+ * system is Backlog's own and only partly measured — a status arrives as an
+ * id string, an assignee as a display name
+ * (`.claude/rules/backlog-webhook-facts.md`) — and a custom attribute whose
+ * value serialises as something else (a checkbox, a multiple-choice list)
+ * would otherwise fail the field and cost a 400, dropping the real comment
+ * the same delivery carries. Nothing identifies a subject here, so "a value
+ * in a shape this adapter has not measured" is read as "no value", and
+ * `raw.payload` still hands the consumer what Backlog actually sent.
+ */
+const changeValueSchema = z
+  .union([z.string(), z.number()])
+  .nullable()
+  .catch(null)
+  .optional();
+
 const changeSchema = z.object({
   field: z.string(),
-  new_value: z.union([z.string(), z.number()]).nullable().optional(),
-  old_value: z.union([z.string(), z.number()]).nullable().optional(),
+  new_value: changeValueSchema,
+  old_value: changeValueSchema,
 });
 
 /** One `content.changes[]` entry (docs/specs/adapter.md §5.2). */
 export type ActivityChange = z.infer<typeof changeSchema>;
 
+/**
+ * `size` is informational — it reaches `Attachment.size` and nothing else —
+ * so `.optional().catch(undefined)`: absent, `null` and a shape this adapter
+ * has not measured all read as "this delivery says no size", none of them
+ * costing the message. Only `id` addresses the file.
+ *
+ * `name` stays **required**, which is deliberately asymmetric with the REST
+ * side, where `src/client/schemas.ts` makes both fields optional, and with
+ * `chat`'s own `Attachment.name` (`?: string`). Do not "align" them: the two
+ * are not the same evidence. The REST form is optional because two Backlog
+ * doc pages disagree about which keys a `changeLog` attachment carries, while
+ * every measured webhook payload names its files; and a falling-back `name`
+ * would have to either invent a file name or drop the whole file list, where
+ * a falling-back `size` loses nothing a consumer can act on. If an unnamed
+ * webhook attachment is ever measured, that measurement is what changes this
+ * — not the symmetry.
+ */
 const attachmentSchema = z.object({
   id: z.number(),
   name: z.string(),
-  size: z.number(),
+  size: z.number().optional().catch(undefined),
 });
 
 /** One `content.attachments[]` entry (docs/specs/adapter.md §5.2, §6.6). */
@@ -103,7 +165,7 @@ export type ActivityNotification = z.infer<typeof notificationSchema>;
  * optional even though every measured payload carries them.
  */
 const baseActivitySchema = z.object({
-  created: z.string(),
+  created: createdSchema,
   project: z.object({
     id: identitySchema,
     projectKey: z.string().optional(),

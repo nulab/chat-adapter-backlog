@@ -188,7 +188,7 @@ describe('verifyWebhookRequest', () => {
   it('with two installations an explicit host resolves to that installation', async () => {
     const logger = createMockLogger();
     const result = await verifyWebhookRequest({
-      request: request({ host: OTHER_HOST, token: 'other-secret' }),
+      request: request({ host: OTHER_HOST, token: 'other-webhook-secret' }),
       maxWebhookBodyBytes: 1024,
       webhookVerifier: undefined,
       installations: installations(
@@ -196,7 +196,7 @@ describe('verifyWebhookRequest', () => {
         installation({
           host: OTHER_HOST,
           botUserId: 998,
-          webhookSecret: 'other-secret',
+          webhookSecret: 'other-webhook-secret',
         })
       ),
       logger,
@@ -270,6 +270,113 @@ describe('verifyWebhookRequest', () => {
     });
 
     expect(result).toMatchObject({ ok: true, host: HOST });
+  });
+
+  it('a verifier that returns undefined is rejected with 401', async () => {
+    const logger = createMockLogger();
+    // The verifier is typed to return `unknown`, so a check that falls off
+    // the end of the function type-checks; the safe reading of "it said
+    // nothing" is "it did not authenticate this request".
+    const verifier = vi.fn().mockReturnValue(undefined);
+    const result = await verifyWebhookRequest({
+      request: request(),
+      maxWebhookBodyBytes: 1024,
+      webhookVerifier: verifier,
+      installations: installations(installation()),
+      logger,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 401,
+      body: UNAUTHORIZED_BODY,
+      reason: 'verifier',
+    });
+  });
+
+  it('a verifier that returns a truthy value of any type accepts the request', async () => {
+    const logger = createMockLogger();
+    for (const verdict of ['ok', 1, { assertion: 'proxy' }, [1]]) {
+      const result = await verifyWebhookRequest({
+        request: request(),
+        maxWebhookBodyBytes: 1024,
+        webhookVerifier: vi.fn().mockReturnValue(verdict),
+        installations: installations(installation()),
+        logger,
+      });
+
+      expect(result).toMatchObject({ ok: true, host: HOST });
+    }
+  });
+
+  it('a verifier that resolves a falsy non-boolean is rejected with 401', async () => {
+    const logger = createMockLogger();
+    for (const verdict of [0, '', null]) {
+      const result = await verifyWebhookRequest({
+        request: request(),
+        maxWebhookBodyBytes: 1024,
+        webhookVerifier: vi.fn().mockResolvedValue(verdict),
+        installations: installations(installation()),
+        logger,
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 401 });
+    }
+  });
+
+  it('without a verifier a wrong token is rejected before the body is read', async () => {
+    const logger = createMockLogger();
+    const oversized = request({ token: 'wrong-token', body: 'x'.repeat(100) });
+
+    const result = await verifyWebhookRequest({
+      request: oversized,
+      maxWebhookBodyBytes: 10,
+      webhookVerifier: undefined,
+      installations: installations(installation()),
+      logger,
+    });
+
+    // 401 rather than the 413 the same request used to get: an unauthenticated
+    // caller never makes the process buffer maxWebhookBodyBytes, and never
+    // learns what that limit is.
+    expect(result).toMatchObject({ ok: false, status: 401 });
+    expect(oversized.bodyUsed).toBe(false);
+  });
+
+  it('without a verifier an unknown host is rejected before the body is read', async () => {
+    const logger = createMockLogger();
+    const oversized = request({
+      host: 'nope.backlog.com',
+      body: 'x'.repeat(100),
+    });
+
+    const result = await verifyWebhookRequest({
+      request: oversized,
+      maxWebhookBodyBytes: 10,
+      webhookVerifier: undefined,
+      installations: installations(installation()),
+      logger,
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 401 });
+    expect(oversized.bodyUsed).toBe(false);
+  });
+
+  it('with a verifier the body is read first, because the verifier is given it', async () => {
+    const logger = createMockLogger();
+    const verifier = vi.fn().mockReturnValue(true);
+    const oversized = request({ body: 'x'.repeat(100) });
+
+    const result = await verifyWebhookRequest({
+      request: oversized,
+      maxWebhookBodyBytes: 10,
+      webhookVerifier: verifier,
+      installations: installations(installation()),
+      logger,
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 413 });
+    expect(verifier).not.toHaveBeenCalled();
   });
 
   it('a verifier check runs before host resolution so an unknown host never gets a distinct response', async () => {
