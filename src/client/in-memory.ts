@@ -259,13 +259,14 @@ export function createInMemoryBacklogApi(
 
   /**
    * Refuses a comment body Backlog refuses. `content` is a required parameter
-   * on all four comment endpoints, and a missing one is a 400 code 7
-   * (`.claude/rules/backlog-api-facts.md` "Writes";
-   * `code 7 "No comment content."` was measured on the issue side).
+   * on all four comment endpoints (`.claude/rules/backlog-api-facts.md`
+   * "Writes"), so an empty one is a 400 code 7 — **inferred** from code 7
+   * being `InvalidRequestError` (docs/specs/adapter.md §8.5), not measured:
+   * nothing here has posted an empty comment to a real space.
    * Whitespace is deliberately *not* trimmed first: `stream()` posts a single
-   * space for an empty stream (docs/specs/adapter.md §6.4), so a fake that
-   * trimmed would fail the adapter's own documented path on a claim no
-   * measurement supports.
+   * space for an empty stream (docs/specs/adapter.md §4.2 `stream`, §15
+   * question 7), so a fake that trimmed would fail the adapter's own
+   * documented path on a claim no measurement supports either.
    */
   function requireCommentContent(content: string): void {
     if (content === '') {

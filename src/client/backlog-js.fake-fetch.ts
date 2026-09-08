@@ -426,11 +426,15 @@ export function createFakeBacklogServer(
   }
 
   /**
-   * `content` is a required form parameter on all four comment endpoints, and
-   * an absent or empty one answers 400 code 7 — `code 7 "No comment content."`
-   * measured on the issue side (`.claude/rules/backlog-webhook-facts.md`).
+   * `content` is a required form parameter on all four comment endpoints
+   * (`.claude/rules/backlog-api-facts.md` "Writes"), so an empty one answers
+   * 400 code 7. The code is **inferred** from code 7 being
+   * `InvalidRequestError` (docs/specs/adapter.md §8.5) rather than measured,
+   * and the message below is a stand-in: no empty comment has been posted to
+   * a real space, so its wire text is unknown. Nothing asserts it.
    * A body of a single space is content: it is what `stream()` posts for an
-   * empty stream (docs/specs/adapter.md §6.4), so nothing is trimmed here.
+   * empty stream (docs/specs/adapter.md §4.2 `stream`, §15 question 7), so
+   * nothing is trimmed here.
    */
   function requireContent(content: string | string[] | undefined): string {
     if (content === undefined || content === '') {
@@ -516,6 +520,12 @@ export function createFakeBacklogServer(
       // project's own lists is `InvalidRequestError`. `src/egress.ts` reads
       // exactly this failure to refresh its cached defaults, so a fake that
       // accepted anything left that path untested.
+      //
+      // The two messages are stand-ins. `error.unknownParameter : statusId`
+      // was measured for a rejected **parameter name**
+      // (`.claude/rules/backlog-pull-request-facts.md` "Writes the API cannot
+      // make"); what a real space says about an unresolvable id *value* has
+      // not been measured. Nothing asserts either string.
       const issueType = issueTypes.find(
         (t) => t.id === Number(params['issueTypeId'])
       );

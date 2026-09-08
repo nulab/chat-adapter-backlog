@@ -1245,7 +1245,7 @@ for a missing resource, but for the three refusals a write can meet on a real
 space: an `issueTypeId` or `priorityId` outside the seeded lists is a
 `ValidationError` rather than an issue carrying a fabricated type name, an
 empty comment body is a `ValidationError` on add and on update (a single space
-is a body — §6.4 posts one), and updating or deleting a comment whose
+is a body — §4.2 `stream` posts one), and updating or deleting a comment whose
 `createdUser` is not `me` is a `PermissionError`. `uploadAttachment` keeps the
 bytes it was handed: `size` reports their length, `recordedInputs` carries a
 copy, and a download of that id returns them.
@@ -1354,8 +1354,8 @@ Guaranteed by the suite, on both implementations:
 - comment add/edit/delete reflected in the list, and `addComment` accepts
   `notifiedUserId`/`attachmentId`;
 - an empty comment body is a `ValidationError` on add and on update, on an
-  issue and on a pull request, while a single space is accepted (§6.4 posts
-  one for an empty stream);
+  issue and on a pull request, while a single space is accepted (§4.2
+  `stream` posts one for an empty stream);
 - updating or deleting a comment written by another user is a
   `PermissionError` that leaves the comment unchanged — on issues, and on
   update for pull requests, which have no delete at all;
@@ -1391,15 +1391,20 @@ Left to the wrapper's tests, because only the wire client has anything to
 exercise them against: 429 with a near `reset` retried once and then
 succeeding, 429 with a distant `reset` throwing `AdapterRateLimitError`
 without waiting, and the retry's timing, jitter and `warn` lines (§8.4); the
-rows of the §8.5 code→class table no operation on a well-formed space
-produces (11, 10, 1/2/3/8/9/12) and the status-only fallbacks; a response that
-violates the schema becoming `AdapterError("SCHEMA")` and never a `ZodError`;
-non-JSON, empty and unreadable bodies becoming `NetworkError`; the credential
-resolver's failure modes; and the shape of the request itself — the key in a
-header and never in the query string, one multipart part named `file`, a pull
-request addressed by three coordinates.
+codes of the §8.5 table neither fake models — 11, 10 and 1/2/3/8/9/12 — and
+the status-only fallbacks; a response that violates the schema becoming
+`AdapterError("SCHEMA")` and never a `ZodError`; non-JSON, empty and
+unreadable bodies becoming `NetworkError`; the credential resolver's failure
+modes; and the shape of the request itself — the key in a header and never in
+the query string, one multipart part named `file`, a pull request addressed by
+three coordinates.
 
-Three rows of the §8.5 table are covered on both implementations, and by
+Unmodelled is not unreachable, and 10 `TooLargeFileError` is the one to keep
+apart: an oversized upload produces it against a real space, and neither fake
+enforces a size limit, so it is absent from the suite because nothing here
+models the limit rather than because no operation reaches it.
+
+Three codes of the §8.5 table are covered on both implementations, and by
 operations rather than by synthesised responses: **6** through every
 missing-resource call, **7** through the two `ValidationError` refusals above,
 **5** through the ownership refusals.
