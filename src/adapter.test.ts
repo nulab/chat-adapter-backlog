@@ -1132,20 +1132,22 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
     expect(await response.text()).toBe('Invalid payload');
   });
 
-  it('a delivery whose created is empty is still answered from the ladder', async () => {
-    // `created` is `z.string()` at step 9, so `""` reaches the dispatcher,
-    // where the only message-id form an empty timestamp can produce is the
-    // one the encoder rejects. The response owes the caller a ladder entry
-    // either way: the id is a log field, not the answer.
+  it('a delivery whose created is empty is answered 400, not 500', async () => {
+    // Step 9 rejects it (§5.2 `createdSchema`), which is the ladder's answer.
+    // Worth asserting end to end rather than at the schema alone: tightening
+    // the id encoders gave the dispatcher a way to throw past the ladder for
+    // this exact payload, and a throw there is the consumer's function
+    // rejecting — a 500 on a delivery §5.1 has six answers for.
     const { adapter } = await webhookAdapter();
     const payload = { ...issueUpdatedWithoutComment(), created: '' };
 
     const response = await adapter.handleWebhook(webhookRequest(payload));
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe('Invalid payload');
   });
 
-  it('a bulk delivery whose created is empty is still answered 200', async () => {
+  it('a bulk delivery whose created is empty is answered 400, not 500', async () => {
     const { adapter } = await webhookAdapter();
     const payload = issueMultiUpdated();
     const content = payload['content'] as Record<string, unknown>;
@@ -1157,7 +1159,7 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
 
     const response = await adapter.handleWebhook(webhookRequest(payload));
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(400);
   });
 
   it('a webhook before initialize() has run gets 503', async () => {

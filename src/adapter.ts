@@ -502,19 +502,21 @@ function validateMaxWebhookBodyBytes(value: number | undefined): number {
  *
  * `handleWebhook` owes its caller a response from the §5.1 ladder and holds
  * no `try/catch` outside the body parse, so an encoder throwing while
- * building a **log** value would take the response with it: `created` is
- * `z.string()` on the way in, and a delivery carrying `""` would leave the
+ * building a **log** value would take the response with it: when `created`
+ * was `z.string()` on the way in, a delivery carrying `""` left the
  * consumer's function rejecting — a 500 the ladder has no entry for — over
  * one field of one log line. The id of the message *itself* is built inside
  * the lazy factory, where the `.catch` on `processMessage` already turns a
  * throw into an error log after the 200 (§5.1 step 12), so nothing is
  * loosened where a failure can be reported.
  *
- * Only the `part: 'update'` form can fail today: the root and comment forms
+ * No payload can reach the failing branch today: the root and comment forms
  * are built from ids `identitySchema` already validated as positive safe
- * integers at step 9, while `created` has no such check until #63 lands.
- * This is written to be total anyway, because the value it guards is a log
- * field and the response is not.
+ * integers at step 9, and `createdSchema` rejects the empty timestamp the
+ * `part: 'update'` form would have tripped on (§5.2). It is written to be
+ * total anyway — the value it guards is a log field and the response is not,
+ * so the next encoder rule to name a field step 9 does not constrain costs a
+ * log line rather than a delivery.
  */
 function messageIdForLog(build: () => string): { messageId?: string } {
   try {
