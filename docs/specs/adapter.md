@@ -1329,29 +1329,74 @@ Every mapped error sets `error.cause` to a plain
 `describeBacklogApiConformance(name, factory)` runs the same behavioural
 suite against both implementations (the `backlog-js` one over a fake `fetch`
 that returns recorded response shapes and real `X-RateLimit-*` headers).
-Guarantees: issue/project/user/comment fetch and 404 → `ResourceNotFoundError`;
-a comment id from another issue is a 404; comment add/edit/delete reflected in
-the list and `addComment` accepts `notifiedUserId`/`attachmentId`; list paging
-with `count`/`order`/`minId`/`maxId` and exclusive bounds; issue list paging
-with `count`/`offset`; created issue appears with the bot as creator; issue
-types and priorities readable; stars carry `presenter` and are removable by
-star id, deleting a missing star is a 404; notifications list newest-first
-with `comment.id`, exclusive `maxId`, markable as read; upload returns
-`{ id, name, size }`; `rateLimit()` reflects the last response's headers per
-bucket and a `GET /issues` call updates `search`, not `read`; `getRateLimit()`
-reports buckets the client has never spent, with `reset` a date read from epoch
-seconds; 429 with a
-near `reset` is retried once and then succeeds; 429 with a distant `reset`
-throws `AdapterRateLimitError` without waiting; code→class table of §8.5;
-schema mismatch → `AdapterError("SCHEMA")`, not `ZodError`. Pull requests: a
-repository and a pull request fetch, and 404 → `ResourceNotFoundError`; the
-pull-request list pages with `count`/`offset` and spends `read`; pull-request
-comments page with exclusive `minId`/`maxId` and head-cut `count`;
-`addPullRequestComment` accepts `notifiedUserId`/`attachmentId`; a one-element
-window returns exactly the named comment; `addStar({ pullRequestCommentId })`
-stars the pull-request comment and `addStar({ commentId })` an issue comment;
-a notification carries `pullRequestComment.id`; a pull-request attachment
-downloads.
+
+The factory hands the suite a `BacklogApi` and nothing else, so a guarantee
+belongs here only if **both** implementations reach it through ordinary calls.
+A guarantee that needs a crafted response — a 429, a body that violates the
+schema, an error code no operation produces — belongs to the wrapper's own
+tests (§12.2, the **client** row), and the two lists below say which is which.
+The split is deliberate rather than a gap: a fault-injection seam on the
+factory would make the in-memory implementation assert retries, header
+arithmetic and zod validation it does not have — it has no wire, no schema and
+no retry — and a conformance suite only one implementation can satisfy is not
+a conformance suite.
+
+Guaranteed by the suite, on both implementations:
+
+- issue/project/user/comment fetch and 404 → `ResourceNotFoundError`; a
+  comment id from another issue is a 404;
+- comment add/edit/delete reflected in the list, and `addComment` accepts
+  `notifiedUserId`/`attachmentId`;
+- an empty comment body is a `ValidationError` on add and on update, on an
+  issue and on a pull request, while a single space is accepted (§6.4 posts
+  one for an empty stream);
+- updating or deleting a comment written by another user is a
+  `PermissionError` that leaves the comment unchanged — on issues, and on
+  update for pull requests, which have no delete at all;
+- list paging with `count`/`order`/`minId`/`maxId` and exclusive bounds; issue
+  list paging with `count`/`offset`;
+- a created issue appears with the bot as creator and carries the issue type
+  and priority it named, resolved to their names; an `issueTypeId` or
+  `priorityId` the space does not have is a `ValidationError`;
+- issue types and priorities readable;
+- stars carry `presenter` and are removable by star id; deleting a missing
+  star is a 404;
+- notifications list newest-first with `comment.id`, exclusive `maxId`,
+  markable as read;
+- an upload returns `{ id, name, size }` with `size` the byte length of the
+  file it was given — the only place this interface makes the bytes
+  observable, so it is what separates a client that sent the file from one
+  that sent an empty part;
+- `rateLimit()` reflects the last response's headers per bucket and a
+  `GET /issues` call updates `search`, not `read`; `getRateLimit()` reports
+  buckets the client has never spent, with `reset` a date read from epoch
+  seconds;
+- pull requests: a repository and a pull request fetch, and 404 →
+  `ResourceNotFoundError`; the list pages with `count`/`offset` and spends
+  `read`; comments page with exclusive `minId`/`maxId` and head-cut `count`;
+  `addPullRequestComment` accepts `notifiedUserId`/`attachmentId`; a
+  one-element window returns exactly the named comment;
+  `addStar({ pullRequestCommentId })` stars the pull-request comment and
+  `addStar({ commentId })` an issue comment; a notification carries
+  `pullRequestComment.id`; a pull-request attachment downloads, carrying as
+  many bytes as its listing reported.
+
+Left to the wrapper's tests, because only the wire client has anything to
+exercise them against: 429 with a near `reset` retried once and then
+succeeding, 429 with a distant `reset` throwing `AdapterRateLimitError`
+without waiting, and the retry's timing, jitter and `warn` lines (§8.4); the
+rows of the §8.5 code→class table no operation on a well-formed space
+produces (11, 10, 1/2/3/8/9/12) and the status-only fallbacks; a response that
+violates the schema becoming `AdapterError("SCHEMA")` and never a `ZodError`;
+non-JSON, empty and unreadable bodies becoming `NetworkError`; the credential
+resolver's failure modes; and the shape of the request itself — the key in a
+header and never in the query string, one multipart part named `file`, a pull
+request addressed by three coordinates.
+
+Three rows of the §8.5 table are covered on both implementations, and by
+operations rather than by synthesised responses: **6** through every
+missing-resource call, **7** through the two `ValidationError` refusals above,
+**5** through the ownership refusals.
 
 ### 8.7 Auth modes
 
