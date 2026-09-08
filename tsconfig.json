@@ -23,6 +23,10 @@
     // `sourcemap` on it writes a `sourceMappingURL` into every `.d.ts` and
     // only emits the matching `.d.ts.map` when `declarationMap` is set, so
     // dropping them leaves the published types pointing at missing files.
+    // `dts: { sourcemap: false }` in tsdown.config.ts overrides
+    // `declarationMap` for that pass, turning the URL and the map off
+    // together, which is why no `.d.ts.map` is published. Leave the value
+    // here: it is the coupling that holds if that option is ever removed.
     "declaration": true,
     "declarationMap": true,
     "noEmit": true

@@ -4,7 +4,15 @@ export default defineConfig({
   entry: { index: 'src/index.ts' },
   format: ['esm'],
   target: 'es2022',
-  dts: true,
+  // Reads as redundant next to `sourcemap: true` below, and is not: tsdown
+  // assembles the declaration pass's options without forwarding the top-level
+  // flag, so `rolldown-plugin-dts` falls back to tsconfig.json's
+  // `declarationMap` -- which is `true`. Saying it here is what drops
+  // `index.d.ts.map`, and it turns the map and the `sourceMappingURL` off
+  // together, so the `.d.ts` never points at a file that is not there. The
+  // map is unresolvable in the tarball either way: it refers to
+  // `../src/*.ts`, and `files: ["dist"]` publishes no `src/`.
+  dts: { sourcemap: false },
   // tsdown turns this on by default whenever `platform` resolves to `node`,
   // which would publish `index.mjs`. Every `@chat-adapter/*` adapter ships a
   // plain `index.js`, and with `"type": "module"` the bare extension is
