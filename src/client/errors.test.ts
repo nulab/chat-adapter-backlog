@@ -63,6 +63,43 @@ describe('mapBacklogError', () => {
     expect(error).toBeInstanceOf(ResourceNotFoundError);
   });
 
+  it("keeps Backlog's own message on a code 6, whose class composes its message from the resource ids", () => {
+    const error = mapBacklogError({
+      status: 404,
+      bodyError: { message: 'No such issue', code: 6 },
+      resourceType: 'issue',
+      resourceId: '8001',
+    });
+
+    expect(error.message).toContain('No such issue');
+    expect(error.message).toContain('issue');
+  });
+
+  it("keeps Backlog's own message on a code 13, whose class takes only the retry delay", () => {
+    const error = mapBacklogError({
+      status: 429,
+      bodyError: { message: 'Too many requests.', code: 13 },
+      retryAfterSeconds: 30,
+    });
+
+    expect(error.message).toContain('Too many requests.');
+  });
+
+  it('does not repeat the message on a class that was constructed with it', () => {
+    const error = mapBacklogError({
+      status: 400,
+      bodyError: { message: 'Invalid request', code: 7 },
+    });
+
+    expect(error.message.split('Invalid request')).toHaveLength(2);
+  });
+
+  it('leaves the message alone when the body carried none to keep', () => {
+    const error = mapBacklogError({ status: 404, resourceType: 'issue' });
+
+    expect(error.message).not.toContain('Backlog API request failed');
+  });
+
   it.each([
     [401, AuthenticationError],
     [403, PermissionError],

@@ -1183,6 +1183,17 @@ lost between the subject layer and the request. No method deletes a
 pull-request comment or fetches one by id: neither route exists
 (`.claude/rules/backlog-pull-request-facts.md`).
 
+The two download methods name the file from `Content-Disposition`, the only
+place Backlog puts it, and never fail over the name: a download whose bytes
+arrived is a success. `filename*` is preferred over plain `filename` when a
+header carries both ([RFC 6266
+§4.3](https://www.rfc-editor.org/rfc/rfc6266#section-4.3)); only `filename*`
+is percent-decoded, because RFC 6266 leaves plain `filename` a quoted string
+(so `filename="100%.png"` is that name, not a decode failure); a `filename*`
+that will not decode falls back to its raw value; and a header naming no file
+falls back to the attachment id. Only the `UTF-8''` prefix is stripped, so
+another charset or a populated `language` field is left in the returned name.
+
 Bucket assignment follows the rule on the
 [Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/) page:
 read = GET except Search and Icon; update = POST/PATCH/DELETE; search = Get
@@ -1327,6 +1338,13 @@ Every mapped error sets `error.cause` to a plain
 `BacklogApiErrorDetail { status, code?, message, moreInfo?, url }` — never the
 `backlog-js` error instance and never the secret-bearing request.
 
+When the body carried a message, that message is on `error.message` as well.
+Two of the classes above take none — `ResourceNotFoundError(resourceType,
+resourceId)` and `AdapterRateLimitError(retryAfterSeconds)` compose theirs
+from the ids and the delay — so a code 6's "No such issue" is appended to what
+the class wrote rather than reaching the caller on `cause` alone, where no log
+line that prints the error would show it.
+
 ### 8.6 Conformance suite
 
 `describeBacklogApiConformance(name, factory)` runs the same behavioural
@@ -1363,6 +1381,18 @@ API key (`Backlog-API-Key` header) or OAuth 2.0 bearer token
 caller through the resolver form; the adapter performs no OAuth flow
 ([Authentication](https://developer.nulab.com/docs/backlog/auth/)). Both
 identify the bot **user**; rate limits are per user, not per key.
+
+**Exactly one** of the two per installation. The `BacklogCredentials` union
+says so, and says it with an `apiKey?: never` / `accessToken?: never` on its
+members, because a union target on its own rejects only a property that
+appears in **no** member — `{ apiKey, accessToken }` type-checks clean against
+the bare union, since `accessToken` is not excess there, it belongs to the
+other member. The port checks the same thing again when it is built, for a
+value that reached it through a type assertion: both or neither is a
+`ValidationError` naming the host. Both is never a silent preference for the
+API key — a deployment that adds an OAuth token means to stop sending its
+space's long-lived key, and going on sending it is the one outcome nothing in
+the logs would reveal.
 
 ## 9. Formatting
 

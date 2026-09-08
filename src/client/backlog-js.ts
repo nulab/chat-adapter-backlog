@@ -1,4 +1,4 @@
-import { AdapterError } from '@chat-adapter/shared';
+import { AdapterError, ValidationError } from '@chat-adapter/shared';
 import { Backlog } from 'backlog-js';
 import { z } from 'zod';
 
@@ -43,6 +43,7 @@ import type {
   AddPullRequestCommentInput,
   BacklogApi,
   BacklogComment,
+  BacklogCredentials,
   BacklogDownloadedFile,
   BacklogGitRepository,
   BacklogIssue,
@@ -60,6 +61,7 @@ import type {
   ListIssuesOptions,
   ListNotificationsOptions,
   ListPullRequestsOptions,
+  MaybeAsync,
   PullRequestRef,
   RateLimitBucket,
   RateLimitSnapshots,
@@ -117,9 +119,66 @@ function requestHeaders(input: Parameters<Fetch>[0]): Headers | undefined {
   return input instanceof Request ? input.headers : undefined;
 }
 
-export interface BacklogCredentials {
-  apiKey?: () => string | Promise<string>;
-  accessToken?: () => string | Promise<string>;
+/** The one auth mode a transport was configured with (docs/specs/adapter.md §8.7). */
+interface ChosenCredential {
+  /** The request header the resolved value goes on. */
+  header: string;
+  /** Renders the resolved value the way that header wants it. */
+  format: (value: string) => string;
+  resolve: () => MaybeAsync<string>;
+}
+
+/**
+ * Picks the auth mode, once per transport.
+ *
+ * Both credentials used to mean `apiKey`, silently, and that is the wrong
+ * default to have: a deployment that added an OAuth token meaning to stop
+ * sending its space's long-lived API key would have gone on sending the key,
+ * with nothing in the logs to say so. Both and neither are therefore a
+ * `ValidationError`, raised here rather than on the first request — neither
+ * becomes right by retrying, and no resolver has run yet, so the message can
+ * name the host with no secret in hand.
+ *
+ * The type says the same thing (§8.7), and it says it about the only caller
+ * that can reach here — `toCredentials` in `src/adapter.ts`, since neither
+ * `createBacklogJsApi` nor `createBacklogJsTransport` is on the package's
+ * public surface (`src/index.test.ts` asserts both absences). So what these
+ * two branches answer is a value cast past the compiler, and nothing else.
+ * Deleting them as redundant restores the silent preference, because the
+ * reader that follows them is a header being set, not a type being checked.
+ */
+function chooseCredential(
+  host: string,
+  credentials: BacklogCredentials
+): ChosenCredential {
+  // Both properties are readable off the bare union: `?: never` puts each of
+  // them in both members, which is what lets one destructuring see the shape
+  // the check needs.
+  const { apiKey, accessToken } = credentials;
+  if (apiKey !== undefined && accessToken !== undefined) {
+    throw new ValidationError(
+      'backlog',
+      `Backlog credentials for ${host} carry both apiKey and accessToken; configure exactly one`
+    );
+  }
+  if (apiKey !== undefined) {
+    return {
+      header: 'Backlog-API-Key',
+      format: (value) => value,
+      resolve: apiKey,
+    };
+  }
+  if (accessToken !== undefined) {
+    return {
+      header: 'Authorization',
+      format: (value) => `Bearer ${value}`,
+      resolve: accessToken,
+    };
+  }
+  throw new ValidationError(
+    'backlog',
+    `Backlog credentials for ${host} carry neither apiKey nor accessToken; configure exactly one`
+  );
 }
 
 export interface CreateBacklogJsApiOptions {
@@ -203,19 +262,16 @@ export function createBacklogJsTransport(
     logger,
   } = options;
   const tracker = new RateLimitTracker();
+  const credential = chooseCredential(host, credentials);
 
-  async function resolveCredentials(): Promise<{
-    apiKey?: string;
-    accessToken?: string;
-  }> {
+  /**
+   * Resolves the credential's value. Awaited on every attempt and never
+   * memoised, because the resolver form exists so an OAuth token can be
+   * refreshed between calls (docs/specs/adapter.md §8.2, §8.7).
+   */
+  async function resolveCredential(): Promise<string> {
     try {
-      if (credentials.apiKey) {
-        return { apiKey: await credentials.apiKey() };
-      }
-      if (credentials.accessToken) {
-        return { accessToken: await credentials.accessToken() };
-      }
-      throw new Error('No Backlog credential resolver configured');
+      return await credential.resolve();
     } catch (cause) {
       throw mapCredentialResolverError(cause);
     }
@@ -252,7 +308,7 @@ export function createBacklogJsTransport(
     // and the secret is never held on an object handed to a consumer. It goes
     // on here instead, resolved again for every attempt: the resolver form
     // exists so an OAuth token can be refreshed between calls.
-    applyCredential(headers, await resolveCredentials());
+    applyCredential(headers, await resolveCredential());
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -385,18 +441,9 @@ export function createBacklogJsTransport(
    * used to make the same check for us, and cannot any more — this client is
    * built holding no credential at all.
    */
-  function applyCredential(
-    headers: Headers,
-    resolved: { apiKey?: string; accessToken?: string }
-  ): void {
+  function applyCredential(headers: Headers, value: string): void {
     try {
-      if (resolved.apiKey !== undefined) {
-        headers.set('Backlog-API-Key', resolved.apiKey);
-        return;
-      }
-      if (resolved.accessToken !== undefined) {
-        headers.set('Authorization', `Bearer ${resolved.accessToken}`);
-      }
+      headers.set(credential.header, credential.format(value));
     } catch (cause) {
       throw mapCredentialResolverError(cause);
     }
@@ -922,11 +969,40 @@ async function toDownloadedFile(
  * Extracts a filename from `Content-Disposition`. Backlog's download
  * endpoint (docs/specs/adapter.md §8.1) names the file this way; there is no
  * separate filename field in the JSON API.
+ *
+ * The two forms are matched separately, in the order
+ * [RFC 6266 §4.3](https://www.rfc-editor.org/rfc/rfc6266#section-4.3) asks
+ * for — `filename*` wins and plain `filename` is then ignored — rather than
+ * with one pattern taking whichever appeared first in the header. A sender
+ * that supplies both means the plain one as the fallback for a receiver that
+ * cannot read the extended one, so taking it by position gets the answer
+ * backwards whenever it happens to come first.
+ *
+ * Only the extended form is percent-decoded: RFC 6266 percent-encodes
+ * `filename*` and leaves plain `filename` a quoted string, which is what
+ * Backlog itself sends (`filename*=UTF-8''…`, measured 2026-09-06). Decoding
+ * both is what made a plain `filename="100%.png"` throw a `URIError` out of a
+ * download that had already succeeded, and it would also have turned a
+ * literal `%20` in a plain name into a space.
+ *
+ * Only `UTF-8''` is stripped, so any other charset or a populated `language`
+ * field stays in the returned name (`UTF-8'en'a%20b.png` → `UTF-8'en'a b.png`,
+ * `ISO-8859-1''%E9.png` → `ISO-8859-1''%E9.png`). That is wrong and known to
+ * be; what matters is that it cannot fail the call, which is why an
+ * undecodable value falls back to the raw string instead of throwing. The
+ * caller wanted the bytes, and the name is a label on them.
  */
 function parseFilename(disposition: string | null): string | undefined {
   if (disposition === null) {
     return undefined;
   }
-  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
-  return match?.[1] === undefined ? undefined : decodeURIComponent(match[1]);
+  const extended = /filename\*=(?:UTF-8'')?([^";]+)/i.exec(disposition)?.[1];
+  if (extended !== undefined) {
+    try {
+      return decodeURIComponent(extended);
+    } catch {
+      return extended;
+    }
+  }
+  return /filename="?([^";]+)"?/i.exec(disposition)?.[1];
 }

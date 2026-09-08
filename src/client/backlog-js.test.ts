@@ -4,6 +4,7 @@ import {
   AuthenticationError,
   NetworkError,
   ResourceNotFoundError,
+  ValidationError,
 } from '@chat-adapter/shared';
 import { createMockLogger } from '@chat-adapter/tests';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,6 +15,8 @@ import {
   conformanceFixture,
   describeBacklogApiConformance,
 } from './conformance.js';
+
+import type { BacklogCredentials } from './port.js';
 
 const { host, projectId, issueId, alice, baseIssue } = conformanceFixture;
 
@@ -52,6 +55,25 @@ function pullRequestWire(issue: unknown) {
     attachments: [],
     stars: [],
   };
+}
+
+/** The filename one attachment download settles on, given that `Content-Disposition`. */
+async function downloadNamed(disposition: string): Promise<string> {
+  const api = createBacklogJsApi({
+    host,
+    credentials: { apiKey: () => 'test-api-key' },
+    fetch: async () =>
+      new Response('file bytes', {
+        status: 200,
+        headers: {
+          ...rateLimitHeaders,
+          'Content-Disposition': disposition,
+        },
+      }),
+  });
+
+  const downloaded = await api.downloadAttachment(issueId, 55);
+  return downloaded.filename;
 }
 
 describeBacklogApiConformance('createBacklogJsApi', () => {
@@ -170,6 +192,59 @@ describe('createBacklogJsApi', () => {
     await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(
       AuthenticationError
     );
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it('an access token is sent as a bearer token', async () => {
+    const requests: { headers: Headers }[] = [];
+    const server = createFakeBacklogServer({
+      onRequest: (request) => requests.push(request),
+    });
+    const api = createBacklogJsApi({
+      host,
+      credentials: { accessToken: () => 'oauth-token' },
+      fetch: server.fetch,
+    });
+
+    await api.getIssue(issueId);
+
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) {
+      expect(request.headers.get('Authorization')).toBe('Bearer oauth-token');
+      expect(request.headers.get('Backlog-API-Key')).toBeNull();
+    }
+  });
+
+  it('credentials carrying both an apiKey and an accessToken are refused instead of one of them winning', () => {
+    const fetchStub = vi.fn<typeof globalThis.fetch>();
+
+    // Both resolvers together are a compile error against
+    // `BacklogCredentials` (§8.7), for a value assembled in a variable as
+    // much as for this literal, so the assertion is the only way in — and a
+    // value cast past the compiler is exactly what the check answers.
+    expect(() =>
+      createBacklogJsApi({
+        host,
+        credentials: {
+          apiKey: () => 'test-api-key',
+          accessToken: () => 'oauth-token',
+        } as BacklogCredentials,
+        fetch: fetchStub,
+      })
+    ).toThrow(ValidationError);
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it('credentials carrying neither an apiKey nor an accessToken are refused when the port is built, not when it is first used', () => {
+    const fetchStub = vi.fn<typeof globalThis.fetch>();
+
+    expect(() =>
+      createBacklogJsApi({
+        host,
+        credentials: {} as BacklogCredentials,
+        fetch: fetchStub,
+      })
+    ).toThrow(ValidationError);
     expect(fetchStub).not.toHaveBeenCalled();
   });
 
@@ -362,6 +437,79 @@ describe('createBacklogJsApi', () => {
     await expect(api.downloadAttachment(issueId, 55)).rejects.toBeInstanceOf(
       NetworkError
     );
+  });
+
+  it('percent-decodes the extended Content-Disposition form Backlog sends', async () => {
+    const filename = await downloadNamed(
+      "attachment; filename*=UTF-8''diagram%20final.png"
+    );
+
+    expect(filename).toBe('diagram final.png');
+  });
+
+  it('leaves a plain filename undecoded, so a bare % in one is not a URIError', async () => {
+    const filename = await downloadNamed('attachment; filename="100%.png"');
+
+    expect(filename).toBe('100%.png');
+  });
+
+  it('keeps a literal %20 in a plain filename, which is not an escape there', async () => {
+    const filename = await downloadNamed(
+      'attachment; filename="report%20v2.pdf"'
+    );
+
+    expect(filename).toBe('report%20v2.pdf');
+  });
+
+  it('strips the charset prefix whatever case it is written in', async () => {
+    const filename = await downloadNamed(
+      "attachment; filename*=utf-8''a%20b.png"
+    );
+
+    expect(filename).toBe('a b.png');
+  });
+
+  it('falls back to the raw value when the extended form will not decode', async () => {
+    const filename = await downloadNamed(
+      "attachment; filename*=UTF-8''100%.png"
+    );
+
+    expect(filename).toBe('100%.png');
+  });
+
+  it('takes filename* over filename when a header carries both, whichever came first', async () => {
+    const extendedLast = await downloadNamed(
+      'attachment; filename="fallback.png"; filename*=UTF-8\'\'real%20name.png'
+    );
+    const extendedFirst = await downloadNamed(
+      'attachment; filename*=UTF-8\'\'real%20name.png; filename="fallback.png"'
+    );
+
+    // RFC 6266 §4.3: the plain form is the fallback for a receiver that
+    // cannot read the extended one, so position must not decide.
+    expect(extendedLast).toBe('real name.png');
+    expect(extendedFirst).toBe('real name.png');
+  });
+
+  it('leaves a charset it does not strip in the name rather than failing the download', async () => {
+    const latin1 = await downloadNamed(
+      "attachment; filename*=ISO-8859-1''%E9.png"
+    );
+    const withLanguage = await downloadNamed(
+      "attachment; filename*=UTF-8'en'file%20name.png"
+    );
+
+    // Only `UTF-8''` is stripped, so both names come back carrying their
+    // prefix. Wrong, and known to be; what is fixed here is that neither
+    // throws out of a download whose bytes already arrived.
+    expect(latin1).toBe("ISO-8859-1''%E9.png");
+    expect(withLanguage).toBe("UTF-8'en'file name.png");
+  });
+
+  it('names a download by its attachment id when the header names no file', async () => {
+    const filename = await downloadNamed('attachment');
+
+    expect(filename).toBe('55');
   });
 
   it('an error body without errors[] still maps by status and records its headers', async () => {
