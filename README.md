@@ -9,7 +9,7 @@ an agent replies by commenting.
 
 ## Status
 
-Released on its own cadence, starting at `0.1.0`, and still pre-1.0: while the
+Releases on its own cadence, starting at `0.1.0`, and still pre-1.0: while the
 major is `0`, a breaking change to the public surface ships as a minor release.
 
 Feature-complete against the adapter contract of `chat@4.39.0`: all 17 required
