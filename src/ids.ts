@@ -11,27 +11,88 @@ import type {
 const HOST_PATTERN = /^[a-z0-9.-]+$/;
 const POSINT_PATTERN = /^[1-9]\d*$/;
 
+function fail(message: string): never {
+  throw new ValidationError('backlog', message);
+}
+
 /**
  * Backlog host, e.g. `example.backlog.com`, `example.backlog.jp` or
  * `example.backlogtool.com`. Backlog spaces live on several top-level
  * domains, so the host is carried verbatim rather than templated around a
  * fixed suffix (docs/specs/adapter.md §2, CLAUDE.md "Host").
+ *
+ * `HOST_PATTERN` is the only declaration of the host grammar in the package;
+ * {@link validateHost} is the config path's entry point to it. A configured
+ * installation's host and an id's host are the same string, so a second copy
+ * of the pattern beside the constructor could accept a host every id built
+ * from it is then rejected for.
  */
 function assertValidHost(host: string): void {
   if (host.length === 0 || !HOST_PATTERN.test(host)) {
-    throw new ValidationError(
-      'backlog',
-      `"${host}" is not a valid Backlog host`
-    );
+    fail(`"${host}" is not a valid Backlog host`);
   }
 }
 
-function assertPosint(segment: string, label: string): void {
+/**
+ * The same grammar for a host that has not been through an id yet: config
+ * accepts `Example.Backlog.com` and stores it lowercased, while an id carries
+ * only the lowercased form (docs/specs/adapter.md §2.1, §3.2). The raw value
+ * is checked for a scheme, path, port and whitespace **before** lowercasing,
+ * so a rejection message shows what the caller passed rather than a silently
+ * transformed value.
+ */
+export function validateHost(host: string, label: string): string {
+  if (host.trim() !== host || /\s/.test(host)) {
+    fail(`${label} must not contain whitespace`);
+  }
+  if (host.includes('://')) {
+    fail(`${label} must not include a scheme`);
+  }
+  if (host.includes('/')) {
+    fail(`${label} must not include a path`);
+  }
+  const lowered = host.toLowerCase();
+  if (lowered.includes(':')) {
+    fail(`${label} must not include a port`);
+  }
+  if (lowered.length === 0 || !HOST_PATTERN.test(lowered)) {
+    fail(`${label} is not a valid Backlog host`);
+  }
+  return lowered;
+}
+
+/**
+ * A `posint` segment as a number (docs/specs/adapter.md §2.1). Digits beyond
+ * `Number.MAX_SAFE_INTEGER` are rejected rather than read: `Number` is lossy
+ * there, so `issue:99999999999999999999` would decode to `1e20` and re-encode
+ * as `issue:1e+20` — a round trip that quietly addresses something other than
+ * what it was given.
+ */
+function decodePosint(segment: string, label: string): number {
   if (!POSINT_PATTERN.test(segment)) {
-    throw new ValidationError(
-      'backlog',
-      `"${segment}" is not a valid ${label}`
+    fail(`"${segment}" is not a valid ${label}`);
+  }
+  const value = Number(segment);
+  if (!Number.isSafeInteger(value)) {
+    fail(
+      `"${segment}" is too large to be a ${label}: an id carries at most ${Number.MAX_SAFE_INTEGER}`
     );
+  }
+  return value;
+}
+
+/**
+ * The encoders' half of the same rule. An id is assembled from numbers a
+ * caller supplies, and a value outside the grammar yields a string the
+ * matching decoder rejects — so it is rejected here instead of handed out as
+ * a thread id that cannot be read back. `ValidationError`, not the
+ * `RangeError` of `mentionUser`: these encode adapter input, and the SDK
+ * routes the value through `decodeThreadId` on the way back
+ * (docs/specs/adapter.md §3.6).
+ */
+function assertEncodablePosint(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    fail(`${value} is not a valid ${label}`);
   }
 }
 
@@ -41,9 +102,13 @@ function assertPosint(segment: string, label: string): void {
  * drift apart.
  */
 function encodeSubject(subject: BacklogSubjectRef): string {
-  return subject.kind === 'issue'
-    ? `issue:${subject.issueId}`
-    : `pr:${subject.repositoryId}:${subject.number}`;
+  if (subject.kind === 'issue') {
+    assertEncodablePosint(subject.issueId, 'issue id');
+    return `issue:${subject.issueId}`;
+  }
+  assertEncodablePosint(subject.repositoryId, 'repository id');
+  assertEncodablePosint(subject.number, 'pull request number');
+  return `pr:${subject.repositoryId}:${subject.number}`;
 }
 
 /**
@@ -63,9 +128,8 @@ function decodeSubject(
     if (issueId === undefined) {
       return null;
     }
-    assertPosint(issueId, 'issue id');
     return {
-      subject: { kind: 'issue', issueId: Number(issueId) },
+      subject: { kind: 'issue', issueId: decodePosint(issueId, 'issue id') },
       next: start + 2,
     };
   }
@@ -75,13 +139,11 @@ function decodeSubject(
     if (repositoryId === undefined || number === undefined) {
       return null;
     }
-    assertPosint(repositoryId, 'repository id');
-    assertPosint(number, 'pull request number');
     return {
       subject: {
         kind: 'pullRequest',
-        repositoryId: Number(repositoryId),
-        number: Number(number),
+        repositoryId: decodePosint(repositoryId, 'repository id'),
+        number: decodePosint(number, 'pull request number'),
       },
       next: start + 3,
     };
@@ -90,6 +152,8 @@ function decodeSubject(
 }
 
 export function encodeThreadId(id: BacklogThreadId): string {
+  assertValidHost(id.host);
+  assertEncodablePosint(id.projectId, 'project id');
   return `backlog:${id.host}:${id.projectId}:${encodeSubject(id.subject)}`;
 }
 
@@ -105,14 +169,14 @@ export function decodeThreadId(id: string): BacklogThreadId {
     throw invalidThreadId(id);
   }
   assertValidHost(host);
-  assertPosint(projectId, 'project id');
+  const project = decodePosint(projectId, 'project id');
 
   const decoded = decodeSubject(segments, 3);
   if (decoded === null || decoded.next !== segments.length) {
     throw invalidThreadId(id);
   }
 
-  return { host, projectId: Number(projectId), subject: decoded.subject };
+  return { host, projectId: project, subject: decoded.subject };
 }
 
 function invalidThreadId(id: string): ValidationError {
@@ -123,6 +187,8 @@ function invalidThreadId(id: string): ValidationError {
 }
 
 export function encodeChannelId(id: BacklogChannelId): string {
+  assertValidHost(id.host);
+  assertEncodablePosint(id.projectId, 'project id');
   return `backlog:${id.host}:${id.projectId}`;
 }
 
@@ -137,9 +203,8 @@ export function decodeChannelId(id: string): BacklogChannelId {
 
   const [, host, projectId] = segments as [string, string, string];
   assertValidHost(host);
-  assertPosint(projectId, 'project id');
 
-  return { host, projectId: Number(projectId) };
+  return { host, projectId: decodePosint(projectId, 'project id') };
 }
 
 /**
@@ -155,13 +220,22 @@ export function channelIdFromThreadId(threadId: string): string {
 }
 
 export function encodeMessageId(id: BacklogMessageId): string {
+  assertValidHost(id.host);
   const prefix = `${id.host}:${encodeSubject(id.subject)}`;
   switch (id.part) {
     case 'root':
       return `${prefix}:r`;
     case 'comment':
+      assertEncodablePosint(id.commentId, 'comment id');
       return `${prefix}:c${id.commentId}`;
     case 'update':
+      // The decoder reads everything after `u:` as the timestamp and requires
+      // at least one character, so an empty `created` is the one value that
+      // makes this form unreadable — every other string, colons included,
+      // round-trips.
+      if (id.created.length === 0) {
+        fail('an update message id must carry a timestamp after "u:"');
+      }
       return `${prefix}:u:${id.created}`;
   }
 }
@@ -190,10 +264,7 @@ export function decodeMessageId(id: string): BacklogMessageId {
   if (tag === 'u') {
     const created = segments.slice(decoded.next + 1).join(':');
     if (created.length === 0) {
-      throw new ValidationError(
-        'backlog',
-        `"${id}" is missing the timestamp after "u:"`
-      );
+      fail(`"${id}" is missing the timestamp after "u:"`);
     }
     return { ...base, part: 'update', created };
   }
@@ -205,8 +276,11 @@ export function decodeMessageId(id: string): BacklogMessageId {
     return { ...base, part: 'root' };
   }
   if (tag.startsWith('c')) {
-    assertPosint(tag.slice(1), 'comment id');
-    return { ...base, part: 'comment', commentId: Number(tag.slice(1)) };
+    return {
+      ...base,
+      part: 'comment',
+      commentId: decodePosint(tag.slice(1), 'comment id'),
+    };
   }
 
   throw new ValidationError('backlog', `"${id}" has an unknown message tag`);
@@ -220,6 +294,8 @@ function invalidMessageId(id: string): ValidationError {
 }
 
 export function encodeUserId(id: BacklogUserId): string {
+  assertValidHost(id.host);
+  assertEncodablePosint(id.userId, 'user id');
   return `${id.host}:${id.userId}`;
 }
 
@@ -234,19 +310,15 @@ export function encodeUserId(id: BacklogUserId): string {
 export function decodeUserId(id: string): BacklogUserId {
   const lastColon = id.lastIndexOf(':');
   if (lastColon === -1) {
-    throw new ValidationError(
-      'backlog',
-      `"${id}" is not a valid Backlog user id`
-    );
+    fail(`"${id}" is not a valid Backlog user id`);
   }
 
   const host = id.slice(0, lastColon);
   const userIdSegment = id.slice(lastColon + 1);
 
   assertValidHost(host);
-  assertPosint(userIdSegment, 'user id');
 
-  return { host, userId: Number(userIdSegment) };
+  return { host, userId: decodePosint(userIdSegment, 'user id') };
 }
 
 function assertPositiveInteger(id: number): void {
