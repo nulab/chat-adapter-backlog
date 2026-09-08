@@ -606,7 +606,14 @@ describe('encoders reject what their own decoder could not read back', () => {
   const HOST = 'example.backlog.com';
   const rootPart = { part: 'root' } as const;
   const issueRef = { kind: 'issue', issueId: 8001 } as const;
-  const UNENCODABLE = [0, -5, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2];
+  const UNENCODABLE = [
+    0,
+    -5,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 2,
+  ];
 
   it.each([
     'Example.Backlog.com',
@@ -708,6 +715,13 @@ describe('mentionUser', () => {
 
   it('rejects with a built-in RangeError, not a ValidationError', () => {
     expect(() => mentionUser(0)).not.toThrow(ValidationError);
+  });
+
+  it('rejects an id no user id could round-trip, as encodeUserId does', () => {
+    const unsafe = Number.MAX_SAFE_INTEGER + 2;
+
+    expect(() => mentionUser(unsafe)).toThrow(RangeError);
+    expect(() => mentionTeam(unsafe)).toThrow(RangeError);
   });
 
   it('rejects NaN with a RangeError that names it', () => {

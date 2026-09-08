@@ -74,8 +74,11 @@ function decodePosint(segment: string, label: string): number {
   }
   const value = Number(segment);
   if (!Number.isSafeInteger(value)) {
+    // No article before `${label}`: the labels are "issue id", "user id",
+    // "project id" and "pull request number", so one hard-coded "a" reads
+    // wrong on half of them.
     fail(
-      `"${segment}" is too large to be a ${label}: an id carries at most ${Number.MAX_SAFE_INTEGER}`
+      `"${segment}" exceeds the largest ${label} an id can carry, ${Number.MAX_SAFE_INTEGER}`
     );
   }
   return value;
@@ -321,8 +324,16 @@ export function decodeUserId(id: string): BacklogUserId {
   return { host, userId: decodePosint(userIdSegment, 'user id') };
 }
 
+/**
+ * `Number.isSafeInteger`, matching the `posint` range the codec enforces
+ * (§2.1): a mention names the same user an id names, so `mentionUser(2 ** 53)`
+ * rendering `<@U9007199254740992>` while `encodeUserId` rejects that user
+ * would be two answers about one id. Backlog resolves a mention by the id in
+ * the text, so a token built from a lossy number addresses whoever that
+ * rounded value happens to be.
+ */
 function assertPositiveInteger(id: number): void {
-  if (!Number.isInteger(id) || id <= 0) {
+  if (!Number.isSafeInteger(id) || id <= 0) {
     throw new RangeError(`${id} is not a positive integer`);
   }
 }
