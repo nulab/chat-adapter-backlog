@@ -26,9 +26,16 @@ request belongs, and nowhere else: `subjectClientFor` in
 as `decode -> subjectClientFor -> one code path for both kinds`. Exactly one
 other module may ask what kind a subject is: the codec `src/ids.ts`, which has
 to write `issue:<id>` versus `pr:<repositoryId>:<number>` and has no port to
-route through. `src/subject/containment.test.ts` greps `src/` for a
-dispatch on `.kind` and fails on a third module, so the rule is executable
-rather than remembered (D-PR2, docs/specs/adapter.md §14).
+route through. `src/subject/containment.test.ts` greps `src/` for the shapes
+a dispatch on `kind` is written in — a `switch`, a comparison (`?.`,
+`['kind']`, `==` and a backticked kind included) and a `{ kind }`
+destructuring — and fails on a third module, so the rule is at least partly
+executable rather than only remembered (D-PR2, docs/specs/adapter.md §14). It
+is a tripwire, not a proof: it matches only a receiver it can *name*, because
+its exemptions for `raw` and `source` are by name, so a check whose receiver
+has no name on the line — `(await …).kind`, a parameter pattern, a predicate —
+passes it. That file's header lists what it does not see; read it before
+trusting a green run.
 
 One split is worth knowing before you touch either side: `src/client/port.ts`
 owns the **API domain** types, which carry `Date` objects, while `src/types.ts`
