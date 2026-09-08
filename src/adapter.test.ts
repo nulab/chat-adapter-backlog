@@ -2560,6 +2560,27 @@ describe('BacklogAdapter.stream (§6.4, D4)', () => {
     );
     expect(addComment).toMatchObject({ input: { content: ' ' } });
   });
+
+  it('an abort against a source that never produced posts a single space', async () => {
+    const { adapter, api } = egressAdapter();
+    const controller = new AbortController();
+    controller.abort();
+    const stalled: AsyncIterable<string> = {
+      [Symbol.asyncIterator]: () => ({
+        next: () => new Promise<IteratorResult<string>>(() => undefined),
+      }),
+    };
+
+    const result = await adapter.stream(EGRESS_THREAD_ID, stalled, {
+      signal: controller.signal,
+    });
+
+    expect(result.threadId).toBe(EGRESS_THREAD_ID);
+    const addComment = api.state.recordedInputs.find(
+      (input) => input.method === 'addComment'
+    );
+    expect(addComment).toMatchObject({ input: { content: ' ' } });
+  });
 });
 
 describe('BacklogAdapter reactions (§6.5)', () => {

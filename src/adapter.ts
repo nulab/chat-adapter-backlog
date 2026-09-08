@@ -1574,9 +1574,10 @@ export class BacklogAdapter implements Adapter<
    * overridden"): the core's fallback would otherwise edit a message every
    * `streamingUpdateIntervalMs` (default 500 ms), which is roughly 120
    * `updateComment` calls a minute against a documented example 150/min
-   * update-bucket limit. An empty stream still posts `" "` (D4 default,
-   * matching the core's own fallback) so a `SentMessage` always exists for
-   * the caller to reference.
+   * update-bucket limit. An empty stream — an `options.signal` abort that
+   * buffered nothing included — still posts `" "` (D4 default, matching the
+   * core's own fallback) so a `SentMessage` always exists for the caller to
+   * reference (§15 question 7).
    */
   async stream(
     threadId: string,
