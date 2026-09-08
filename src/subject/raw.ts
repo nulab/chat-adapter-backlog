@@ -219,3 +219,52 @@ export function fromRawPullRequest(
     stars: [],
   };
 }
+
+/**
+ * The port object a serialised `{ kind: "comment" }` raw describes, so
+ * `parseMessage` reaches `buildCommentMessage` (`src/reads.ts`) — the one
+ * function that turns a comment into a `Message` — instead of assembling a
+ * second one that would drift from it (docs/specs/adapter.md §3.5).
+ *
+ * Lossy in three places, all of them fields `BacklogRawComment` does not
+ * carry and nothing downstream of a rebuilt comment reads:
+ *
+ * - `changeLog[].attachmentInfo` is `null`, so an **issue** comment's
+ *   attachments cannot be rebuilt: `commentAttachments` resolves them from
+ *   `attachmentInfo.id` and skips an entry without one. A pull-request
+ *   comment's survive, because that kind resolves a file by name (§6.6).
+ * - `stars[]` keeps the `id` and `presenter.id` the raw carries — the only
+ *   two fields `addReaction`/`removeReaction` read — and fills `comment`,
+ *   `url`, `title`, `presenter.name` and `created` with placeholders.
+ *   `created` is the epoch rather than the comment's own timestamp so a
+ *   consumer that does read it sees an obvious placeholder instead of a
+ *   plausible wrong date.
+ * - `createdUser` is `userFromRaw`'s, with the omissions documented there.
+ *
+ * Widening `BacklogRawComment` to close any of the three is the trade
+ * `userFromRaw` argues against: every field added to a raw shape is paid for
+ * on every queue round trip of every message.
+ */
+export function fromRawComment(raw: BacklogRawComment): BacklogComment {
+  return {
+    id: raw.id,
+    content: raw.content,
+    changeLog: raw.changeLog.map((change) => ({
+      field: change.field,
+      newValue: change.newValue,
+      oldValue: change.oldValue,
+      attachmentInfo: null,
+    })),
+    createdUser: userFromRaw(raw.createdUser),
+    created: new Date(raw.created),
+    updated: new Date(raw.updated),
+    stars: raw.stars.map((star) => ({
+      id: star.id,
+      comment: null,
+      url: '',
+      title: '',
+      presenter: userFromRaw({ id: star.presenter.id, name: '' }),
+      created: new Date(0),
+    })),
+  };
+}
