@@ -369,16 +369,35 @@ function matchHeading(
 
 type ListMarker = { ordered: boolean; depth: number; text: string };
 
+/**
+ * A `+`/`-` run followed by text. The text must be non-empty, which is what
+ * keeps a trailing space from making a line a list item: `----␣` would
+ * otherwise match as marker `----` with no text, and because `parseList` asks
+ * this predicate alone while `parseNotationBlocks` tests `----` first, the same
+ * line became a depth-4 empty item after a list and a `thematicBreak` anywhere
+ * else (docs/specs/adapter.md §9.5). Rejecting an empty text sends both
+ * `----␣` and `-␣` back to `parseNotationBlocks`, which classifies them
+ * like any other line that is no list item.
+ *
+ * `matchHeading` carries no such guard, so `*␣` is a `heading` with no
+ * content while `*` alone is a paragraph. Do not read this predicate as a
+ * parser-wide rule about trailing whitespace: §9.5 leaves the heading side to
+ * a separate change.
+ */
 function matchListMarker(line: string): ListMarker | null {
   const match = /^([+-]+)\s+(.*)$/.exec(line);
   if (!match) {
+    return null;
+  }
+  const itemText = match[2] ?? '';
+  if (itemText === '') {
     return null;
   }
   const marker = match[1] ?? '';
   return {
     ordered: marker[0] === '+',
     depth: marker.length,
-    text: match[2] ?? '',
+    text: itemText,
   };
 }
 
@@ -388,8 +407,9 @@ function matchListMarker(line: string): ListMarker | null {
  * docs/specs/adapter.md §9.5). Each depth transition opens one nested `list`,
  * however far the marker jumps, and the list ends at the first marker it
  * cannot contain — shallower than its own, or of the other kind at its own
- * depth. The caller resumes there: `parseNotationBlocks` for the outermost
- * list, the enclosing list for a nested one.
+ * depth — or at the first line that is no list item at all (`matchListMarker`).
+ * The caller resumes there: `parseNotationBlocks` for the outermost list, the
+ * enclosing list for a nested one.
  *
  * Neither marker can be absorbed instead: mdast hangs a nested `list` off a
  * `listItem`, so a list shallower than this one has no item above it to hang

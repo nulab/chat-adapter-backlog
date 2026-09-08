@@ -1437,6 +1437,30 @@ never one list whose `ordered` the last marker decided. A jump of more than one
 level opens a single nested list, and a marker between two open depths becomes
 a second child list of the same item.
 
+A marker with **no text after it is not a list item at all**. `-` followed by
+one space ends the list and stays a paragraph, exactly as the bare `-` — which
+has no whitespace for the marker rule to match — already did. `----` followed
+by one space is the `thematicBreak` its unspaced form is, because `----` is
+tested ahead of the list rule and a line's classification does not depend on
+whether a list is open above it. Trailing whitespace therefore never decides
+whether a line is a **list item**; it survives only inside paragraph text. The
+rule is about the missing text and not about `----`, so `---- four` is still a
+list item.
+
+That is a rule about list items and nothing wider. A heading marker does not
+share it: `*` followed by one space is a `heading` with no content where `*`
+alone is a paragraph, so a trailing space does decide that line's block. This
+section neither relies on that asymmetry nor settles whether headings should
+follow the list rule — changing it means changing `matchHeading` and its tests.
+
+The separator between a marker and its text is a run of whitespace taken
+greedily, so an item's text never begins with whitespace: `-   one` is the item
+`one`, and `-` followed by three spaces has no text either and is a paragraph.
+An empty marker ends the whole run rather than its own depth alone — a `--`
+with no text between two `-- x` items ends the list above it as well, and the
+next marker opens a list of its own — because that line is not a list item and
+every list open above it ends at the first line that is not one.
+
 ### 9.6 Known lossy conversions
 
 Inline code and table alignment outbound to notation; colour, revision links,
@@ -1551,7 +1575,9 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
 - **format**: every row of §9.4 and §9.5; single-line `{code}x{/code}`;
   unclosed `{code}`; unclosed `{quote}`; a list whose first marker is the
   deepest, a marker changing kind mid-run, a depth jump, a marker between two
-  open depths and a CRLF line ending; an unterminated
+  open depths, a marker with no text — at the outer depth, nested, and
+  separated by several spaces — a `----` adjacent to a list with and without a
+  trailing space, and a CRLF line ending; an unterminated
   `''`/`'''`/`%%`/`[[`; a `|` inside a table cell's link; `toAst` throwing →
   plain paragraph + warn; rule cache primed by webhook path, replaced by
   `fetchChannelInfo`, lookup failure not cached; `renderFormatted`/
