@@ -371,13 +371,18 @@ type ListMarker = { ordered: boolean; depth: number; text: string };
 
 /**
  * A `+`/`-` run followed by text. The text must be non-empty, which is what
- * keeps a line's block type from depending on trailing whitespace: `----␣`
- * would otherwise match as marker `----` with no text, and because `parseList`
- * asks this predicate alone while `parseNotationBlocks` tests `----` first, the
- * same line became a depth-4 empty item after a list and a `thematicBreak`
- * anywhere else (docs/specs/adapter.md §9.5). Rejecting an empty text sends
- * both `----␣` and `-␣` back to `parseNotationBlocks` for the one
- * classification every other line gets.
+ * keeps a trailing space from making a line a list item: `----␣` would
+ * otherwise match as marker `----` with no text, and because `parseList` asks
+ * this predicate alone while `parseNotationBlocks` tests `----` first, the same
+ * line became a depth-4 empty item after a list and a `thematicBreak` anywhere
+ * else (docs/specs/adapter.md §9.5). Rejecting an empty text sends both
+ * `----␣` and `-␣` back to `parseNotationBlocks`, which classifies them
+ * like any other line that is no list item.
+ *
+ * `matchHeading` carries no such guard, so `*␣` is a `heading` with no
+ * content while `*` alone is a paragraph. Do not read this predicate as a
+ * parser-wide rule about trailing whitespace: §9.5 leaves the heading side to
+ * a separate change.
  */
 function matchListMarker(line: string): ListMarker | null {
   const match = /^([+-]+)\s+(.*)$/.exec(line);

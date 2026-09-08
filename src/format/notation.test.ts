@@ -430,12 +430,42 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
     expect(withSpace.children).toEqual(withoutSpace.children);
   });
 
-  it('four hyphens followed by text stay a depth-four list item', () => {
-    // The emptiness rule is about the text, not about the `----` run: four
-    // hyphens followed by text are a depth-four item, as they are anywhere else.
-    const ast = converter.toAst('---- four');
+  it('four hyphens followed by text are a list item, not a thematic break', () => {
+    // The emptiness rule is about the missing text, not about the `----` run.
+    // A `list` is all the depth mdast records, so the marker's own depth of
+    // four is only visible where it nests.
+    expect(converter.toAst('---- four').children).toEqual([
+      list(false, [textItem('four')]),
+    ]);
+    expect(converter.toAst('- one\n---- four').children).toEqual([
+      list(false, [
+        listItem([paragraph([text('one')]), list(false, [textItem('four')])]),
+      ]),
+    ]);
+  });
 
-    expect(ast.children).toEqual([list(false, [textItem('four')])]);
+  it('a marker with no text ends the outer list too, not just its own depth', () => {
+    // The middle line is `--` and one space. Nothing absorbs a line that is no
+    // list item, so the run above it ends with it and `two` opens a list of its
+    // own instead of nesting under `one` (§9.5).
+    const ast = converter.toAst('- one\n-- \n-- two');
+
+    expect(ast.children).toEqual([
+      list(false, [textItem('one')]),
+      paragraph([text('-- ')]),
+      list(false, [textItem('two')]),
+    ]);
+  });
+
+  it('the whitespace between a marker and its text is taken greedily', () => {
+    // So an item's text never begins with whitespace, and a marker followed by
+    // nothing but spaces has no text at all (§9.5).
+    expect(converter.toAst('-   one').children).toEqual([
+      list(false, [textItem('one')]),
+    ]);
+    expect(converter.toAst('-   ').children).toEqual([
+      paragraph([text('-   ')]),
+    ]);
   });
 
   it('a CRLF line ending neither ends the list nor reaches the item text', () => {
