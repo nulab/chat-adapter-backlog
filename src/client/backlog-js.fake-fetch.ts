@@ -80,6 +80,8 @@ const {
   bob,
   baseProject,
   baseIssue,
+  baseIssueTypes,
+  basePriorities,
   baseComment,
   statusChangeLog,
   baseGitRepository,
@@ -329,12 +331,8 @@ export function createFakeBacklogServer(
 
   const project = baseProject();
   const users = [alice, bob, bot];
-  const issueTypes = [{ id: 1, name: 'Task' }];
-  const priorities = [
-    { id: 2, name: 'High' },
-    { id: 3, name: 'Normal' },
-    { id: 4, name: 'Low' },
-  ];
+  const issueTypes = baseIssueTypes();
+  const priorities = basePriorities();
 
   const fetchImpl: typeof globalThis.fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input.toString());
@@ -427,6 +425,41 @@ export function createFakeBacklogServer(
     }
   }
 
+  /**
+   * `content` is a required form parameter on all four comment endpoints
+   * (`.claude/rules/backlog-api-facts.md` "Writes"), so an empty one answers
+   * 400 code 7. The code is **inferred** from code 7 being
+   * `InvalidRequestError` (docs/specs/adapter.md §8.5) rather than measured,
+   * and the message below is a stand-in: no empty comment has been posted to
+   * a real space, so its wire text is unknown. Nothing asserts it.
+   * A body of a single space is content: it is what `stream()` posts for an
+   * empty stream (docs/specs/adapter.md §4.2 `stream`, §15 question 7), so
+   * nothing is trimmed here.
+   */
+  function requireContent(content: string | string[] | undefined): string {
+    if (content === undefined || content === '') {
+      throw new RouteError(400, 7, 'No comment content.');
+    }
+    return String(content);
+  }
+
+  /**
+   * Update and Delete are documented as the caller's own comments only —
+   * "Authenticated user can update his own comments", on the issue and the
+   * pull-request endpoint alike (`.claude/rules/backlog-api-facts.md`
+   * "Writes") — and answer 403 code 5, which the port maps to
+   * `PermissionError` (docs/specs/adapter.md §8.5).
+   */
+  function requireOwnComment(comment: BacklogComment): void {
+    if (comment.createdUser.id !== bot.id) {
+      throw new RouteError(
+        403,
+        5,
+        'You do not have permission to update this comment.'
+      );
+    }
+  }
+
   async function readParams(
     init: RequestInit | undefined
   ): Promise<Record<string, string | string[]>> {
@@ -481,6 +514,30 @@ export function createFakeBacklogServer(
       segments.length === 1
     ) {
       const params = await readParams(init);
+      // An unresolvable `issueTypeId` or `priorityId` is a 400 code 7, not a
+      // created issue carrying a made-up type name: Add Issue requires both
+      // (`.claude/rules/backlog-api-facts.md` "Writes") and an id outside the
+      // project's own lists is `InvalidRequestError`. `src/egress.ts` reads
+      // exactly this failure to refresh its cached defaults, so a fake that
+      // accepted anything left that path untested.
+      //
+      // The two messages are stand-ins. `error.unknownParameter : statusId`
+      // was measured for a rejected **parameter name**
+      // (`.claude/rules/backlog-pull-request-facts.md` "Writes the API cannot
+      // make"); what a real space says about an unresolvable id *value* has
+      // not been measured. Nothing asserts either string.
+      const issueType = issueTypes.find(
+        (t) => t.id === Number(params['issueTypeId'])
+      );
+      if (issueType === undefined) {
+        throw new RouteError(400, 7, 'error.unknownParameter : issueTypeId');
+      }
+      const priority = priorities.find(
+        (p) => p.id === Number(params['priorityId'])
+      );
+      if (priority === undefined) {
+        throw new RouteError(400, 7, 'error.unknownParameter : priorityId');
+      }
       const id = nextId++;
       const now = new Date();
       const issue: BacklogIssue = {
@@ -489,8 +546,8 @@ export function createFakeBacklogServer(
         issueKey: `PROJECT-${id}`,
         summary: String(params['summary'] ?? ''),
         description: String(params['description'] ?? ''),
-        issueType: { id: Number(params['issueTypeId']), name: 'Task' },
-        priority: { id: Number(params['priorityId']), name: 'Normal' },
+        issueType,
+        priority,
         status: { id: 1, name: 'Open' },
         assignee: null,
         createdUser: bot,
@@ -556,12 +613,13 @@ export function createFakeBacklogServer(
 
         if (segments.length === 3 && method === 'POST') {
           const params = await readParams(init);
+          const content = requireContent(params['content']);
           const id = nextId++;
           const now = new Date();
           const comment: BacklogIssueComment = {
             id,
             issueId: issueIdOrKey,
-            content: String(params['content'] ?? ''),
+            content,
             changeLog: [],
             createdUser: bot,
             created: now,
@@ -586,14 +644,16 @@ export function createFakeBacklogServer(
           if (method === 'PATCH') {
             if (comment === undefined)
               throw new RouteError(404, 6, 'No such comment');
+            requireOwnComment(comment);
             const params = await readParams(init);
-            comment.content = String(params['content'] ?? comment.content);
+            comment.content = requireContent(params['content']);
             comment.updated = new Date();
             return respond(200, toWireIssueComment(comment));
           }
           if (method === 'DELETE') {
             if (comment === undefined)
               throw new RouteError(404, 6, 'No such comment');
+            requireOwnComment(comment);
             state.comments.splice(state.comments.indexOf(comment), 1);
             return respond(200, toWireIssueComment(comment));
           }
@@ -707,10 +767,11 @@ export function createFakeBacklogServer(
 
               if (segments.length === 8 && method === 'POST') {
                 const params = await readParams(init);
+                const content = requireContent(params['content']);
                 const now = new Date();
                 const comment: BacklogComment = {
                   id: nextPullRequestCommentId++,
-                  content: String(params['content'] ?? ''),
+                  content,
                   changeLog: [],
                   createdUser: bot,
                   created: now,
@@ -738,10 +799,9 @@ export function createFakeBacklogServer(
                 if (method === 'PATCH') {
                   if (entry === undefined)
                     throw new RouteError(404, 6, 'No such comment');
+                  requireOwnComment(entry.comment);
                   const params = await readParams(init);
-                  entry.comment.content = String(
-                    params['content'] ?? entry.comment.content
-                  );
+                  entry.comment.content = requireContent(params['content']);
                   entry.comment.updated = new Date();
                   return respond(200, toWireComment(entry.comment));
                 }

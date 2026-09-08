@@ -1258,12 +1258,26 @@ outlive the request timeout.
 documented example), `notifications`, `repositories`, `pullRequests`,
 `pullRequestComments` (keyed by `{ repositoryId, number }`), `me` (the bot
 user), `now()`. It exposes
-`state` (issues, comments, stars, uploads, recorded inputs) for assertions,
+`state` (issues, comments, stars, uploads, recorded inputs, and the seeded
+`issueTypes` and `priorities`) for assertions,
 allocates ids from a single counter initialised above every seeded id (issues
 included), applies exclusive `minId`/`maxId`, sorts by `order`, mirrors
-`deleteStar` in `state`, and throws the same error classes as §8.2 for missing
-resources. Both `rateLimit()` and `getRateLimit()` answer with the documented
-example figures, so either is testable without modelling consumption.
+`deleteStar` in `state`, and throws the same error classes as §8.2 — not only
+for a missing resource, but for the three refusals a write can meet on a real
+space: an `issueTypeId` or `priorityId` outside the seeded lists is a
+`ValidationError` rather than an issue carrying a fabricated type name, an
+empty comment body is a `ValidationError` on add and on update (a single space
+is a body — §4.2 `stream` posts one), and updating or deleting a comment whose
+`createdUser` is not `me` is a `PermissionError`. `uploadAttachment` keeps the
+bytes it was handed: `size` reports their length, `recordedInputs` carries a
+copy, and a download of that id returns them.
+
+`state.issueTypes` and `state.priorities` are the lists `createIssue`
+validates against, so removing an entry is how a test models a project whose
+settings changed under a cached default (§6.7) — no stub of the port's own
+method required. Both `rateLimit()` and `getRateLimit()` answer with the
+documented example figures, so either is testable without modelling
+consumption.
 
 ### 8.4 Rate-limit tracking and retry (D5)
 
@@ -1350,29 +1364,79 @@ line that prints the error would show it.
 `describeBacklogApiConformance(name, factory)` runs the same behavioural
 suite against both implementations (the `backlog-js` one over a fake `fetch`
 that returns recorded response shapes and real `X-RateLimit-*` headers).
-Guarantees: issue/project/user/comment fetch and 404 → `ResourceNotFoundError`;
-a comment id from another issue is a 404; comment add/edit/delete reflected in
-the list and `addComment` accepts `notifiedUserId`/`attachmentId`; list paging
-with `count`/`order`/`minId`/`maxId` and exclusive bounds; issue list paging
-with `count`/`offset`; created issue appears with the bot as creator; issue
-types and priorities readable; stars carry `presenter` and are removable by
-star id, deleting a missing star is a 404; notifications list newest-first
-with `comment.id`, exclusive `maxId`, markable as read; upload returns
-`{ id, name, size }`; `rateLimit()` reflects the last response's headers per
-bucket and a `GET /issues` call updates `search`, not `read`; `getRateLimit()`
-reports buckets the client has never spent, with `reset` a date read from epoch
-seconds; 429 with a
-near `reset` is retried once and then succeeds; 429 with a distant `reset`
-throws `AdapterRateLimitError` without waiting; code→class table of §8.5;
-schema mismatch → `AdapterError("SCHEMA")`, not `ZodError`. Pull requests: a
-repository and a pull request fetch, and 404 → `ResourceNotFoundError`; the
-pull-request list pages with `count`/`offset` and spends `read`; pull-request
-comments page with exclusive `minId`/`maxId` and head-cut `count`;
-`addPullRequestComment` accepts `notifiedUserId`/`attachmentId`; a one-element
-window returns exactly the named comment; `addStar({ pullRequestCommentId })`
-stars the pull-request comment and `addStar({ commentId })` an issue comment;
-a notification carries `pullRequestComment.id`; a pull-request attachment
-downloads.
+
+The factory hands the suite a `BacklogApi` and nothing else, so a guarantee
+belongs here only if **both** implementations reach it through ordinary calls.
+A guarantee that needs a crafted response — a 429, a body that violates the
+schema, an error code no operation produces — belongs to the wrapper's own
+tests (§12.2, the **client** row), and the two lists below say which is which.
+The split is deliberate rather than a gap: a fault-injection seam on the
+factory would make the in-memory implementation assert retries, header
+arithmetic and zod validation it does not have — it has no wire, no schema and
+no retry — and a conformance suite only one implementation can satisfy is not
+a conformance suite.
+
+Guaranteed by the suite, on both implementations:
+
+- issue/project/user/comment fetch and 404 → `ResourceNotFoundError`; a
+  comment id from another issue is a 404;
+- comment add/edit/delete reflected in the list, and `addComment` accepts
+  `notifiedUserId`/`attachmentId`;
+- an empty comment body is a `ValidationError` on add and on update, on an
+  issue and on a pull request, while a single space is accepted (§4.2
+  `stream` posts one for an empty stream);
+- updating or deleting a comment written by another user is a
+  `PermissionError` that leaves the comment unchanged — on issues, and on
+  update for pull requests, which have no delete at all;
+- list paging with `count`/`order`/`minId`/`maxId` and exclusive bounds; issue
+  list paging with `count`/`offset`;
+- a created issue appears with the bot as creator and carries the issue type
+  and priority it named, resolved to their names; an `issueTypeId` or
+  `priorityId` the space does not have is a `ValidationError`;
+- issue types and priorities readable;
+- stars carry `presenter` and are removable by star id; deleting a missing
+  star is a 404;
+- notifications list newest-first with `comment.id`, exclusive `maxId`,
+  markable as read;
+- an upload returns `{ id, name, size }` with `size` the byte length of the
+  file it was given — the only place this interface makes the bytes
+  observable, so it is what separates a client that sent the file from one
+  that sent an empty part;
+- `rateLimit()` reflects the last response's headers per bucket and a
+  `GET /issues` call updates `search`, not `read`; `getRateLimit()` reports
+  buckets the client has never spent, with `reset` a date read from epoch
+  seconds;
+- pull requests: a repository and a pull request fetch, and 404 →
+  `ResourceNotFoundError`; the list pages with `count`/`offset` and spends
+  `read`; comments page with exclusive `minId`/`maxId` and head-cut `count`;
+  `addPullRequestComment` accepts `notifiedUserId`/`attachmentId`; a
+  one-element window returns exactly the named comment;
+  `addStar({ pullRequestCommentId })` stars the pull-request comment and
+  `addStar({ commentId })` an issue comment; a notification carries
+  `pullRequestComment.id`; a pull-request attachment downloads, carrying as
+  many bytes as its listing reported.
+
+Left to the wrapper's tests, because only the wire client has anything to
+exercise them against: 429 with a near `reset` retried once and then
+succeeding, 429 with a distant `reset` throwing `AdapterRateLimitError`
+without waiting, and the retry's timing, jitter and `warn` lines (§8.4); the
+codes of the §8.5 table neither fake models — 11, 10 and 1/2/3/8/9/12 — and
+the status-only fallbacks; a response that violates the schema becoming
+`AdapterError("SCHEMA")` and never a `ZodError`; non-JSON, empty and
+unreadable bodies becoming `NetworkError`; the credential resolver's failure
+modes; and the shape of the request itself — the key in a header and never in
+the query string, one multipart part named `file`, a pull request addressed by
+three coordinates.
+
+Unmodelled is not unreachable, and 10 `TooLargeFileError` is the one to keep
+apart: an oversized upload produces it against a real space, and neither fake
+enforces a size limit, so it is absent from the suite because nothing here
+models the limit rather than because no operation reaches it.
+
+Three codes of the §8.5 table are covered on both implementations, and by
+operations rather than by synthesised responses: **6** through every
+missing-resource call, **7** through the two `ValidationError` refusals above,
+**5** through the ownership refusals.
 
 ### 8.7 Auth modes
 

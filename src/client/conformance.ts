@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { ResourceNotFoundError } from '@chat-adapter/shared';
+import {
+  PermissionError,
+  ResourceNotFoundError,
+  ValidationError,
+} from '@chat-adapter/shared';
 
 import type {
   BacklogApi,
@@ -8,7 +12,9 @@ import type {
   BacklogGitRepository,
   BacklogIssue,
   BacklogIssueComment,
+  BacklogIssueType,
   BacklogNotification,
+  BacklogPriority,
   BacklogProject,
   BacklogPullRequest,
   BacklogPullRequestAttachment,
@@ -63,6 +69,28 @@ function baseProject(): BacklogProject {
     name: 'Project',
     textFormattingRule: 'markdown',
   };
+}
+
+/**
+ * The project's issue types. Two of them, with the one a `createIssue` test
+ * names second: an implementation that fabricated `{ name: 'Task' }` for an
+ * id it could not resolve would answer the first entry's name by accident,
+ * and the assertion would not notice.
+ */
+function baseIssueTypes(): BacklogIssueType[] {
+  return [
+    { id: 1, name: 'Task' },
+    { id: 2, name: 'Bug' },
+  ];
+}
+
+/** The documented example priorities, which both implementations default to. */
+function basePriorities(): BacklogPriority[] {
+  return [
+    { id: 2, name: 'High' },
+    { id: 3, name: 'Normal' },
+    { id: 4, name: 'Low' },
+  ];
 }
 
 function baseIssue(overrides: Partial<BacklogIssue> = {}): BacklogIssue {
@@ -385,6 +413,142 @@ export function describeBacklogApiConformance(
       });
     });
 
+    it('a created issue carries the issue type and priority it named, resolved to their names', async () => {
+      const api = await factory();
+      const issue = await api.createIssue({
+        projectId: PROJECT_ID,
+        summary: 'Filed as a bug at high priority',
+        issueTypeId: 2,
+        priorityId: 2,
+      });
+      expect(issue.issueType).toMatchObject({ id: 2, name: 'Bug' });
+      expect(issue.priority).toMatchObject({ id: 2, name: 'High' });
+    });
+
+    it('creating an issue with an issue type or a priority the space does not have is a ValidationError', async () => {
+      const api = await factory();
+      await expect(
+        api.createIssue({
+          projectId: PROJECT_ID,
+          summary: 'Unknown issue type',
+          issueTypeId: 999_999,
+          priorityId: 3,
+        })
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        api.createIssue({
+          projectId: PROJECT_ID,
+          summary: 'Unknown priority',
+          issueTypeId: 1,
+          priorityId: 999_999,
+        })
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it('a comment with no content is a ValidationError, on an issue and on a pull request', async () => {
+      const api = await factory();
+      await expect(
+        api.addComment(ISSUE_ID, { content: '' })
+      ).rejects.toBeInstanceOf(ValidationError);
+      await expect(
+        api.addPullRequestComment(pullRequestRef(), { content: '' })
+      ).rejects.toBeInstanceOf(ValidationError);
+
+      // Own comments, so the update reaches the content check rather than
+      // stopping at the ownership one.
+      const added = await api.addComment(ISSUE_ID, { content: 'Body' });
+      await expect(
+        api.updateComment(ISSUE_ID, added.id, '')
+      ).rejects.toBeInstanceOf(ValidationError);
+
+      const addedToPullRequest = await api.addPullRequestComment(
+        pullRequestRef(),
+        { content: 'Body' }
+      );
+      await expect(
+        api.updatePullRequestComment(
+          pullRequestRef(),
+          addedToPullRequest.id,
+          ''
+        )
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it('a single space is a comment body, because that is what an empty stream posts', async () => {
+      // `stream()` posts `" "` for a stream that yields nothing
+      // (docs/specs/adapter.md §4.2 `stream` and §15 question 7, settled;
+      // `.claude/rules/chat-sdk-core-facts.md` for the core's own fallback),
+      // so an implementation that trimmed before rejecting an empty body
+      // would refuse the adapter's own documented path.
+      const api = await factory();
+      await expect(
+        api.addComment(ISSUE_ID, { content: ' ' })
+      ).resolves.toMatchObject({ content: ' ' });
+    });
+
+    it("editing or deleting another user's issue comment is a PermissionError, and leaves it unchanged", async () => {
+      const api = await factory();
+      const seeded = await api.listComments(ISSUE_ID, {
+        count: 100,
+        order: 'asc',
+      });
+      const foreign = seeded.find((c) => c.createdUser.id !== BOT.id);
+      if (foreign === undefined) {
+        throw new Error(
+          'fixture must seed a comment written by somebody other than the credential owner'
+        );
+      }
+      // Read out as a primitive before the refused call. An implementation
+      // may hand out live references to its own records, and comparing
+      // `foreign.content` afterwards would then compare a mutated value with
+      // itself — an implementation that wrote the content and only then
+      // refused would pass.
+      const contentBefore = foreign.content;
+
+      await expect(
+        api.updateComment(ISSUE_ID, foreign.id, 'rewritten')
+      ).rejects.toBeInstanceOf(PermissionError);
+      await expect(
+        api.deleteComment(ISSUE_ID, foreign.id)
+      ).rejects.toBeInstanceOf(PermissionError);
+
+      const after = await api.listComments(ISSUE_ID, {
+        count: 100,
+        order: 'asc',
+      });
+      expect(after.find((c) => c.id === foreign.id)?.content).toBe(
+        contentBefore
+      );
+    });
+
+    it("editing another user's pull request comment is a PermissionError, and leaves it unchanged", async () => {
+      const api = await factory();
+      const seeded = await api.listPullRequestComments(pullRequestRef(), {
+        count: 100,
+        order: 'asc',
+      });
+      const foreign = seeded.find((c) => c.createdUser.id !== BOT.id);
+      if (foreign === undefined) {
+        throw new Error(
+          'fixture must seed a pull request comment written by somebody other than the credential owner'
+        );
+      }
+      // A primitive snapshot, for the reason given on the issue-side test.
+      const contentBefore = foreign.content;
+
+      await expect(
+        api.updatePullRequestComment(pullRequestRef(), foreign.id, 'rewritten')
+      ).rejects.toBeInstanceOf(PermissionError);
+
+      const after = await api.listPullRequestComments(pullRequestRef(), {
+        count: 100,
+        order: 'asc',
+      });
+      expect(after.find((c) => c.id === foreign.id)?.content).toBe(
+        contentBefore
+      );
+    });
+
     it('issue types and priorities are readable', async () => {
       const api = await factory();
       await expect(api.listIssueTypes(PROJECT_ID)).resolves.toEqual(
@@ -437,14 +601,17 @@ export function describeBacklogApiConformance(
       }
     });
 
-    it('uploading a file posts one multipart part named file', async () => {
+    it('an upload reports the name and the byte length of the file it was given', async () => {
       const api = await factory();
       const uploaded = await api.uploadAttachment(
         'notes.txt',
         Buffer.from('hello'),
         'text/plain'
       );
-      expect(uploaded).toMatchObject({ name: 'notes.txt' });
+      // `size` is the only place the bytes are observable through this
+      // interface, so it is what separates an implementation that sent the
+      // file from one that sent an empty part.
+      expect(uploaded).toMatchObject({ name: 'notes.txt', size: 5 });
     });
 
     it('an issue-list call spends the search bucket, not read', async () => {
@@ -698,6 +865,11 @@ export function describeBacklogApiConformance(
       );
       expect(downloaded.filename).toBe('diagram.png');
       expect(Buffer.isBuffer(downloaded.data)).toBe(true);
+      // The listed `size` is how many bytes the download must hand back; a
+      // client that read the response's headers and dropped its body would
+      // otherwise satisfy every assertion above.
+      const listedSize = basePullRequestAttachment().size;
+      expect(downloaded.data.byteLength).toBe(listedSize);
     });
 
     it('a pull request list call spends the read bucket, not search', async () => {
@@ -747,6 +919,8 @@ export const conformanceFixture = {
   pullRequestAttachmentId: PULL_REQUEST_ATTACHMENT_ID,
   baseProject,
   baseIssue,
+  baseIssueTypes,
+  basePriorities,
   baseComment,
   statusChangeLog: STATUS_CHANGE_LOG,
   baseGitRepository,

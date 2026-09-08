@@ -25,6 +25,8 @@ const {
   bob,
   baseProject,
   baseIssue,
+  baseIssueTypes,
+  basePriorities,
   baseComment,
   statusChangeLog,
   baseGitRepository,
@@ -57,7 +59,10 @@ function seed(): InMemoryBacklogSeed {
       }),
       baseComment({ id: 4, issueId: otherIssueId }),
     ],
-    issueTypes: { [projectId]: [{ id: 1, name: 'Task' }] },
+    issueTypes: { [projectId]: baseIssueTypes() },
+    // Seeded rather than left to the factory's default, which happens to hold
+    // the same three: a `createIssue` conformance test names priority 2 by id.
+    priorities: basePriorities(),
     notifications: baseNotifications(),
     repositories: [
       baseGitRepository(),
@@ -100,8 +105,10 @@ describe('createInMemoryBacklogApi', () => {
   it('records a pull-request comment against the three coordinates it was addressed with', async () => {
     const api = createInMemoryBacklogApi(seed());
     const ref = pullRequestRef();
-    await api.addPullRequestComment(ref, { content: 'Recorded' });
-    await api.updatePullRequestComment(ref, pullRequestCommentIds[0], 'Edited');
+    // Edits its own comment rather than a seeded one: the port refuses to
+    // update another user's, as Backlog does.
+    const added = await api.addPullRequestComment(ref, { content: 'Recorded' });
+    await api.updatePullRequestComment(ref, added.id, 'Edited');
     expect(api.state.recordedInputs).toContainEqual({
       method: 'addPullRequestComment',
       ref,
@@ -110,7 +117,7 @@ describe('createInMemoryBacklogApi', () => {
     expect(api.state.recordedInputs).toContainEqual({
       method: 'updatePullRequestComment',
       ref,
-      commentId: pullRequestCommentIds[0],
+      commentId: added.id,
       content: 'Edited',
     });
   });
@@ -202,5 +209,44 @@ describe('createInMemoryBacklogApi', () => {
     await expect(
       api.downloadPullRequestAttachment(pullRequestRef(), uploaded.id)
     ).resolves.toMatchObject({ filename: 'notes.txt' });
+  });
+
+  it('gives an uploaded file back byte for byte, on both download paths', async () => {
+    const api = createInMemoryBacklogApi(seed());
+    const uploaded = await api.uploadAttachment(
+      'notes.txt',
+      Buffer.from('hello'),
+      'text/plain'
+    );
+
+    const fromIssue = await api.downloadAttachment(issueId, uploaded.id);
+    const fromPullRequest = await api.downloadPullRequestAttachment(
+      pullRequestRef(),
+      uploaded.id
+    );
+
+    expect(fromIssue.data.toString()).toBe('hello');
+    expect(fromPullRequest.data.toString()).toBe('hello');
+    // The two downloads report the content type differently on a real space:
+    // the pull-request one answers the file's own, the issue one
+    // `application/octet-stream` (measured 2026-09-06,
+    // `.claude/rules/backlog-pull-request-facts.md` "Attachments").
+    expect(fromPullRequest.contentType).toBe('text/plain');
+    expect(fromIssue.contentType).toBe('application/octet-stream');
+  });
+
+  it('records the bytes an upload was given, as a copy the caller cannot rewrite', async () => {
+    const api = createInMemoryBacklogApi(seed());
+    const data = Buffer.from('hello');
+
+    await api.uploadAttachment('notes.txt', data, 'text/plain');
+    data.write('world');
+
+    expect(api.state.recordedInputs).toContainEqual({
+      method: 'uploadAttachment',
+      filename: 'notes.txt',
+      data: Buffer.from('hello'),
+      mimeType: 'text/plain',
+    });
   });
 });

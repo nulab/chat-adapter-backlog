@@ -2847,47 +2847,32 @@ describe('BacklogAdapter.postChannelMessage (§6.7)', () => {
       seed: { issueTypes: { [FIXTURE.projectId]: [{ id: 1, name: 'Task' }] } },
     });
     const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
-    // Warm the cache with the default issue type, then remove it from the
-    // port so a create using the cached id fails validation — simulating a
-    // project setting that changed after the cache was populated.
+    // Warm the cache with the default issue type, then replace the project's
+    // issue types so the cached id no longer exists — a project setting that
+    // changed after the cache was populated. The port refuses the stale id
+    // itself, so nothing here has to stand in for the failure.
     await adapter.postChannelMessage(channelId, { markdown: 'First issue' });
-    const originalCreateIssue = api.createIssue.bind(api);
-    let calls = 0;
-    api.createIssue = (input) => {
-      calls += 1;
-      if (calls === 1 && input.issueTypeId === 1) {
-        return Promise.reject(
-          new ValidationError('backlog', 'issueTypeId no longer exists')
-        );
-      }
-      return originalCreateIssue(input);
-    };
-    api.listIssueTypes = () => Promise.resolve([{ id: 2, name: 'Bug' }]);
+    api.state.issueTypes[FIXTURE.projectId] = [{ id: 2, name: 'Bug' }];
 
     const result = await adapter.postChannelMessage(channelId, {
       markdown: 'Second issue',
     });
 
-    expect(calls).toBe(2);
     expect(result.threadId).toMatch(
       new RegExp(`^backlog:${FIXTURE.host}:${FIXTURE.projectId}:`)
     );
-    const secondCreate = api.state.recordedInputs.filter(
+    const creates = api.state.recordedInputs.filter(
       (input) => input.method === 'createIssue'
     );
-    expect(secondCreate[1]).toMatchObject({ input: { issueTypeId: 2 } });
+    expect(creates.map((input) => input.input.issueTypeId)).toEqual([1, 1, 2]);
   });
 
   it('explicit issue type and priority are never retried', async () => {
+    // No issue types are seeded, so the port refuses the explicit id itself
+    // — the refresh path is what is on trial here, and it must not run for
+    // ids the caller supplied rather than the cache.
     const { adapter, api } = egressAdapter();
     const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
-    let calls = 0;
-    api.createIssue = () => {
-      calls += 1;
-      return Promise.reject(
-        new ValidationError('backlog', 'summary already exists')
-      );
-    };
 
     await expect(
       adapter.postChannelMessage(channelId, {
@@ -2896,7 +2881,9 @@ describe('BacklogAdapter.postChannelMessage (§6.7)', () => {
         priorityId: 3,
       } as unknown as Parameters<BacklogAdapter['postChannelMessage']>[1])
     ).rejects.toThrow(ValidationError);
-    expect(calls).toBe(1);
+    expect(
+      api.state.recordedInputs.filter((input) => input.method === 'createIssue')
+    ).toHaveLength(1);
   });
 
   it('a channel post carrying a file with unsupported data is rejected as a backlog error, and creates no issue', async () => {
