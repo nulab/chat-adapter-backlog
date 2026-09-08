@@ -263,6 +263,12 @@ appears wherever the id grammar's subject does: `fetchThread().metadata.kind`,
 the `raw.subject.kind` of a comment's raw message, and the `raw.kind` of a root
 message's. Only `subject.type` follows the ecosystem.
 
+Every timestamp in `fetchThread().metadata` — `created`, `updated` and a pull
+request's `closeAt`/`mergeAt` — is an **ISO string**, the same as in
+`message.raw`. A value read out of `metadata` is typed `unknown`, so a `Date`
+there would be invisible to the compiler and would quietly become a string the
+first time a `ThreadInfo` went through JSON.
+
 What a pull-request thread cannot do — delete a comment, get listed by
 `listThreads`, be merged, closed or created — is in the table below.
 

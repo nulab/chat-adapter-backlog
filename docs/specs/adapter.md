@@ -1222,6 +1222,15 @@ without `url` rather than a failed read. Returns
 `metadata = { kind: "pullRequest", host, projectId, repositoryId, repositoryName?, number, id, summary, description, status: { id, name }, assignee: { id, name } | null, base, branch, issue: { id, issueKey } | null, baseCommit, branchCommit, mergeCommit, closeAt, mergeAt, createdUserId, created, updated, url?: https://<host>/git/<projectKey>/<repositoryName>/pullRequests/<number> }`.
 Statuses are `1 Open`, `2 Closed`, `3 Merged` (measured 2026-09-06).
 
+Every timestamp in `metadata` — `created`, `updated`, and a pull request's
+`closeAt`/`mergeAt` — is an **ISO string**, not the `Date` the port returns
+(decided 2026-09-08). `ThreadInfo.metadata` is `Record<string, unknown>`, so a
+`Date` in it is invisible to the compiler, and a consumer that puts a
+`ThreadInfo` through JSON — a queue, a cache, a tool result — gets a string
+back while its code still reads it as a `Date`. It is the same reason the
+raw-message shapes carry ISO strings (§3.5), and the two should not disagree
+about how an instant is written.
+
 ### 7.4 `fetchSubject(raw)`
 
 Resolves the issue or pull request that `raw` belongs to (one Get Issue or Get

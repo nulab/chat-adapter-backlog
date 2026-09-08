@@ -134,7 +134,18 @@ export interface SubjectClient {
 
   /** `ThreadInfo.channelName` (§7.3). */
   channelName(root: SubjectRoot, names: SubjectNames): string | undefined;
-  /** `ThreadInfo.metadata` (§7.3); names its own `kind` for both kinds. */
+  /**
+   * `ThreadInfo.metadata` (§7.3); names its own `kind` for both kinds.
+   *
+   * Every timestamp in it is an **ISO string**, not the `Date` the port hands
+   * back. The return type is `Record<string, unknown>`, so a `Date` in here is
+   * invisible to the compiler, and any consumer that puts a `ThreadInfo`
+   * through JSON — a queue, a cache, a tool result — gets a string back while
+   * its code still reads it as a `Date`. That is the same reason the
+   * raw-message shapes carry ISO strings (`src/types.ts`, `src/index.ts`), and
+   * the two halves of `message.raw` and `ThreadInfo.metadata` should not
+   * disagree about how an instant is written.
+   */
   threadMetadata(
     root: SubjectRoot,
     names: SubjectNames

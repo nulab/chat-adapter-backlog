@@ -669,10 +669,29 @@ describe('the pull request subject client', () => {
       closeAt: null,
       mergeAt: null,
       createdUserId: BOB.id,
-      created: PULL_REQUEST.created,
-      updated: PULL_REQUEST.updated,
+      created: PULL_REQUEST.created.toISOString(),
+      updated: PULL_REQUEST.updated.toISOString(),
       url: 'https://example.backlog.com/git/PROJECT/example-repo/pullRequests/12',
     });
+  });
+
+  it('writes metadata timestamps as ISO strings, so a JSON round trip is identity', () => {
+    const { subject } = clientWith();
+
+    const metadata = subject.threadMetadata(
+      rootOf({
+        ...PULL_REQUEST,
+        mergeAt: new Date('2026-09-03T09:00:00.000Z'),
+        closeAt: new Date('2026-09-03T09:00:00.000Z'),
+      }),
+      { projectKey: PROJECT_KEY, repositoryName: REPOSITORY_NAME }
+    );
+
+    expect(metadata['created']).toBe('2026-09-01T10:00:00.000Z');
+    expect(metadata['updated']).toBe('2026-09-02T11:30:00.000Z');
+    expect(metadata['closeAt']).toBe('2026-09-03T09:00:00.000Z');
+    expect(metadata['mergeAt']).toBe('2026-09-03T09:00:00.000Z');
+    expect(JSON.parse(JSON.stringify(metadata))).toEqual(metadata);
   });
 
   it('a thread whose repository name is unknown omits the name and the url rather than guessing', () => {
