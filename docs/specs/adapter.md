@@ -1680,6 +1680,10 @@ for one scratch space is worse than requiring the two to share it.
   allow more execution time than `maxWaitMs` or lower it and handle
   `AdapterRateLimitError` itself, with the two `warn` lines named as how the
   wait becomes visible; testing with `createInMemoryBacklogApi`; license.
+  Every link into this repository is absolute
+  (`https://github.com/nulab/chat-adapter-backlog/blob/main/…`), never
+  `./file`: README.md ships in the tarball whatever `files` lists, and
+  npmjs.com resolves no relative path (#66).
 - **`sample-messages.md`** in the package root with anonymised payloads for
   every §5.3 row, issue **and** pull request — 18, 19 (comment, status,
   assignee, summary), 20 (plain and with an attachment) and the ignored 21 and

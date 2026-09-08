@@ -45,7 +45,7 @@ Every field falls back to an environment variable, so
 
 For a whole bot rather than a fragment — a Vercel project with the webhook
 wired up, environment variables and a handler that does something useful — see
-[examples/](./examples).
+[examples/](https://github.com/nulab/chat-adapter-backlog/tree/main/examples).
 
 ## Environment variables
 
@@ -574,12 +574,14 @@ comments, stars, uploads, notifications and recorded inputs for assertions.
 
 ## Links
 
-- [examples/](./examples) — deployable bots built on this adapter, in order of
-  how much they ask of you
+- [examples/](https://github.com/nulab/chat-adapter-backlog/tree/main/examples)
+  — deployable bots built on this adapter, in order of how much they ask of you
 - [Chat SDK documentation](https://chat-sdk.dev/docs)
 - [Backlog API v2](https://developer.nulab.com/docs/backlog/)
-- [sample-messages.md](./sample-messages.md) — a payload per activity type
-- [DEVELOPMENT.md](./DEVELOPMENT.md) — contributor setup
+- [sample-messages.md](https://github.com/nulab/chat-adapter-backlog/blob/main/sample-messages.md)
+  — a payload per activity type
+- [DEVELOPMENT.md](https://github.com/nulab/chat-adapter-backlog/blob/main/DEVELOPMENT.md)
+  — contributor setup
 
 ## Package name
 
@@ -590,4 +592,4 @@ by an unrelated third-party package, so this one is published under the
 
 ## License
 
-[MIT](./LICENSE) © Nulab Inc.
+[MIT](https://github.com/nulab/chat-adapter-backlog/blob/main/LICENSE) © Nulab Inc.
