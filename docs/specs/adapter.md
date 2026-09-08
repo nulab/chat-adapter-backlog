@@ -1437,6 +1437,17 @@ never one list whose `ordered` the last marker decided. A jump of more than one
 level opens a single nested list, and a marker between two open depths becomes
 a second child list of the same item.
 
+A marker with **no text after it is not a list item at all**, and that is what
+keeps a line's block type independent of trailing whitespace. `-` followed by
+one space ends the list and stays a paragraph, exactly as the bare `-` — which
+has no whitespace for the marker rule to match — already did. `----` followed
+by one space is the `thematicBreak` its unspaced form is, because `----` is
+tested ahead of the list rule and a line's classification does not depend on
+whether a list is open above it. Trailing whitespace therefore never decides
+which block a line becomes; it survives only inside paragraph text, as on any
+other line. The rule is about the missing text and not about `----`, so
+`---- four` is still a depth-four item.
+
 ### 9.6 Known lossy conversions
 
 Inline code and table alignment outbound to notation; colour, revision links,
@@ -1551,7 +1562,8 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
 - **format**: every row of §9.4 and §9.5; single-line `{code}x{/code}`;
   unclosed `{code}`; unclosed `{quote}`; a list whose first marker is the
   deepest, a marker changing kind mid-run, a depth jump, a marker between two
-  open depths and a CRLF line ending; an unterminated
+  open depths, a marker with no text and a `----` adjacent to a list (both
+  with and without a trailing space) and a CRLF line ending; an unterminated
   `''`/`'''`/`%%`/`[[`; a `|` inside a table cell's link; `toAst` throwing →
   plain paragraph + warn; rule cache primed by webhook path, replaced by
   `fetchChannelInfo`, lookup failure not cached; `renderFormatted`/

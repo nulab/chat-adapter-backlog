@@ -402,6 +402,42 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
     ]);
   });
 
+  it('a marker followed by only whitespace ends the list and stays a paragraph', () => {
+    // The middle line is `-` and one space. A marker carrying no text is not
+    // an item, so this reads like the bare `-` above rather than becoming an
+    // item whose only child is an empty paragraph (§9.5).
+    const ast = converter.toAst('- one\n- \n- two');
+
+    expect(ast.children).toEqual([
+      list(false, [textItem('one')]),
+      paragraph([text('- ')]),
+      list(false, [textItem('two')]),
+    ]);
+  });
+
+  it('a thematic break ends the list whether or not it trails a space', () => {
+    // `----` and `----` plus one space. Inside a list the second used to match
+    // as a marker of depth four with no text, so an invisible character decided
+    // between a thematic break and a nested empty item (§9.5).
+    const withoutSpace = converter.toAst('- one\n----\n- two');
+    const withSpace = converter.toAst('- one\n---- \n- two');
+
+    expect(withoutSpace.children).toEqual([
+      list(false, [textItem('one')]),
+      { type: 'thematicBreak' },
+      list(false, [textItem('two')]),
+    ]);
+    expect(withSpace.children).toEqual(withoutSpace.children);
+  });
+
+  it('four hyphens followed by text stay a depth-four list item', () => {
+    // The emptiness rule is about the text, not about the `----` run: four
+    // hyphens followed by text are a depth-four item, as they are anywhere else.
+    const ast = converter.toAst('---- four');
+
+    expect(ast.children).toEqual([list(false, [textItem('four')])]);
+  });
+
   it('a CRLF line ending neither ends the list nor reaches the item text', () => {
     const ast = converter.toAst('- one\r\n-- two');
 
