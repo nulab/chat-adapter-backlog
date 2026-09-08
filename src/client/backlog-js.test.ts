@@ -180,8 +180,10 @@ describe('createBacklogJsApi', () => {
   it('credentials carrying both an apiKey and an accessToken are refused instead of one of them winning', () => {
     const fetchStub = vi.fn<typeof globalThis.fetch>();
 
-    // The union type forbids this, so only a JavaScript consumer or a cast
-    // reaches it — which is exactly the caller the check is there for.
+    // Both resolvers together are a compile error against
+    // `BacklogCredentials` (§8.7), for a value assembled in a variable as
+    // much as for this literal, so the assertion is the only way in — and a
+    // value cast past the compiler is exactly what the check answers.
     expect(() =>
       createBacklogJsApi({
         host,

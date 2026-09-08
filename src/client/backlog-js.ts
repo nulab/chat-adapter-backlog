@@ -130,9 +130,17 @@ interface ChosenCredential {
 
 /**
  * Widens the {@link BacklogCredentials} union so both fields can be read at
- * once. The union admits exactly one of them, and that is the guarantee a
- * TypeScript caller gets — but not one that holds at run time, because a
- * JavaScript consumer, or one who cast, can pass both.
+ * once.
+ *
+ * The union refuses a value carrying both and one carrying neither, so the
+ * reachable caller cannot get either past the compiler: that is
+ * `toCredentials` in `src/adapter.ts`, and it is the only one, because
+ * neither `createBacklogJsApi` nor `createBacklogJsTransport` is on the
+ * package's public surface (`src/index.test.ts` asserts their absence). What
+ * a type cannot rule out is a value that arrived through an assertion, which
+ * is the case {@link chooseCredential} is left to answer — and answering it
+ * needs the shape read structurally, which the union by itself does not
+ * allow.
  */
 function widenCredentials(credentials: BacklogCredentials): {
   apiKey?: () => MaybeAsync<string>;
@@ -151,6 +159,11 @@ function widenCredentials(credentials: BacklogCredentials): {
  * `ValidationError`, raised here rather than on the first request — neither
  * becomes right by retrying, and no resolver has run yet, so the message can
  * name the host with no secret in hand.
+ *
+ * The type says the same thing (§8.7), so these two branches answer only what
+ * a type cannot: a value cast past the compiler. Deleting them as redundant
+ * restores the silent preference, because the reader that follows them is a
+ * header being set, not a type being checked.
  */
 function chooseCredential(
   host: string,

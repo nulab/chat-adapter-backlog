@@ -441,10 +441,22 @@ export interface BacklogApiErrorDetail {
 /** Resolves to a value, or a promise of one, awaited fresh on every call. */
 export type MaybeAsync<T> = T | Promise<T>;
 
-/** Backlog's two supported auth modes (docs/specs/adapter.md §8.7). Resolved per call, never memoised. */
+/**
+ * Backlog's two supported auth modes (docs/specs/adapter.md §8.7). Resolved
+ * per call, never memoised.
+ *
+ * The `?: never` on each member is what makes "exactly one" a compile error
+ * rather than a comment. Without it, a union target only rejects a property
+ * that appears in **no** member, so `{ apiKey, accessToken }` type-checks
+ * clean — `accessToken` is not excess, it belongs to the other member — and
+ * the constraint survives only in the port's own run-time check. With it, the
+ * decision moves from the excess-property check, which sees fresh object
+ * literals alone, to ordinary assignability, so a value built up in a
+ * variable and then passed is refused too.
+ */
 export type BacklogCredentials =
-  | { apiKey: () => MaybeAsync<string> }
-  | { accessToken: () => MaybeAsync<string> };
+  | { apiKey: () => MaybeAsync<string>; accessToken?: never }
+  | { accessToken: () => MaybeAsync<string>; apiKey?: never };
 
 export interface RetryOptions {
   /** Maximum number of retries on a 429. Default 1. */
