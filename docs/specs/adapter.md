@@ -1684,7 +1684,9 @@ for one scratch space is worse than requiring the two to share it.
   `rateLimit.maxWaitMs` that blocks the call — so a serverless deployment must
   allow more execution time than `maxWaitMs` or lower it and handle
   `AdapterRateLimitError` itself, with the two `warn` lines named as how the
-  wait becomes visible; testing with `createInMemoryBacklogApi`; license.
+  wait becomes visible; testing with `createInMemoryBacklogApi`, with
+  `createApi` in the configuration table because that section passes it;
+  license.
   Every link into this repository is absolute
   (`https://github.com/nulab/chat-adapter-backlog/blob/main/…`), never
   `./file`: README.md ships in the tarball whatever `files` lists, and

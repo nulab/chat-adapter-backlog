@@ -96,6 +96,7 @@ not a request to fall back.
 | `rateLimit.maxWaitMs` | `number` | `60_000` | Longest wait before a 429 retry. |
 | `rateLimit.maxRetries` | `number` | `1` | `0` disables retries. |
 | `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | Larger bodies get a 413. Description edits carry two full bodies. |
+| `createApi` | `(installation: ResolvedInstallation) => BacklogApi` | the `backlog-js`-backed port | Test seam: replaces the port every Backlog call goes through, so a consumer's suite needs no network — see **Testing**. Replacing it also takes the rate-limit accounting and the 429 retry with it. |
 
 ### Several spaces
 
