@@ -1360,6 +1360,13 @@ caller through the resolver form; the adapter performs no OAuth flow
 ([Authentication](https://developer.nulab.com/docs/backlog/auth/)). Both
 identify the bot **user**; rate limits are per user, not per key.
 
+**Exactly one** of the two per installation, which is what the
+`BacklogCredentials` union says and what the port checks when it is built:
+both or neither is a `ValidationError` naming the host. Both is never a silent
+preference for the API key — a deployment that adds an OAuth token means to
+stop sending its space's long-lived key, and going on sending it is the one
+outcome nothing in the logs would reveal.
+
 ## 9. Formatting
 
 ### 9.1 Rule selection (D14)

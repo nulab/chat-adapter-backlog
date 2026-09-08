@@ -1,4 +1,4 @@
-import { AdapterError } from '@chat-adapter/shared';
+import { AdapterError, ValidationError } from '@chat-adapter/shared';
 import { Backlog } from 'backlog-js';
 import { z } from 'zod';
 
@@ -43,6 +43,7 @@ import type {
   AddPullRequestCommentInput,
   BacklogApi,
   BacklogComment,
+  BacklogCredentials,
   BacklogDownloadedFile,
   BacklogGitRepository,
   BacklogIssue,
@@ -60,6 +61,7 @@ import type {
   ListIssuesOptions,
   ListNotificationsOptions,
   ListPullRequestsOptions,
+  MaybeAsync,
   PullRequestRef,
   RateLimitBucket,
   RateLimitSnapshots,
@@ -117,9 +119,68 @@ function requestHeaders(input: Parameters<Fetch>[0]): Headers | undefined {
   return input instanceof Request ? input.headers : undefined;
 }
 
-export interface BacklogCredentials {
-  apiKey?: () => string | Promise<string>;
-  accessToken?: () => string | Promise<string>;
+/** The one auth mode a transport was configured with (docs/specs/adapter.md §8.7). */
+interface ChosenCredential {
+  /** The request header the resolved value goes on. */
+  header: string;
+  /** Renders the resolved value the way that header wants it. */
+  format: (value: string) => string;
+  resolve: () => MaybeAsync<string>;
+}
+
+/**
+ * Widens the {@link BacklogCredentials} union so both fields can be read at
+ * once. The union admits exactly one of them, and that is the guarantee a
+ * TypeScript caller gets — but not one that holds at run time, because a
+ * JavaScript consumer, or one who cast, can pass both.
+ */
+function widenCredentials(credentials: BacklogCredentials): {
+  apiKey?: () => MaybeAsync<string>;
+  accessToken?: () => MaybeAsync<string>;
+} {
+  return credentials;
+}
+
+/**
+ * Picks the auth mode, once per transport.
+ *
+ * Both credentials used to mean `apiKey`, silently, and that is the wrong
+ * default to have: a deployment that added an OAuth token meaning to stop
+ * sending its space's long-lived API key would have gone on sending the key,
+ * with nothing in the logs to say so. Both and neither are therefore a
+ * `ValidationError`, raised here rather than on the first request — neither
+ * becomes right by retrying, and no resolver has run yet, so the message can
+ * name the host with no secret in hand.
+ */
+function chooseCredential(
+  host: string,
+  credentials: BacklogCredentials
+): ChosenCredential {
+  const { apiKey, accessToken } = widenCredentials(credentials);
+  if (apiKey !== undefined && accessToken !== undefined) {
+    throw new ValidationError(
+      'backlog',
+      `Backlog credentials for ${host} carry both apiKey and accessToken; configure exactly one`
+    );
+  }
+  if (apiKey !== undefined) {
+    return {
+      header: 'Backlog-API-Key',
+      format: (value) => value,
+      resolve: apiKey,
+    };
+  }
+  if (accessToken !== undefined) {
+    return {
+      header: 'Authorization',
+      format: (value) => `Bearer ${value}`,
+      resolve: accessToken,
+    };
+  }
+  throw new ValidationError(
+    'backlog',
+    `Backlog credentials for ${host} carry neither apiKey nor accessToken; configure exactly one`
+  );
 }
 
 export interface CreateBacklogJsApiOptions {
@@ -203,19 +264,16 @@ export function createBacklogJsTransport(
     logger,
   } = options;
   const tracker = new RateLimitTracker();
+  const credential = chooseCredential(host, credentials);
 
-  async function resolveCredentials(): Promise<{
-    apiKey?: string;
-    accessToken?: string;
-  }> {
+  /**
+   * Resolves the credential's value. Awaited on every attempt and never
+   * memoised, because the resolver form exists so an OAuth token can be
+   * refreshed between calls (docs/specs/adapter.md §8.2, §8.7).
+   */
+  async function resolveCredential(): Promise<string> {
     try {
-      if (credentials.apiKey) {
-        return { apiKey: await credentials.apiKey() };
-      }
-      if (credentials.accessToken) {
-        return { accessToken: await credentials.accessToken() };
-      }
-      throw new Error('No Backlog credential resolver configured');
+      return await credential.resolve();
     } catch (cause) {
       throw mapCredentialResolverError(cause);
     }
@@ -252,7 +310,7 @@ export function createBacklogJsTransport(
     // and the secret is never held on an object handed to a consumer. It goes
     // on here instead, resolved again for every attempt: the resolver form
     // exists so an OAuth token can be refreshed between calls.
-    applyCredential(headers, await resolveCredentials());
+    applyCredential(headers, await resolveCredential());
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -385,18 +443,9 @@ export function createBacklogJsTransport(
    * used to make the same check for us, and cannot any more — this client is
    * built holding no credential at all.
    */
-  function applyCredential(
-    headers: Headers,
-    resolved: { apiKey?: string; accessToken?: string }
-  ): void {
+  function applyCredential(headers: Headers, value: string): void {
     try {
-      if (resolved.apiKey !== undefined) {
-        headers.set('Backlog-API-Key', resolved.apiKey);
-        return;
-      }
-      if (resolved.accessToken !== undefined) {
-        headers.set('Authorization', `Bearer ${resolved.accessToken}`);
-      }
+      headers.set(credential.header, credential.format(value));
     } catch (cause) {
       throw mapCredentialResolverError(cause);
     }

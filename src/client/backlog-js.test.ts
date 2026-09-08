@@ -4,6 +4,7 @@ import {
   AuthenticationError,
   NetworkError,
   ResourceNotFoundError,
+  ValidationError,
 } from '@chat-adapter/shared';
 import { createMockLogger } from '@chat-adapter/tests';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,6 +15,8 @@ import {
   conformanceFixture,
   describeBacklogApiConformance,
 } from './conformance.js';
+
+import type { BacklogCredentials } from './port.js';
 
 const { host, projectId, issueId, alice, baseIssue } = conformanceFixture;
 
@@ -132,6 +135,57 @@ describe('createBacklogJsApi', () => {
     await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(
       AuthenticationError
     );
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it('an access token is sent as a bearer token', async () => {
+    const requests: { headers: Headers }[] = [];
+    const server = createFakeBacklogServer({
+      onRequest: (request) => requests.push(request),
+    });
+    const api = createBacklogJsApi({
+      host,
+      credentials: { accessToken: () => 'oauth-token' },
+      fetch: server.fetch,
+    });
+
+    await api.getIssue(issueId);
+
+    expect(requests.length).toBeGreaterThan(0);
+    for (const request of requests) {
+      expect(request.headers.get('Authorization')).toBe('Bearer oauth-token');
+      expect(request.headers.get('Backlog-API-Key')).toBeNull();
+    }
+  });
+
+  it('credentials carrying both an apiKey and an accessToken are refused instead of one of them winning', () => {
+    const fetchStub = vi.fn<typeof globalThis.fetch>();
+
+    // The union type forbids this, so only a JavaScript consumer or a cast
+    // reaches it — which is exactly the caller the check is there for.
+    expect(() =>
+      createBacklogJsApi({
+        host,
+        credentials: {
+          apiKey: () => 'test-api-key',
+          accessToken: () => 'oauth-token',
+        } as BacklogCredentials,
+        fetch: fetchStub,
+      })
+    ).toThrow(ValidationError);
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it('credentials carrying neither an apiKey nor an accessToken are refused when the port is built, not when it is first used', () => {
+    const fetchStub = vi.fn<typeof globalThis.fetch>();
+
+    expect(() =>
+      createBacklogJsApi({
+        host,
+        credentials: {} as BacklogCredentials,
+        fetch: fetchStub,
+      })
+    ).toThrow(ValidationError);
     expect(fetchStub).not.toHaveBeenCalled();
   });
 
