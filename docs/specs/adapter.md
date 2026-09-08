@@ -883,7 +883,12 @@ both kinds unless a subsection says otherwise. Non-comment message ids (`:r`,
    ([Post Attachment File](https://developer.nulab.com/docs/backlog/api/2/post-attachment-file/));
    the returned ids are single-use handles valid for one hour.
 2. Render: `converter.renderPostable(message)` with the project's converter
-   (§9). Cards render through `cardToFallbackText`.
+   (§9). A card renders through `cardToFallbackText`, so its fallback text is
+   **the project's own markup, not Markdown**: the card's title and each field
+   label are bold, written `**…**` on a Markdown project and `''…''` on a
+   Backlog-notation one (§9.4). A caller-supplied `fallbackText` wins over the
+   generated one and is posted verbatim. Every other part of a card — subtitle,
+   text, tables, charts, sections — is markup-free under either rule.
 3. `POST /issues/:issueId/comments` with `content`, `notifiedUserId[]`,
    `attachmentId[]`
    ([Add Comment](https://developer.nulab.com/docs/backlog/api/2/add-comment/)),
@@ -1014,6 +1019,12 @@ Backlog requires `projectId`, `summary`, `issueTypeId`, `priorityId`
   line. Summary is plain text regardless of project rule (Backlog does not
   render markup in summaries). Empty summary → `ValidationError` ⚑.
 - **Description** = remaining blocks rendered with the project converter.
+- **A card** is rendered once by `converter.renderPostable` (§6.1 step 2), and
+  the rendered text is split on its first newline: first line → summary, the
+  rest → description. The first line carries the title's bold markup, so it is
+  put back through `extractPlainText` to satisfy the plain-text rule above —
+  `**Deploy failed**` and `''Deploy failed''` both become `Deploy failed`. The
+  description keeps the project's markup like any other description.
 - **Defaults**: `issueTypeId` = first of
   [Get Issue Type List](https://developer.nulab.com/docs/backlog/api/2/get-issue-type-list/);
   `priorityId` = the middle element of
@@ -1586,6 +1597,14 @@ must fail, not silently post garbage).
 | `table` | `\|cell\|cell\|` per row, header row suffixed `h`; alignment dropped (lossy) |
 | `html`, `footnote*`, others | `defaultNodeToText` |
 
+A card's fallback text is not built from mdast, but its bold follows the
+`strong` row above: `BacklogNotationConverter` overrides
+`cardToFallbackText`/`cardChildToFallbackText` so the card's title and field
+labels come out `''…''` (§6.1 step 2). The base converter's `**` is Markdown
+and would reach a `backlog` project as literal asterisks; the bold marker
+cannot be passed in as an argument, because `@chat-adapter/shared`'s
+`cardToFallbackText` types `boldFormat` as `"*" | "**"`.
+
 ### 9.5 Backlog-notation projects, inbound (`toAst`)
 
 Line-based translation to mdast (via Markdown as an intermediate is
@@ -1853,7 +1872,9 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   plain paragraph + warn; rule cache primed by webhook path, replaced by
   `fetchChannelInfo`, lookup failure not cached; `renderFormatted`/
   `parseMessage` honour a cached `backlog` rule and warn when uncached.
-- **egress**: `postMessage` markdown/raw/card/files/`notifiedUserId`;
+- **egress**: `postMessage` markdown/raw/card/files/`notifiedUserId`; a card
+  posted under **both** formatting rules (asterisks on `markdown`, `''` and no
+  asterisk on `backlog`) and a caller's `fallbackText` posted verbatim;
   mistyped extra → `ValidationError`; an `ArrayBuffer` and a `Blob` upload
   like a `Buffer`; unsupported `file.data` → `ValidationError` named
   `backlog` with that file not uploaded; `editMessage` with files → error;

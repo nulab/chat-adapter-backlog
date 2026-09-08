@@ -1,6 +1,6 @@
 import { createMockLogger } from '@chat-adapter/tests';
 import { paragraph, root, text } from 'chat';
-import type { BaseFormatConverter, Root as RootNode } from 'chat';
+import type { BaseFormatConverter, CardElement, Root as RootNode } from 'chat';
 import { describe, expect, it, vi } from 'vitest';
 
 import { converterFor, FallbackFormatConverter } from './fallback';
@@ -79,6 +79,63 @@ describe('converterFor', () => {
     expect(fallback.fromAst(root([paragraph([text('plain')])]))).toBe('plain');
     expect(fallback.toAst("''bold''").children).toEqual(
       new BacklogNotationConverter().toAst("''bold''").children
+    );
+  });
+});
+
+describe('a card fallback under each formatting rule', () => {
+  /** Every child a card fallback renders, markup-free ones included. */
+  const card: CardElement = {
+    type: 'card',
+    title: 'Release 1.4',
+    subtitle: 'ready to ship',
+    children: [
+      { type: 'text', content: 'Two blockers left.' },
+      {
+        type: 'section',
+        children: [
+          {
+            type: 'fields',
+            children: [
+              { type: 'field', label: 'Owner', value: 'the release team' },
+            ],
+          },
+        ],
+      },
+      { type: 'table', headers: ['Blocker'], rows: [['#12']] },
+      { type: 'actions', children: [] },
+    ],
+  };
+
+  it('bolds the title and every field label with Markdown asterisks', () => {
+    const fallback = converterFor('markdown', createMockLogger(), context);
+
+    expect(fallback.renderPostable(card)).toBe(
+      [
+        '**Release 1.4**',
+        'ready to ship',
+        'Two blockers left.',
+        '**Owner**: the release team',
+        'Blocker',
+        '-------',
+        '#12',
+      ].join('\n')
+    );
+  });
+
+  it("bolds them with '' and leaves every other child untouched", () => {
+    const fallback = converterFor('backlog', createMockLogger(), context);
+
+    expect(fallback.renderPostable(card)).toBe(
+      [
+        "''Release 1.4''",
+        'ready to ship',
+        'Two blockers left.',
+        "''Owner'': the release team",
+        'Blocker',
+        '-------',
+        '#12',
+      ].join('\n')
     );
   });
 });

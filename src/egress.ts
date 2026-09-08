@@ -1,9 +1,5 @@
-import {
-  cardToFallbackText,
-  extractFiles,
-  ValidationError,
-} from '@chat-adapter/shared';
-import { parseMarkdown, root, toPlainText } from 'chat';
+import { extractFiles, ValidationError } from '@chat-adapter/shared';
+import { isCardElement, parseMarkdown, root, toPlainText } from 'chat';
 import { z } from 'zod';
 
 import {
@@ -232,14 +228,27 @@ function splitFirstBlock(ast: Root): {
   return { first, rest: root(rest) };
 }
 
-/** Fallback text's first line as the summary, the rest as the description — shared by both `CardElement` and `PostableCard` (docs/specs/adapter.md §6.7). */
-function fallbackTextToSummaryAndDescription(fallbackText: string): {
+/**
+ * A card's fallback text split into the two Backlog fields: first line as the
+ * summary, the rest as the description (docs/specs/adapter.md §6.7).
+ *
+ * The first line is a *rendered* line — the card's title carries the
+ * project's own bold markup — so it goes back through `extractPlainText`
+ * before becoming a summary, which §6.7 requires to be plain text under
+ * either formatting rule. Reading `card.title` directly would skip that
+ * markup but also skip a caller-supplied `fallbackText`, whose first line is
+ * the summary the caller asked for.
+ */
+function fallbackTextToSummaryAndDescription(
+  fallbackText: string,
+  converter: FallbackFormatConverter
+): {
   summary: string;
   description: string;
 } {
   const [firstLine, ...restLines] = fallbackText.split('\n');
   return {
-    summary: collapseWhitespace(firstLine ?? ''),
+    summary: collapseWhitespace(converter.extractPlainText(firstLine ?? '')),
     description: restLines.join('\n').trim(),
   };
 }
@@ -252,12 +261,14 @@ function fallbackTextToSummaryAndDescription(fallbackText: string): {
  * Description goes through `converter.fromAst` like every other outbound
  * block of content.
  *
- * `cardToFallbackText`'s `platform: PlatformName` has no `"backlog"` member
- * (`@chat-adapter/shared@4.39.0`); `"slack"` only selects error wording, not
- * an actual Slack-shaped output, so it is passed with `boldFormat: '**'` set
- * explicitly rather than relying on a platform default that has no Backlog
- * entry (see `toFileBuffer` in `adapter.ts` for the same trade-off on
- * `toBuffer`).
+ * A card is rendered by `converter.renderPostable` like every other
+ * postable, not by `@chat-adapter/shared`'s `cardToFallbackText` directly:
+ * the shared helper's `boldFormat` is typed `"*" | "**"`, so no argument to
+ * it can produce Backlog notation's `''` and a `backlog` project got literal
+ * asterisks around the card's title (#45). `renderPostable` reaches the
+ * project's own converter, which knows the rule, and keeps a
+ * caller-supplied `fallbackText` winning over a generated one — the same
+ * precedence `postMessage` (§6.1) applies.
  */
 export function resolveSummaryAndDescription(
   message: AdapterPostableMessage,
@@ -267,16 +278,11 @@ export function resolveSummaryAndDescription(
     return { summary: firstNonBlankLine(message), description: message };
   }
 
-  if ('type' in message && message.type === 'card') {
+  if (isCardElement(message) || 'card' in message) {
     return fallbackTextToSummaryAndDescription(
-      cardToFallbackText(message, { platform: 'slack', boldFormat: '**' })
+      converter.renderPostable(message),
+      converter
     );
-  }
-  if ('card' in message) {
-    const fallbackText =
-      message.fallbackText ??
-      cardToFallbackText(message.card, { platform: 'slack', boldFormat: '**' });
-    return fallbackTextToSummaryAndDescription(fallbackText);
   }
 
   if ('raw' in message) {

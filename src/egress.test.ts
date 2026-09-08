@@ -10,6 +10,7 @@ import {
   postComment,
   removeReaction,
   requireCommentInThread,
+  resolveSummaryAndDescription,
   uploadFiles,
 } from './egress';
 import { createInMemoryBacklogApi } from './client/in-memory';
@@ -20,7 +21,7 @@ import type { InMemoryBacklogApi } from './client/in-memory';
 import type { BacklogComment } from './client/port';
 import type { SubjectClient } from './subject/client';
 import type { BacklogPostableExtras, BacklogSubjectRef } from './types';
-import type { PostableMarkdown } from 'chat';
+import type { CardElement, PostableMarkdown } from 'chat';
 
 const HOST = 'example.backlog.com';
 const PROJECT_ID = 500;
@@ -128,6 +129,30 @@ function markdownConverter() {
     projectId: PROJECT_ID,
   });
 }
+
+function notationConverter() {
+  return converterFor('backlog', createMockLogger(), {
+    host: HOST,
+    projectId: PROJECT_ID,
+  });
+}
+
+/** A card bold in both places a card puts bold: title and field label. */
+const CARD: CardElement = {
+  type: 'card',
+  title: 'Deploy failed',
+  subtitle: 'staging',
+  children: [
+    { type: 'text', content: 'The deploy job exited 1.' },
+    {
+      type: 'fields',
+      children: [
+        { type: 'field', label: 'Environment', value: 'production' },
+        { type: 'field', label: 'Attempt', value: '3' },
+      ],
+    },
+  ],
+};
 
 function pullRequestComment(
   overrides: Partial<BacklogComment> = {}
@@ -369,6 +394,127 @@ describe('postComment', () => {
       toBuffer: () => Promise.reject(new Error('no files expected')),
     });
     expect(message).toEqual(snapshot);
+  });
+
+  it('a card comment on a Markdown project is bold with asterisks', async () => {
+    const backlogApi = api();
+
+    await postComment({
+      host: HOST,
+      projectId: PROJECT_ID,
+      subject: subjectOf(backlogApi, ISSUE),
+      api: backlogApi,
+      converter: markdownConverter(),
+      message: CARD,
+      toBuffer: () => Promise.reject(new Error('no files expected')),
+    });
+
+    expect(backlogApi.state.recordedInputs).toContainEqual({
+      method: 'addComment',
+      issueId: ISSUE_ID,
+      input: {
+        content: [
+          '**Deploy failed**',
+          'staging',
+          'The deploy job exited 1.',
+          '**Environment**: production',
+          '**Attempt**: 3',
+        ].join('\n'),
+      },
+    });
+  });
+
+  it("a card comment on a notation project uses '' and no asterisks", async () => {
+    const backlogApi = api();
+
+    await postComment({
+      host: HOST,
+      projectId: PROJECT_ID,
+      subject: subjectOf(backlogApi, ISSUE),
+      api: backlogApi,
+      converter: notationConverter(),
+      message: CARD,
+      toBuffer: () => Promise.reject(new Error('no files expected')),
+    });
+
+    const [posted] = backlogApi.state.recordedInputs;
+    expect(posted).toEqual({
+      method: 'addComment',
+      issueId: ISSUE_ID,
+      input: {
+        content: [
+          "''Deploy failed''",
+          'staging',
+          'The deploy job exited 1.',
+          "''Environment'': production",
+          "''Attempt'': 3",
+        ].join('\n'),
+      },
+    });
+    expect(JSON.stringify(posted)).not.toContain('*');
+  });
+
+  it('a caller-supplied fallback text is posted verbatim', async () => {
+    for (const converter of [markdownConverter(), notationConverter()]) {
+      const backlogApi = api();
+
+      await postComment({
+        host: HOST,
+        projectId: PROJECT_ID,
+        subject: subjectOf(backlogApi, ISSUE),
+        api: backlogApi,
+        converter,
+        message: { card: CARD, fallbackText: 'Deploy failed on staging' },
+        toBuffer: () => Promise.reject(new Error('no files expected')),
+      });
+
+      expect(backlogApi.state.recordedInputs).toContainEqual({
+        method: 'addComment',
+        issueId: ISSUE_ID,
+        input: { content: 'Deploy failed on staging' },
+      });
+    }
+  });
+});
+
+describe('resolveSummaryAndDescription', () => {
+  it("a card's summary is the plain-text title under either rule", () => {
+    for (const converter of [markdownConverter(), notationConverter()]) {
+      expect(resolveSummaryAndDescription(CARD, converter).summary).toBe(
+        'Deploy failed'
+      );
+    }
+  });
+
+  it("a card's description is rendered in the project's own markup", () => {
+    expect(resolveSummaryAndDescription(CARD, markdownConverter())).toEqual({
+      summary: 'Deploy failed',
+      description: [
+        'staging',
+        'The deploy job exited 1.',
+        '**Environment**: production',
+        '**Attempt**: 3',
+      ].join('\n'),
+    });
+
+    expect(resolveSummaryAndDescription(CARD, notationConverter())).toEqual({
+      summary: 'Deploy failed',
+      description: [
+        'staging',
+        'The deploy job exited 1.',
+        "''Environment'': production",
+        "''Attempt'': 3",
+      ].join('\n'),
+    });
+  });
+
+  it("a caller-supplied fallback text's first line is the summary", () => {
+    expect(
+      resolveSummaryAndDescription(
+        { card: CARD, fallbackText: 'Deploy failed\nstaging, attempt 3' },
+        notationConverter()
+      )
+    ).toEqual({ summary: 'Deploy failed', description: 'staging, attempt 3' });
   });
 });
 
