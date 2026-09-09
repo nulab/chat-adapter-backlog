@@ -144,12 +144,24 @@ the requirement rather than naming private as the exclusion.
 `gh repo view nulab/chat-adapter-backlog --json visibility` returned
 `INTERNAL` on 2026-09-09.
 
-**Therefore spec §15 row 28 is not a preference between two workable
-options.** As the repository stands, `npm publish --provenance` in
-`release.yml` fails, and so does a trusted-publishing publish that generates
-provenance by default. Publishing from an internal repository is possible only
-by turning provenance *off* (`--provenance=false`, or `provenance=false` in
-`.npmrc`) — which is the one thing the maintainer said they want.
+**That settles spec §15 row 28, and it is settled as a premise rather than as
+a choice.** The maintainer's decision, 2026-09-09: the conditions a publish
+needs are theirs to supply, and a repository being `internal` while it is
+developed says nothing about its state on the day it publishes. So **this
+document assumes the repository is public at publish time**, and provenance
+follows. The rule above is not deleted by that decision — it is the *reason*
+for it, and it is also what would have to be given up if the premise ever
+changed: from an internal repository, `npm publish --provenance` fails, a
+trusted-publishing publish fails the same way because it generates provenance
+by default, and publishing at all would mean turning provenance off
+(`--provenance=false`, or `provenance=false` in `.npmrc`) — the one thing the
+maintainer said they want.
+
+Two things this premise is **not**. It is not a claim that the repository has
+already been switched — `gh repo view` said `INTERNAL` on the day this was
+written, and it stays that way until somebody changes it. And it is not a
+licence to stop caring: everything §5 says about what becomes visible on
+publication day still has to be true when the switch happens.
 
 One separation worth keeping straight, because it is what makes §5 work:
 **provenance does not require trusted publishing.** The documented Actions
@@ -348,17 +360,20 @@ what the PR title already says.
 
 ## 5. The route to the first release
 
-Order matters, and the first two steps are decisions, not work.
+Order matters. Step 0 is a premise the maintainer supplies, step 1 is a
+question to answer, and only from step 2 is any of it work.
 
-**Step 0 — settle §15 row 28 (visibility).** Per §1.3 there is no middle
-option: provenance requires a public source repository. Recommendation
-(unchanged from §15.4): **make the repository public before the first
-release**, which also fixes the README's absolute links, the licence badge and
-`homepage` for anonymous readers. If it must stay `internal`, then
-`--provenance` comes out of `release.yml`, trusted publishing must be
-configured to *not* generate provenance, and "provenance + Trusted Publishing"
-is off the table until the visibility changes — record that as the trade
-rather than discovering it in a failed job.
+**Step 0 — the repository is public before the publish runs.** Settled
+2026-09-09 (§1.3, spec §15 row 28): the maintainer supplies this rather than
+the release deciding it. Provenance requires it, and the same switch is what
+makes the README's absolute links, the licence badge and `homepage` resolve
+for the anonymous readers who reach them on publication day — the README
+published for a version is immutable, so this is the one of the five steps
+that cannot be fixed afterwards. Two consequences to carry into the release
+checklist rather than assume: **the switch has to have happened before the
+job starts**, not merely be planned, and a `release.yml` run against a still-
+internal repository fails at the publish rather than silently dropping the
+attestation.
 
 **Step 1 — confirm who may publish into the scope.** Per §1.2 the `nulab`
 organisation and the `@nulab` scope already exist and already carry public
@@ -467,14 +482,67 @@ Step 3 needs the same "fail loudly" treatment step 4 gets, and for the same
 reason. A 200 proves only that *something* was published under that name and
 version — a hand publish, or a build from a different commit, answers 200
 too. Skipping silently on 200 would tag a commit whose contents are not what
-the registry serves. Compare the packument's `dist.integrity` (or `shasum`,
-or the published attestation) against the tarball packed locally in step 2:
-equal, skip; different, fail and say so. The opposite direction is worth
-stating too, because it will be met before it is understood: the registry's
-read path can lag its write path, so a 404 for a version published moments
-earlier is possible, and the re-publish that follows is rejected with a 403.
-That is an acceptable ending — loud, and correct — but it should be
-*described* rather than discovered at three in the morning.
+the registry serves. **What it should compare, though, is not the bytes.**
+
+The obvious comparison — re-pack locally and check the tarball's digest
+against the packument's `dist.integrity` — quietly assumes that packing is
+reproducible run to run. If it is not, the digests differ every time and
+step 3 fails loudly on exactly the runs it was supposed to let through,
+turning the recovery path into a hard stop. So that assumption was measured
+rather than assumed, and it holds only in part.
+
+**Measured 2026-09-09, npm 11.19.0, against a throwaway probe package.**
+Packing the same bytes twice at different wall-clock times gives the same
+`shasum` and `integrity`; so does packing after touching a file's mtime to
+`now` and again to 2001, so **npm normalises modification times**; so does
+packing the same tree from a different parent directory path, and under a
+different `umask`. One input does change the digest: **the executable bit**
+(`0644` → `0755` produced a different `shasum`), so file modes are carried
+into the tarball rather than normalised. In CI the modes come from the git
+checkout, which records only that bit and reproduces it, so this is stable in
+practice — but it is preserved state, not normalised state.
+
+Two things that measurement does **not** establish, and neither should be
+assumed:
+
+- **npm promises none of this.** The `npm pack` documentation says nothing
+  about determinism, timestamps or modes
+  ([npm-pack](https://docs.npmjs.com/cli/v11/commands/npm-pack), read
+  2026-09-09), and the request to normalise timestamps
+  ([npm/npm#17412](https://github.com/npm/npm/issues/17412)) sits in the
+  archived repository with no resolution recorded there. The behaviour above
+  is observed on one npm version, not guaranteed across them — which couples
+  this step to §6.2: if the npm-upgrade step is dropped and `setup-node`
+  resolves a newer 26.x between the original publish and the re-run, the two
+  packs are not necessarily done by the same packer.
+- **The build was not measured at all.** The tarball can only be reproducible
+  if `dist/` is, and whether tsdown emits byte-identical output across runs is
+  unknown here. That is the larger half of the assumption and the one most
+  likely to break it.
+
+**So compare the provenance attestation, not the tarball.** It answers the
+question step 3 is actually asking — *was this version published from this
+commit?* — directly, and it does not depend on re-packing anything.
+`GET https://registry.npmjs.org/-/npm/v1/attestations/<name>@<version>`
+returns the SLSA statement, whose `resolvedDependencies[].digest.gitCommit`
+is the source commit and whose `externalParameters.workflow` names the
+repository, the workflow path and the ref (verified 2026-09-09 by decoding a
+published package's bundle). Equal to the release commit: skip. Different, or
+from another repository or workflow: fail and say so.
+
+That check is available from `0.1.0` onward, because §5's first-publish route
+keeps `--provenance` even while authenticating with a token. Where it is not
+available — a version published by hand, without provenance — there is no
+cheap authoritative answer, and the honest fallback is to **fail loudly on 200
+and let a human decide**, rather than to compare digests whose stability has
+not been established. If byte comparison is wanted later, the thing to measure
+first is the build, not the packer.
+
+The opposite direction is worth stating too, because it will be met before it
+is understood: the registry's read path can lag its write path, so a 404 for a
+version published moments earlier is possible, and the re-publish that follows
+is rejected with a 403. That is an acceptable ending — loud, and correct — but
+it should be *described* rather than discovered at three in the morning.
 
 **"Re-run" means re-running the same run, at the same commit.** This is a
 constraint on the recovery, not a detail of it: a fresh `workflow_dispatch`
@@ -482,6 +550,44 @@ after `main` has moved is a different input, so step 0 sees a different HEAD,
 derives a different bump, and can publish a version that is not the one left
 untagged. Recovery from a partial failure is the re-run button on the failed
 run; anything else is a new release.
+
+**And a convergence that has nothing to do must say so.** Step 0 has a
+back side: dispatch `patch` against a commit that is already released and
+every guard fires — tag on HEAD, so that tag is the target; registry 200, so
+skip; tag present, so skip; release present, so skip. The job ends green
+having done nothing. That is correct convergence and a bad report: somebody
+asked for a release, got a green check, and no version exists that did not
+exist before. Six weeks later, reading the run list during an incident,
+nobody can tell that run from one that worked.
+
+The distinction the workflow needs is one the section above already draws in
+prose, and GitHub happens to expose it: **`github.run_attempt`** "begins at 1
+for the workflow run's first attempt, and increments with each re-run", while
+`github.run_id` "does not change if you re-run the workflow run"
+([Contexts](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts),
+read 2026-09-09). A re-run is therefore machine-detectable, and it is exactly
+the case where converging silently is right. So:
+
+- **`run_attempt == 1` and step 0 found a tag on the release commit → fail,
+  loudly, naming the tag and the published version.** A first attempt against
+  an already-tagged commit is an operator error — a release asked for with
+  nothing new to release — and the useful thing to do is say which version
+  already covers this commit rather than to succeed at nothing. Note that this
+  guard is *broader* than the fully-released case, and deliberately: a fresh
+  dispatch onto a commit left half-released by an earlier failed run is
+  precisely the mistake the paragraph above warns about, and the same
+  condition catches it.
+- **`run_attempt > 1` → converge and succeed.** This is the recovery path, and
+  skipping the steps that already took effect is the whole point.
+
+Two costs, both worth paying and both worth writing into the workflow rather
+than leaving to be met. Re-running is only possible while the run still
+exists — GitHub retires runs on the repository's retention setting — so the
+guard needs an escape hatch or it becomes a trap: a boolean
+`allow-released-commit` input that a human sets to recover a run that can no
+longer be re-run. And a legitimate "publish this existing tag" flow, if one is
+ever wanted, arrives on attempt 1 with a tag on HEAD and would be refused; the
+same input covers it. Recommended, with those two riders.
 
 With those three, every partial failure recovers by re-running, the ordering
 stops mattering, and publish-before-tag can stay. Two concurrent releases are
@@ -570,6 +676,14 @@ If the recommendation is accepted, the follow-up PR is `ci(release)` or
 - step 0 of §6.1 — the target version taken from a tag already on the release
   commit when there is one — and a `PREVIOUS_TAG` derivation that excludes
   tags on HEAD;
+- the `run_attempt` guard of §6.1: a first attempt against an already-tagged
+  commit fails loudly, a re-run converges, and an `allow-released-commit`
+  boolean input exists so the guard cannot trap a run that is too old to
+  re-run;
+- the attestation comparison of §6.1 step 3 (source commit from
+  `/-/npm/v1/attestations/<name>@<version>`), rather than a digest comparison
+  that would rest on build and pack reproducibility neither of which is
+  established;
 - optionally (F) `scripts/next-version.mjs` and a test for it, with the
   `newversion` input demoted to an optional override.
 
@@ -692,9 +806,12 @@ already failing.
    and note §2 on why that is not the same as reopening §15 row 27).
    Recommendation: yes — keep it, take A and F. If no, take release-please and
    accept the three collisions in §2 as a package.
-2. **§15 row 28, visibility** (§1.3, §5 step 0). Recommendation: public before
-   the first release. This is now a binary: internal means no provenance at
-   all, not weaker provenance.
+2. ~~**§15 row 28, visibility.**~~ **Settled 2026-09-09** — the repository is
+   public at publish time, supplied by the maintainer as a premise (§1.3, §5
+   step 0, spec §15 row 28). It is listed here struck through rather than
+   deleted so that a reader who arrives from an older reference finds where it
+   went. What remains is a checklist item, not a decision: confirm the switch
+   has actually happened before the first run.
 3. **Which first-publish route** (§5 step 2). Recommendation: the temporary
    granular access token.
 4. **Does `production` carry required reviewers?** (§5 step 4).
@@ -749,3 +866,22 @@ All read 2026-09-09.
   fourteen packages, four of them scoped.
 - [Unpublish policy](https://docs.npmjs.com/policies/unpublish) — 72 hours,
   and a version number is never reusable.
+- [Contexts](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts) —
+  `github.run_attempt` increments per re-run; `github.run_id` does not.
+- [npm-pack](https://docs.npmjs.com/cli/v11/commands/npm-pack) and
+  [npm/npm#17412](https://github.com/npm/npm/issues/17412) — no documented
+  determinism guarantee, and the normalisation request is unresolved in the
+  archived repository.
+- `https://registry.npmjs.org/-/npm/v1/attestations/<name>@<version>` — the
+  SLSA statement carrying the source commit and the publishing workflow.
+
+Measurements taken for this document, rather than read:
+
+- **npm pack determinism**, 2026-09-09 with npm 11.19.0 against a throwaway
+  probe package: mtime, parent directory path and `umask` do not change the
+  tarball digest; the executable bit does. The build's own reproducibility was
+  **not** measured.
+- **The `nulab` npm organisation**, 2026-09-09: fourteen packages, four of
+  them scoped.
+- **The npm bundled with Node 26**, 2026-09-09 from
+  `nodejs.org/dist/index.json`: v26.0.0 → 11.12.1, v26.8.1 → 11.19.0.

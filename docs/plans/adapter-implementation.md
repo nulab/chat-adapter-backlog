@@ -33,7 +33,7 @@ The project is done when all of the following hold on `main`:
 6. `0.1.0` is published from `release.yml` and installs into a consumer that
    imports `createBacklogAdapter` under Node 20 (§7).
 
-**Status, 2026-09-23** (`main` at `61a4b85`): 1, 2, 4 and 5 hold. 3 holds in
+**Status, 2026-09-26** (`main` at `62289d6`): 1, 2, 4 and 5 hold. 3 holds in
 its first half only — `pnpm test` needs no network and the live suite skips
 itself, but it has never been run against a real space, which needs the
 credentials issue #52 is waiting on. 6 holds in its second half: the
@@ -43,11 +43,14 @@ every push and pull request — including the run `release.yml` calls before it
 publishes — so the consumer side is a gate rather than a check somebody
 remembers to do once. The same job type checks the usage the README
 documents against that tarball, and on pushes and pull requests every
-`examples/*` too. What is still missing is the release itself: the package is
-unreleased (#53), and the repository's visibility has to be settled before
-`release.yml` runs at all (spec §15.4). The live run (#52), the visibility
-decision (§15.4) and the release (#53) are the whole distance between here and
-the first release.
+`examples/*` too. Its first half has not happened: the package is unreleased
+(#53). Repository visibility is no longer part of that distance — it was
+settled on 2026-09-09 as a premise the maintainer supplies, the repository
+being public at publish time (spec §15 row 28). Nor is the one defect found
+meanwhile in the published artefact: **#99** (`scripts.preinstall` reached the
+published manifest and made an npm consumer's install exit 127) was closed by
+#100 on 2026-09-11. What is left is the live-suite run (**#52**), the one
+remaining `0.1.0` blocker (spec §15.4), and then the release itself (#53).
 
 ## 2. Ground rules recap
 
