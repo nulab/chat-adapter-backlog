@@ -437,7 +437,12 @@ installs, so npm installing the published tarball fails with exit 127 before
 any of the package is loaded (measured 2026-09-09). pnpm consumers do not see
 it, because pnpm ignores dependency lifecycle scripts, and `pnpm pack` strips
 `prepare` and `packageManager` from the packed manifest but not `preinstall`.
-The fix belongs to the release path, and the flag comes off with it.
+Issue **#99** carries the fix, which is likely to be dropping `only-allow` in
+favour of `devEngines.packageManager` — the field this repository already pins
+Node with — so that nothing publishes a lifecycle script at all. The flag
+comes off with that fix, and the assertion that keeps it off belongs there
+too: asserting the packed manifest has no lifecycle script only becomes
+possible once it has none.
 
 `examples/` is not built, type checked or tested by CI, and that is a property
 of what an example is rather than an omission: each one is a standalone project

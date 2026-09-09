@@ -161,17 +161,20 @@ jobs:
       # not ship would still be answered, and the job would pass for a reason
       # a consumer does not have.
       #
-      # `--ignore-scripts` covers for a defect, so the defect is written down
-      # here rather than hidden by it. The packed manifest carries
-      # `preinstall: only-allow pnpm`; npm runs a
-      # dependency's preinstall, and `only-allow` is a devDependency no
-      # consumer installs, so an npm install of the published tarball fails
-      # with exit 127 before any of this runs (measured 2026-09-09; pnpm
-      # consumers escape it because pnpm ignores dependency scripts, and
-      # `pnpm pack` strips `prepare` and `packageManager` but not
-      # `preinstall`). Nothing asserted below needs a lifecycle script, the
-      # manifest belongs to the release path, and this flag comes off with the
-      # fix.
+      # `--ignore-scripts` covers for a defect, so the defect is named here
+      # rather than hidden by it: issue #99. The packed manifest carries
+      # `preinstall: only-allow pnpm`, npm runs a dependency's preinstall, and
+      # `only-allow` is a devDependency no consumer installs, so an npm
+      # install of the published tarball fails with exit 127 before any of
+      # this runs (measured 2026-09-09; pnpm consumers escape it because pnpm
+      # ignores dependency scripts, and `pnpm pack` strips `prepare` and
+      # `packageManager` but not `preinstall`). Nothing asserted below needs a
+      # lifecycle script.
+      #
+      # Drop this flag when #99 is fixed, and pin the fix there by asserting
+      # that the packed manifest declares no lifecycle script at all. That
+      # assertion cannot come first: on today's manifest it fails, and a guard
+      # whose first run is red is the bug restated rather than a guard.
       - name: Install it into a consumer outside the repository
         env:
           TARBALL: ${{ runner.temp }}/chat-adapter-backlog.tgz

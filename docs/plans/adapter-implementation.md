@@ -49,9 +49,9 @@ consumer that job builds installs with `--ignore-scripts`, because
 consumer's install with exit 127 (`only-allow` is a devDependency they never
 install; pnpm consumers escape it because pnpm ignores dependency lifecycle
 scripts, measured 2026-09-09) — so "installs into a consumer" holds for a pnpm
-consumer today and for an npm consumer once the release path stops publishing
-that script. The live run (#52), the release (#53) and that manifest are the
-whole distance between here and the first release.
+consumer today and for an npm consumer once **#99** stops that script from
+being published. The live run (#52), #99 and the release (#53) are the whole
+distance between here and the first release.
 
 ## 2. Ground rules recap
 
@@ -433,7 +433,7 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
   longer P7d's to check by hand: the `consumer` job in `ci.yml` asserts the
   installed tree is exactly those four entries and constructs the adapter from
   the environment on Node 20, so #53 is left with the release notes — and with
-  the manifest defect that job's `--ignore-scripts` documents (§1).
+  the manifest defect that job's `--ignore-scripts` documents (#99, §1).
 - **Catalog decision**: community listing needs only a docs page and
   allowlist entries in `vercel/chat`; vendor-official additionally needs the
   catalog/scaffold entries, a changeset, product docs and an announcement.
