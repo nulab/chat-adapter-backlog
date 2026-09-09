@@ -99,11 +99,18 @@ change when the first one can be created.
 
 `@nulab/chat-adapter-backlog` is unpublished: `GET
 https://registry.npmjs.org/@nulab%2Fchat-adapter-backlog` returned **404** on
-2026-09-09. Two other plausible `@nulab/*` names returned 404 as well, so
-whether the **`@nulab` scope itself exists on npm, and who may publish into
-it, could not be determined** from unauthenticated probes. That is a
-prerequisite to check with an account that can see it, alongside the two
-DEVELOPMENT.md already lists.
+2026-09-09.
+
+The scope around it, however, is not in doubt, and needs no credentials to
+establish. `GET https://registry.npmjs.org/-/org/nulab/package` returns
+fourteen packages (2026-09-09), four of them scoped — `@nulab/bee`,
+`@nulab/datadog-ai-guard-middleware-core` and its `-ai-v2` and `-ai-v3`
+siblings — alongside unscoped `backlog-js` and `backlog-mcp-server`. **The
+`nulab` organisation exists on npm and already publishes public scoped
+packages**, so neither creating the scope nor proving that public scoped
+publishing is permitted is work. What that probe cannot answer is who may
+publish *into* the scope, which is an account-level question. §5 step 1 is
+narrowed to that.
 
 So the first publish authenticates some other way, by construction. §5 is the
 route.
@@ -166,16 +173,27 @@ independent; only the *public repository* requirement is shared.
 - **`semantic-release`** is a Node CLI, so it is either a devDependency (same
   quarantine, and a much larger tree) or run through `pnpm dlx`. Whether
   `minimumReleaseAge` applies to a `pnpm dlx` resolution was **not verified**.
-- **Do not switch to `pnpm publish` to avoid installing npm.**
-  [pnpm/pnpm#11513](https://github.com/pnpm/pnpm/issues/11513) reports OIDC
-  trusted publishing working under pnpm 10.x and failing with a 404 under
-  11.0.8 (filed 2026-05-07, open, PR #11526 referenced). This repository pins
-  pnpm 12.2.1 and the report was not re-tested there; the point is that
-  `npm publish` is the path npm documents and tests, and the cost of reaching
-  it is one `actions/setup-node` plus one `npm install -g`.
-- npm CLI floor: **11.5.1** for trusted publishing, **11.15.0** for
-  `npm trust`. The npm bundled with Node 26 predates the first, which is why
-  the upgrade step exists at all.
+- **Keep publishing with `npm publish`, but not because `pnpm publish` is
+  broken.** [pnpm/pnpm#11513](https://github.com/pnpm/pnpm/issues/11513) —
+  OIDC trusted publishing working under pnpm 10.x and failing with a 404 under
+  11.0.8 — was filed 2026-05-07 and **closed as completed the next day**
+  (2026-05-08); the fix,
+  [pnpm/pnpm#11526](https://github.com/pnpm/pnpm/pull/11526)
+  (`fix(config): drop unresolved ${VAR} placeholders from .npmrc auth
+  values`), **merged 2026-05-15**. It does not apply to the pnpm 12.2.1 this
+  repository pins, and citing it as a live risk would be wrong. The reason to
+  keep `npm publish` is the positive one: it is the path npm documents and
+  tests for trusted publishing, and reaching it costs one
+  `actions/setup-node`.
+- **npm CLI floors: 11.5.1 for trusted publishing, 11.15.0 for `npm trust` —
+  and Node 26 already clears both.** Measured against
+  [`https://nodejs.org/dist/index.json`](https://nodejs.org/dist/index.json)
+  on 2026-09-09: **v26.0.0 (2026-05-05) bundles npm 11.12.1**, and the newest
+  26.x, **v26.8.1 (2026-08-26), bundles npm 11.19.0**. Every 26.x release
+  clears 11.5.1, and every release from v26.3.1 (npm 11.16.0) clears 11.15.0
+  as well. `actions/setup-node` with `node-version: 26` resolves the newest
+  26.x, so the job already has an npm new enough to publish through trusted
+  publishing before `release.yml:86` runs. §6.2 is what follows from that.
 
 ### 1.5 How npm matches a workflow to a trusted-publishing configuration
 
@@ -197,15 +215,34 @@ read 2026-09-09):
   `release.yml` *calls* `ci.yml` but publishes from a job of its own, so the
   claim names `release.yml` and this is not a problem — but it means the
   publish step must never be moved into a called workflow.
+- Relatedly, `id-token: write` has to be granted to **both** the calling
+  workflow's job and the called workflow, since a called workflow cannot hold
+  a permission its caller did not grant. Today `release.yml` grants it on the
+  `publish` job, which is where the publish runs, and `ci.yml` needs none —
+  but a reorganisation that moves publishing across that boundary has to move
+  the permission with it.
 
 ## 2. What the choice actually turns on
 
 Not "which tool". **Whether D15 stands.**
 
-Spec §15 row 27 records it as **confirmed, 2026-09-07**: the package's own
-semver from `0.1.0`; `package.json` stays at `0.0.0` on `main`; git tags are
-the version of record; the bump is never committed back (#58, DEVELOPMENT.md
-"Versioning", `release.yml:71-78`).
+"D15" is used loosely below and the loose use is worth pinning down once,
+because the register row and the practice are not the same statement. D15
+itself (§14, `docs/specs/adapter.md:2259`) is the version-line-and-dependency-
+ranges decision. Spec §15 **row 27** (`docs/specs/adapter.md:2337`) records
+the half that was reopened and settled on **2026-09-07**: the package's own
+semver, starting at `0.1.0`, superseding #17's proposal to track `chat`'s
+line — and it says nothing about `package.json`. The rest of the practice —
+**`package.json` stays at `0.0.0` on `main`, git tags are the version of
+record, and the bump is never committed back** — is recorded in
+`DEVELOPMENT.md:423-426` and in the comment at `release.yml:71-78`, not in the
+register at all.
+
+It is that last, workflow-level half that the release-PR model collides with,
+and it is what "D15" means for the rest of this document. Overturning it
+therefore does *not* require reopening row 27; it requires changing
+DEVELOPMENT.md and the workflow, and adding a register row for a decision that
+never had one.
 
 A release-please or changesets release PR **is** a diff, and that diff is
 precisely the two writes D15 forbids: the version into `package.json`, and a
@@ -290,17 +327,20 @@ separable from A on purpose — A is worth doing whether or not F is.
 
 The reason is one sentence: the release-PR flow's whole product is a
 reviewable diff, and under D15 that diff is empty, so adopting it means
-overturning a decision confirmed two days ago in order to buy a review step
-for a change nobody wrote.
+overturning a settled practice in order to buy a review step for a change
+nobody wrote.
 
 **If the maintainer wants the release-PR flow anyway**, that is a coherent
 position — the argument for it is that `package.json` on `main` reading
 `0.0.0` is a small lie that every consumer reading the repository has to be
 told about, and a `CHANGELOG.md` is readable without GitHub. Taking it means
-deciding, in one go: overturn §15 row 27 (D15's version-of-record half; its
-dependency-range half is untouched), drop or subordinate the label categories
-in `.github/release.yml`, add `main` to CLAUDE.md's scope table, and choose
-between a per-release approval click and a GitHub App. Of the three tools,
+deciding, in one go: overturn the `package.json`-stays-at-`0.0.0` practice
+(per §2 that lives in `DEVELOPMENT.md:423-426` and `release.yml:71-78`, so it
+is those two that change — row 27's "the package's own semver from `0.1.0`"
+and D15's dependency ranges both survive untouched, and the newly-made
+decision wants a register row of its own), drop or subordinate the label
+categories in `.github/release.yml`, add `main` to CLAUDE.md's scope table,
+and choose between a per-release approval click and a GitHub App. Of the three tools,
 **release-please** is then the one to take: it adds no dependency to the
 quarantined tree, it reads the conventional commits this repository already
 writes rigorously, and it needs no third place (a changeset file) to record
@@ -320,11 +360,12 @@ configured to *not* generate provenance, and "provenance + Trusted Publishing"
 is off the table until the visibility changes — record that as the trade
 rather than discovering it in a failed job.
 
-**Step 1 — confirm the scope.** Per §1.2, check with an account that can see
-npm's org settings that `@nulab` exists, that the publishing identity is a
-member with publish rights, and that the org permits public packages
-(`--access public` is already on the command and is required for a scoped
-package's first publish).
+**Step 1 — confirm who may publish into the scope.** Per §1.2 the `nulab`
+organisation and the `@nulab` scope already exist and already carry public
+scoped packages, so only one question is left, and it needs an account that
+can see npm's org settings: **is the publishing identity a member with publish
+rights on the scope?** (`--access public` is already on the command and is
+required for a scoped package's first publish.)
 
 **Step 2 — the first publish cannot use OIDC.** Three routes; the first is
 recommended.
@@ -339,7 +380,13 @@ recommended.
   on the now-existing package, delete the secret and the token, and remove the
   `NODE_AUTH_TOKEN` line. `0.1.0` ships with provenance, from the same
   workflow every later release uses; the only thing that differs is one
-  release's authentication.
+  release's authentication. One constraint on the token itself, from
+  `npm trust`'s prerequisites: **a granular access token with the "bypass 2FA"
+  option is not supported** for configuring trusted publishing, and neither is
+  legacy basic auth. That does not affect the publish, but it does mean the
+  same token cannot then be used to run `npm trust` — configure the trusted
+  publisher from the npmjs.com UI, or from a session that satisfies the
+  account-level 2FA requirement.
 - **A placeholder version.** Publish `0.0.1` (from a laptop or from CI),
   configure trusted publishing, then release `0.1.0` normally. Costs a junk
   version that is `latest` until `0.1.0` lands, and npm's unpublish policy
@@ -358,9 +405,12 @@ name spelled identically on both sides (§1.5).
 
 **Step 4 — create the `production` environment.** It does not exist yet, and
 `release.yml` declares it; a job naming a missing environment does not run.
-Decide at the same time whether it carries required reviewers — that is where
-a human gate on publishing belongs, and it is a better place for one than a
-release PR.
+Whether it should also carry **required reviewers** is a decision of its own,
+and §9 item 4 recommends against it for `0.1.0`: the environment is the right
+*place* for a human gate on publishing — better than a release PR — but the
+`workflow_dispatch` is already one, and a required reviewer makes a failed
+release impossible to re-run unattended, which is what §6.1's recovery
+depends on.
 
 **Step 5 — dry run, then release.** With the `dry-run` input from §6.2, the
 first exercise of the workflow can prove the version derivation, the build and
@@ -383,47 +433,110 @@ into a silently *wrong* one: if the tag lands and the publish fails, the next
 run derives its bump from a tag no published version corresponds to, and a
 `minor` from `v0.1.0` produces `0.2.0` — `0.1.0` is skipped, with nothing to
 show that it was. Deleting the tag on failure adds a compensating action that
-can itself fail, in the step where things are already failing. The
-coordinator's reading is right on both counts, and the ordering question is
-the wrong question.
+can itself fail, in the step where things are already failing. So the ordering
+question is the wrong question: neither order is safe on its own.
 
 **The fix is to stop treating the job as a transaction and treat it as a
 convergence.** Each step asks whether its effect already exists and skips if
-it does:
+it does. But a convergence only converges if its *target* is fixed, and that
+is the part it is easy to get wrong: deriving the target version from
+`git describe` reads a value the later steps write, so a re-run after a late
+failure aims somewhere new. Walked concretely — publish succeeded, tag pushed,
+`gh release create` failed — a re-run would find `v0.1.0` on HEAD, derive
+`0.2.0` from it, see 404 on the registry for `0.2.0`, and **publish a second
+unwanted version and tag the same commit twice**, with `--notes-start-tag`
+degenerating to the release currently being made. So step 0 comes first:
 
-1. Compute the target version (from the last tag, plus the bump).
+0. **Fix the target.** If a tag already points at the commit being released,
+   **that tag is the target version**. Only when there is none is the target
+   computed from the last tag plus the bump. The version is then an invariant
+   of the input rather than a reading of the state the job is about to
+   change.
+1. Derive `PREVIOUS_TAG` for the notes range from the last tag **excluding any
+   tag on HEAD**, for the same reason.
 2. Build.
-3. If `https://registry.npmjs.org/<name>/<version>` is **404**, publish;
-   otherwise log that the version is already on the registry and skip.
+3. If `https://registry.npmjs.org/<name>/<version>` is **404**, publish. If it
+   is 200, the version already exists — but see below: that is not on its own
+   proof that it is *this* build, so the check has to compare before it skips.
 4. If the tag does not exist on the remote, create and push it; otherwise
    verify it points at the commit being released and **fail loudly** if it
    does not.
 5. If no GitHub release exists for the tag, create it.
 
-Now every partial failure has the same recovery — re-run the workflow with the
-same input — and the ordering stops mattering, so publish-before-tag can stay.
-Step 4's mismatch check is the one place that must still fail rather than
-skip: a tag pointing at a different commit than the one just published is a
-state a re-run must not paper over.
+Step 3 needs the same "fail loudly" treatment step 4 gets, and for the same
+reason. A 200 proves only that *something* was published under that name and
+version — a hand publish, or a build from a different commit, answers 200
+too. Skipping silently on 200 would tag a commit whose contents are not what
+the registry serves. Compare the packument's `dist.integrity` (or `shasum`,
+or the published attestation) against the tarball packed locally in step 2:
+equal, skip; different, fail and say so. The opposite direction is worth
+stating too, because it will be met before it is understood: the registry's
+read path can lag its write path, so a 404 for a version published moments
+earlier is possible, and the re-publish that follows is rejected with a 403.
+That is an acceptable ending — loud, and correct — but it should be
+*described* rather than discovered at three in the morning.
 
-Two smaller things fall out of the same restructuring. `gh release create`
-failing after a successful publish and tag is no longer a manual cleanup, it
-is a re-run. And `git describe --tags --abbrev=0` returns the most recent tag
-*reachable from HEAD*, which is not necessarily the highest semver; on a
-linear `main` with a serialising `concurrency` group that is the same tag, but
-it is an assumption worth a Why-not comment rather than an accident.
+**"Re-run" means re-running the same run, at the same commit.** This is a
+constraint on the recovery, not a detail of it: a fresh `workflow_dispatch`
+after `main` has moved is a different input, so step 0 sees a different HEAD,
+derives a different bump, and can publish a version that is not the one left
+untagged. Recovery from a partial failure is the re-run button on the failed
+run; anything else is a new release.
 
-### 6.2 `npm install -g npm@latest` is unpinned (real)
+With those three, every partial failure recovers by re-running, the ordering
+stops mattering, and publish-before-tag can stay. Two concurrent releases are
+a separate question, and their safety comes from somewhere else: the existing
+`concurrency: group: release, cancel-in-progress: false` serialises them, so
+the second run derives the next version rather than racing on the same one,
+and the registry check catches a double publish of one version. That is the
+concurrency group's guarantee, not the convergence's — if the group is ever
+removed, this section does not cover what happens.
 
-`release.yml:86` installs whatever npm is newest on the day, into the job that
-signs the provenance attestation. `.npmrc`'s `min-release-age=3` narrows the
-window but does not make the run reproducible.
+One smaller thing falls out of the same restructuring: `git describe --tags
+--abbrev=0` returns the most recent tag *reachable from HEAD*, which is not
+necessarily the highest semver. On a linear `main` with the serialising group
+that is the same tag, but it is an assumption worth a Why-not comment rather
+than an accident.
 
-Pin an exact version — the floor is **11.5.1** for trusted publishing (§1.4) —
-and write the floor and the reason into the comment, because the next reader's
-instinct will be to drop the step now that the bundled npm has caught up.
-Nothing in this repository bumps a version pinned inside a `run:` string, so
-the comment is also the only maintenance instruction that pin will ever get.
+### 6.2 `npm install -g npm@latest` is unpinned (real) — and its stated reason is not
+
+Two separate things, and #53 names only the first.
+
+**The pin.** `release.yml:86` installs whatever npm is newest on the day, into
+the job that signs the provenance attestation. `.npmrc`'s `min-release-age=3`
+narrows the window but does not make the run reproducible. That is real and
+worth fixing.
+
+**The premise underneath it is out of date.** The step's comment
+(`release.yml:83-84`) says trusted publishing "needs the OIDC support added in
+npm 11.5.1; the npm bundled with Node 26 predates it and falls back to asking
+for a token". Per §1.4 that has not been true since Node 26 shipped:
+**v26.0.0 bundles npm 11.12.1 and v26.8.1 bundles npm 11.19.0**, so the npm
+`actions/setup-node` puts on PATH already clears both the 11.5.1 trusted-
+publishing floor and the 11.15.0 `npm trust` floor. The upgrade step is not
+what makes trusted publishing work today, and a reader who trusts the comment
+will believe removing it breaks publishing.
+
+So the recommendation is not "pin the version" but a choice between two, and
+either is defensible:
+
+- **Drop the step**, and replace the comment with what actually holds the
+  floor: `actions/setup-node` with `node-version: 26` supplies npm ≥ 11.12.1,
+  above the 11.5.1 requirement. Fewer moving parts, and one less unpinned
+  network install in the publishing job. The exposure is that the floor is
+  then implicit in a major-version pin — a hypothetical Node 26.x that shipped
+  an older npm would break it silently.
+- **Keep it as a reproducibility pin**, at an exact version rather than
+  `@latest` — the npm bundled with the pinned Node is the natural value — with
+  a comment that says it is there to make the toolchain that signs provenance
+  identical run to run, *not* to reach a floor the runtime misses.
+
+Either way the comment at `release.yml:83-84` is wrong as it stands and is
+corrected in the same change; §7 lists it, and `DEVELOPMENT.md`'s Releasing
+step 4 repeats the same claim and is corrected with it. Note also that
+nothing in this repository bumps a version pinned inside a `run:` string, so
+if the pin is kept, its comment is the only maintenance instruction it will
+ever get.
 
 ### 6.3 The first release's notes range (already handled — drop it from #53)
 
@@ -448,8 +561,15 @@ If the recommendation is accepted, the follow-up PR is `ci(release)` or
   check before `gh release create`);
 - a `dry-run` boolean `workflow_dispatch` input that stops after
   `npm publish --dry-run` and echoes the computed version and tag;
-- an exact npm version in the upgrade step, with the 11.5.1 floor in the
-  comment;
+- the resolution of §6.2's npm-upgrade step — either dropping it or pinning
+  it to an exact version — **together with a corrected comment at
+  `release.yml:83-84`**, which today asserts that the npm bundled with Node 26
+  predates 11.5.1. It does not (§1.4), and leaving the claim in place while
+  changing the step around it would preserve the error that made the step look
+  load-bearing;
+- step 0 of §6.1 — the target version taken from a tag already on the release
+  commit when there is one — and a `PREVIOUS_TAG` derivation that excludes
+  tags on HEAD;
 - optionally (F) `scripts/next-version.mjs` and a test for it, with the
   `newversion` input demoted to an optional override.
 
@@ -462,13 +582,18 @@ If the recommendation is accepted, the follow-up PR is `ci(release)` or
 
 - `DEVELOPMENT.md` "Releasing": the numbered list is currently a faithful
   description of a sequence that will no longer be a sequence. Rewrite steps
-  2–6 as the convergence, say that a failed release is recovered by re-running
-  the workflow with the same input, and add the `dry-run` input.
+  2–6 as the convergence, say that recovery is **re-running the failed run at
+  the same commit** rather than dispatching a new one (§6.1), and add the
+  `dry-run` input. Step 4 also repeats the out-of-date npm claim — "Trusted
+  Publishing needs the OIDC support added in npm 11.5.1, which is newer than
+  the npm bundled with Node 26" — and is corrected alongside the workflow
+  comment.
 - `DEVELOPMENT.md` "One-time prerequisites": add the two this document found —
-  that the `@nulab` scope must exist with publish rights (§5 step 1), and that
-  trusted publishing **cannot** be configured before the package exists, so
-  the first release authenticates differently (§5 step 2). Both belong next to
-  the existing two, which is where a releaser will look.
+  that the publishing identity needs publish rights on the existing `@nulab`
+  scope (§5 step 1), and that trusted publishing **cannot** be configured
+  before the package exists, so the first release authenticates differently
+  (§5 step 2). Both belong next to the existing two, which is where a releaser
+  will look.
 - `docs/specs/adapter.md` §15.4 item 28: it recommends making the repository
   public and calls the alternative a cost. Per §1.3 the alternative is not
   "costs its provenance attestation", it is "provenance is impossible" —
@@ -477,6 +602,26 @@ If the recommendation is accepted, the follow-up PR is `ci(release)` or
   with `minor`". Under F there is no bump input to pick, and under §5 the
   first run is authenticated differently. Update both.
 - This file: mark the recommendation accepted or replaced, and record which.
+
+**Where #99 lands, without deciding it here.** Issue #99 — the published
+manifest's `preinstall: only-allow pnpm` makes an npm consumer's install exit
+127 — was opened after this document and is a `v0.1.0` blocker of its own. Its
+recommended fix (option 1, express the constraint with
+`devEngines.packageManager`) touches `package.json` and not the release path,
+so it needs nothing from this design. Its option 2 — stripping the script from
+the manifest just before publishing (`npm pkg delete scripts.preinstall`) —
+does land here, and this design has two things to say about it if it is taken:
+
+- the mutation belongs **inside the converging publish step of §6.1, before
+  the pack**, not as a step ahead of it, so that a re-run applies it
+  identically; a manifest edit that runs once outside the idempotent region is
+  exactly the kind of state a re-run would skip.
+- the `dry-run` input (§6.2, §7) is the natural place to **assert** the result:
+  a packed manifest carrying no `preinstall` or `postinstall` is a
+  one-line check on the tarball, and it fails before the registry is touched.
+
+Whichever option #99 takes, that assertion is worth having — it also catches a
+future script added to `package.json` without anyone thinking about consumers.
 
 Nothing in `src/` changes, and `package.json` is untouched — under the
 recommendation it keeps its `0.0.0`.
@@ -543,16 +688,22 @@ already failing.
 
 ## 9. Left to the maintainer
 
-1. **Does D15 stand?** (§2, §4). Recommendation: yes — keep it, take A and F.
-   If no, take release-please and accept the three collisions in §2 as a
-   package.
+1. **Does the `package.json`-stays-at-`0.0.0` practice stand?** (§2, §4 —
+   and note §2 on why that is not the same as reopening §15 row 27).
+   Recommendation: yes — keep it, take A and F. If no, take release-please and
+   accept the three collisions in §2 as a package.
 2. **§15 row 28, visibility** (§1.3, §5 step 0). Recommendation: public before
    the first release. This is now a binary: internal means no provenance at
    all, not weaker provenance.
 3. **Which first-publish route** (§5 step 2). Recommendation: the temporary
    granular access token.
-4. **Does `production` carry required reviewers?** (§5 step 4). Not decided
-   here; it is the natural home for a human gate on publishing.
+4. **Does `production` carry required reviewers?** (§5 step 4).
+   Recommendation: **no, not for `0.1.0`** — the `workflow_dispatch` is
+   already a human gate, and a required reviewer buys a second one at a real
+   cost: it makes the release **impossible to re-run unattended**, which is
+   precisely the recovery §6.1 is built on. A partial failure at 02:00 would
+   then wait for an approver rather than for a retry. Revisit once releases
+   are routine and the convergence has been exercised.
 5. **Take F, or keep picking the bump by hand?** (§3). Recommendation: take
    it, but separately from A.
 
@@ -588,6 +739,13 @@ All read 2026-09-09.
 - [npm/cli#9088](https://github.com/npm/cli/issues/9088) — trusted-publishing
   failures surface as a misleading 404.
 - [pnpm/pnpm#11513](https://github.com/pnpm/pnpm/issues/11513) —
-  `pnpm publish` with OIDC, filed 2026-05-07, open.
+  `pnpm publish` with OIDC; filed 2026-05-07, **closed completed 2026-05-08**,
+  fixed by [pnpm/pnpm#11526](https://github.com/pnpm/pnpm/pull/11526)
+  (merged 2026-05-15).
+- [`https://nodejs.org/dist/index.json`](https://nodejs.org/dist/index.json) —
+  the npm bundled with each Node 26 release (v26.0.0 → 11.12.1,
+  v26.8.1 → 11.19.0).
+- `https://registry.npmjs.org/-/org/nulab/package` — the `nulab` org's
+  fourteen packages, four of them scoped.
 - [Unpublish policy](https://docs.npmjs.com/policies/unpublish) — 72 hours,
   and a version number is never reusable.
