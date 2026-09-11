@@ -36,9 +36,8 @@
     "dist"
   ],
   "scripts": {
-    "preinstall": "only-allow pnpm",
     "prepare": "lefthook install",
-    "build": "tsdown && node scripts/check-published-types.mjs",
+    "build": "node scripts/check-published-scripts.mjs && tsdown && node scripts/check-published-types.mjs",
     "dev": "tsdown --watch",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -60,7 +59,6 @@
     "@vitest/coverage-v8": "^4.1.11",
     "chat": "^4.39.0",
     "lefthook": "^2.1.12",
-    "only-allow": "^1.2.2",
     "oxfmt": "^0.65.0",
     "oxlint": "^1.80.0",
     "publint": "^0.3.24",

@@ -106,10 +106,18 @@ curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=12.2.1 sh -
   means the newest release that is at least three days old, the same quarantine
   `minimumReleaseAge` applies to every other dependency, and pnpm ships several
   patches a week. Bumping it is a normal dependency bump, not a special case.
-- `preinstall` runs `only-allow pnpm`, which aborts the install if it was
-  started by npm or Yarn. This produces a hard error, not a warning. It is
-  resolved from `node_modules/.bin` rather than through `npx`, because the Node
-  pnpm provisions is a single `node` binary — there is no npm or npx beside it.
+- Nothing in the manifest refuses an npm install any more. `preinstall` used to
+  run `only-allow pnpm`, but npm and Yarn run a dependency's `preinstall` on
+  the consumer's machine, and `only-allow` is a devDependency no consumer has,
+  so every npm install of the published package failed with exit 127 (#99;
+  `scripts/check-published-scripts.mjs` now fails the build on any such
+  script). The `packageManager` field still turns Yarn 1 away outright — it
+  insists on Corepack — and makes pnpm switch itself to the pinned version.
+  `devEngines.packageManager` was measured and not adopted: npm enforces it on
+  `npm version` and `npm publish` as well as `npm install`, and those two are
+  how release.yml publishes. Running `npm install` here is unsupported rather
+  than impossible: it ignores `pnpm-lock.yaml`, provisions no runtime, and
+  leaves a `package-lock.json` behind that must not be committed.
 
 [Corepack](https://nodejs.org/api/corepack.html) is deliberately not part of
 the setup. Node stopped bundling it after 24, so `corepack enable` cannot be
@@ -136,7 +144,7 @@ later ones.
 
 | Script               | Command                                          | When to use it                                                                                        |
 | -------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| `pnpm build`         | `tsdown`                                         | Produce `dist/` (ESM + `.d.ts` + source maps). Also runs `publint` and `attw` and fails on either.    |
+| `pnpm build`         | `tsdown`                                         | Produce `dist/` (ESM + `.d.ts` + source maps). Also runs `publint`, `attw` and the two `scripts/check-published-*.mjs` guards, and fails on any. |
 | `pnpm dev`           | `tsdown --watch`                                 | Rebuild on change while working against a local consumer.                                             |
 | `pnpm test`          | `vitest run`                                     | Run the suite once. Required before opening a PR. Needs no credentials.                               |
 | `pnpm test:watch`    | `vitest`                                         | Watch mode while writing tests.                                                                       |

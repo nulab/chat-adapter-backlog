@@ -104,10 +104,13 @@ pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
   say `import type`), `noUnusedLocals` and `noUnusedParameters` (prefix
   intentionally unused params with `_`).
 - `pnpm build` fails on `publint` problems, on `attw` problems at the
-  `esm-only` profile, and — via `scripts/check-published-types.mjs`, which runs
-  after tsdown — on a `dist/index.d.ts` that imports any module but `chat`.
-  Touching `exports`, `files` or the build config means running the build, not
-  just the type check.
+  `esm-only` profile, via `scripts/check-published-scripts.mjs`, which runs
+  before tsdown, on a `package.json` that declares a `preinstall`, `install` or
+  `postinstall` script — npm and Yarn run those on a consumer's machine, where
+  no devDependency exists (#99) — and via `scripts/check-published-types.mjs`,
+  which runs after tsdown, on a `dist/index.d.ts` that imports any module but
+  `chat`. Touching `exports`, `files`, `scripts` or the build config means
+  running the build, not just the type check.
 - `engines.node` is `">=20"` (matching the `chat` core package), so do not use
   APIs newer than Node 20 in shipped code. The test matrix runs the suite on
   Node 20, 22, 24 and 26, so a 26-only API now fails a job rather than reaching
