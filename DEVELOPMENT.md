@@ -380,8 +380,8 @@ like a contributor — no job carries a Node version of its own.
 `test` and `consumer` are the two that name a Node version, and they get it on
 PATH in opposite ways. `consumer` installs with the runtime, because building
 and packing are development commands and belong on the pinned Node; Node 20
-reaches the consumer half because nothing after that install goes through
-pnpm. `test` cannot do that — every step it has left is a pnpm command — so it
+reaches the consumer half because nothing after the pack goes through pnpm
+but a read of the lockfile. `test` cannot do that — every step it has left is a pnpm command — so it
 installs with `--no-runtime` instead.
 
 `test` is the exception among the gates, and the only job that names several
@@ -441,15 +441,27 @@ Two type checks follow, against the declarations that shipped rather than
 and import nothing a consumer lacks, but not that the calls the README
 documents compile. `scripts/consumer-smoke/documented-usage.ts` writes those
 calls out — the `Chat` construction, `chat.webhooks.backlog`, the
-`BacklogPostableExtras` and `BacklogChannelPostableExtras` postables,
-`message.subject`, `adapter.api`/`client`/`rateLimit`/`botUserName` and
+`BacklogPostableExtras` and `BacklogChannelPostableExtras` postables, the
+mention helpers, `installations` with a resolver-function `apiKey`,
+`rateLimit.maxWaitMs`, `adapter.api`/`client`/`rateLimit`/`botUserName` and
 `createInMemoryBacklogApi` — and the job compiles it strict, under `NodeNext`,
-with `tsc --noEmit`. Nothing extracts the README's code blocks into it, so a
-README sample that changes shape changes that file in the same commit. Its
-`chat`, `@chat-adapter/state-memory`, TypeScript and `@types/node` are exact
-versions — the ones `pnpm-lock.yaml` resolves, and `@types/node` on the
-major the consumer runs — because no lockfile exists out there and a range
-would turn the job red for an upstream release rather than a change here.
+with `tsc --noEmit`. It reads `message.subject` too, but proves nothing about
+the `'pull_request'` it compares against: `chat` types `subject.type` as
+`string`, so that literal is pinned by the suite, not the compiler. Nothing
+extracts the README's code blocks into it, so a README sample that changes
+shape changes that file in the same commit.
+
+Its `chat`, `@chat-adapter/state-memory` and TypeScript are exact versions,
+because no lockfile exists out there and a range would turn the job red for an
+upstream release rather than a change here. They are not committed in
+`scripts/consumer-smoke/package.json`: the job reads each from
+`pnpm-lock.yaml` (`pnpm list --lockfile-only`) and writes it in with
+`npm pkg set` before `npm install`, so the lockfile is the one place they are
+written down. A committed pin would have no owner — Dependabot watches `/`
+only — and the first peer bump it missed would make npm refuse the install
+with ERESOLVE. `@types/node` is the exception and stays committed, on the
+major the consumer runs: the lockfile only holds the types for the pinned
+runtime.
 
 Then every `examples/*` is copied under `$RUNNER_TEMP`, its
 `@nulab/chat-adapter-backlog` dependency rewritten to the tarball, installed
@@ -460,6 +472,16 @@ pointing it at `src/`, which would let it compile against a declaration the
 package does not ship. The step checks every example before it fails, so one
 red run names all of the broken ones. The root `lint` and `format:check` cover
 `examples/` as well.
+
+That step is skipped when `release.yml` calls the workflow (`skip-examples`),
+and that is a trade-off, not an oversight. An example declares ranges and
+ships no lockfile, so an upstream release can turn it red with nothing changed
+here, and a release gated on it would be blocked by an example rather than by
+the package. The cost is that a release can go out while an example is broken
+against it; pull requests and pushes to `main` still run the step, so the
+break is reported there. The skip is an input because nothing else can tell a
+called run apart: inside a reusable workflow the `github` context, and so
+`github.event_name`, belongs to the caller.
 
 By hand, an example is checked the way its README tells a reader to: `npm
 install` and `npm run typecheck` inside its own directory — npm, not pnpm, for

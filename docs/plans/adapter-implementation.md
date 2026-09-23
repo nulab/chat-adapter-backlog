@@ -33,7 +33,7 @@ The project is done when all of the following hold on `main`:
 6. `0.1.0` is published from `release.yml` and installs into a consumer that
    imports `createBacklogAdapter` under Node 20 (§7).
 
-**Status, 2026-09-09** (`main` at `9995525`): 1, 2, 4 and 5 hold. 3 holds in
+**Status, 2026-09-23** (`main` at `61a4b85`): 1, 2, 4 and 5 hold. 3 holds in
 its first half only — `pnpm test` needs no network and the live suite skips
 itself, but it has never been run against a real space, which needs the
 credentials issue #52 is waiting on. 6 holds in its second half: the
@@ -42,11 +42,12 @@ repository and constructs the adapter from the environment alone on Node 20 on
 every push and pull request — including the run `release.yml` calls before it
 publishes — so the consumer side is a gate rather than a check somebody
 remembers to do once. The same job type checks the usage the README
-documents and every `examples/*` against that tarball. What is still missing
-is the release itself: the package is unreleased (#53), and the repository's
-visibility has to be settled before `release.yml` runs at all (spec §15.4).
-The live run (#52) and the release (#53) are the whole distance between here
-and the first release.
+documents against that tarball, and on pushes and pull requests every
+`examples/*` too. What is still missing is the release itself: the package is
+unreleased (#53), and the repository's visibility has to be settled before
+`release.yml` runs at all (spec §15.4). The live run (#52), the visibility
+decision (§15.4) and the release (#53) are the whole distance between here and
+the first release.
 
 ## 2. Ground rules recap
 

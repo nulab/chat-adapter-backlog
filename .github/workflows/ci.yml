@@ -8,7 +8,18 @@ on:
   # use — got no checks at all until its parent merged and GitHub retargeted it,
   # which is the moment feedback stops being useful.
   pull_request:
+  # release.yml sets `skip-examples`. Neither `github.event_name` nor any other
+  # `github` field can tell the two apart: "When a reusable workflow is
+  # triggered by a caller workflow, the `github` context is always associated
+  # with the caller workflow" (docs.github.com, Reusing workflow
+  # configurations), so a called run reads `workflow_dispatch`, never
+  # `workflow_call`. On push and pull_request `inputs` is empty and the flag
+  # reads as unset.
   workflow_call:
+    inputs:
+      skip-examples:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -137,8 +148,9 @@ jobs:
 
       # With the runtime, unlike `test`: building and packing are development
       # commands and belong on the pinned Node. Node 20 stays reachable
-      # because nothing below this line goes through pnpm, so a bare `node` or
-      # `npm` is the one actions/setup-node put on PATH.
+      # because nothing after the pack goes through pnpm except reading the
+      # lockfile, so a bare `node` or `npm` is the one actions/setup-node put
+      # on PATH.
       - run: pnpm install --frozen-lockfile
 
       # Its own build rather than `needs: [build]` and an artifact: the
@@ -165,17 +177,34 @@ jobs:
       # tarball should not carry (#99) fails this step rather than being
       # stepped around.
       #
-      # The consumer's own devDependencies are exact versions, the ones
-      # pnpm-lock.yaml resolves, because there is no lockfile out here: a
-      # range would let a new `chat` or TypeScript release turn this job red
-      # for a change this repository did not make.
+      # `chat`, `@chat-adapter/state-memory` and TypeScript are written into
+      # the consumer here, as the exact versions pnpm-lock.yaml resolves, not
+      # committed in its package.json. Exact, because no lockfile exists out
+      # here and a range would let an upstream release turn this job red for a
+      # change this repository did not make. From the lockfile, because
+      # nothing else bumps them: Dependabot watches `/` only, so a pin in
+      # scripts/consumer-smoke would stay behind the adapter's peer range
+      # until npm refused the install with ERESOLVE. `@types/node` is the one
+      # committed pin: it follows the Node this consumer runs, and the
+      # lockfile holds only the types for the pinned runtime.
       - name: Install it into a consumer outside the repository
         env:
           TARBALL: ${{ runner.temp }}/chat-adapter-backlog.tgz
           CONSUMER: ${{ runner.temp }}/consumer
         run: |
+          locked() {
+            pnpm list "$1" --lockfile-only --json --depth 0 |
+              jq -er --arg name "$1" '.[0].devDependencies[$name].version'
+          }
+          chat=$(locked chat)
+          state_memory=$(locked @chat-adapter/state-memory)
+          typescript=$(locked typescript)
           cp -R scripts/consumer-smoke "$CONSUMER"
           cd "$CONSUMER"
+          npm pkg set \
+            "devDependencies.chat=$chat" \
+            "devDependencies.@chat-adapter/state-memory=$state_memory" \
+            "devDependencies.typescript=$typescript"
           npm install --no-audit --no-fund "$TARBALL"
 
       # The five variables src/adapter.ts reads, and no config object: that
@@ -206,7 +235,15 @@ jobs:
       # in for the release that does not exist yet. Copied out of the
       # repository for the same reason as the consumer above. Every example
       # runs even after one fails, so a red step names all of them.
+      #
+      # Skipped when release.yml calls this workflow. An example declares its
+      # dependencies as ranges and ships no lockfile, as a copied-out project
+      # does, so an upstream release can turn this step red without a change
+      # here — and during a release that would block `npm publish` on an
+      # example, not on the package. Pull requests and pushes to main still
+      # run it, so a broken example is reported there first.
       - name: Type check every example against the tarball
+        if: ${{ !inputs.skip-examples }}
         env:
           TARBALL: ${{ runner.temp }}/chat-adapter-backlog.tgz
           EXAMPLES: ${{ runner.temp }}/examples

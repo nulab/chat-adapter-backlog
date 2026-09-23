@@ -8,9 +8,6 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@chat-adapter/state-memory": "4.39.0",
-    "@types/node": "20.19.43",
-    "chat": "4.39.0",
-    "typescript": "7.0.2"
+    "@types/node": "20.19.43"
   }
 }

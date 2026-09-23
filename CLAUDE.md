@@ -71,11 +71,15 @@ consumer in the same commit; its assertions are one file, in the order a
 consumer meets them.
 
 The same job then compiles `scripts/consumer-smoke/documented-usage.ts` with
-`tsc --noEmit` against the installed declarations, and type checks every
-`examples/*` against the same tarball. That file is the usage README.md
-documents, written out by hand rather than extracted: a README sample that
-changes shape changes it in the same commit, or the job keeps passing on the
-old shape while the README shows one that may not compile.
+`tsc --noEmit` against the installed declarations, and — except in the run
+`release.yml` calls, where `skip-examples` turns it off so an upstream release
+cannot block a publish through an example — type checks every `examples/*`
+against the same tarball. That file is the usage README.md documents, written
+out by hand rather than extracted: a README sample that changes shape changes
+it in the same commit, or the job keeps passing on the old shape while the
+README shows one that may not compile. Its `chat`, `@chat-adapter/state-memory`
+and TypeScript versions are read from `pnpm-lock.yaml` by the job, so a bump
+there reaches the consumer without an edit in `scripts/consumer-smoke/`.
 
 ## Design documents
 
