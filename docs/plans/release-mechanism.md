@@ -6,11 +6,11 @@ run, and its shape (`workflow_dispatch` with a `patch` / `minor` / `major`
 choice) was written before anybody asked whether a release-PR tool would suit
 this repository better.
 
-**This document changes no workflow.** It records what was verified, what the
-choice actually turns on, one recommendation, and the decisions that were the
-maintainer's. The implementation is a separate PR, #106. Issue **#53** is the
-first run of whatever comes out of this; two of the three weaknesses it lists
-are solved here by design rather than patched (§6).
+This document records what was verified, what the choice actually turns on,
+one recommendation, and the decisions that were the maintainer's. It changed
+no workflow itself; #106 implemented it. Issue **#53** is the first run of
+whatever comes out of this; two of the three weaknesses it lists are solved
+here by design rather than patched (§6).
 
 **Status: accepted 2026-09-23 — candidate A, with F deferred.** The maintainer
 delegated the choice, and §4's recommendation was accepted as far as A goes:
@@ -19,7 +19,32 @@ gains a `dry-run` input. F — deriving the bump from the commits — is not tak
 for now, so the bump stays a human's choice. The §9 items resolve as
 recommended: the `package.json`-stays-at-`0.0.0` practice stands, the first
 publish uses a temporary granular token, and `production` carries no required
-reviewers.
+reviewers. DEVELOPMENT.md "Releasing" is the operating description and
+carries the first-release checklist; this document stays the rationale.
+
+Where the implementation departs from the text below, and why:
+
+- **Two jobs, not one.** `pack` fixes the version, installs, builds and packs
+  with `contents: read` only; `publish` downloads that tarball and converges,
+  without checking out or running the repository's code, and is the only job
+  holding `id-token: write`, `contents: write` and the `production`
+  environment. The publish still runs from a job in `release.yml`, so §1.5's
+  claim holds. A dry run is `pack` alone, so it never enters the environment,
+  never sees the token and never shows up as a production deployment.
+- **The dry run stops after `npm pack`**, not after `npm publish --dry-run`
+  (§7): the tarball it uploads is the artefact the real run would publish, and
+  its file list is in the log.
+- **The tag is created through the Git refs API**, not `git push`, which is
+  what lets `publish` skip the checkout. It is an annotated tag whose message
+  names the run (`release.yml run <run id>`), which is what §6.1's ownership
+  guard reads in `pack`.
+- **§6.2's npm step is dropped**, not pinned. `pack` reads the Node version
+  pnpm provisions from the lockfile and both jobs hand that exact version to
+  `setup-node`; `publish` asserts the 11.5.1 floor and that its npm is the one
+  that packed.
+- **A first-release guard not written here**: while no `v*` tag exists,
+  `pack` refuses any bump but `minor`, so the one release that cannot be
+  redone cannot become `0.0.1` because `patch` was the default.
 
 Everything below was checked on **2026-09-09**, except where a passage names
 **2026-09-23**: a review on that date corrected the Node and npm facts (§1.4,

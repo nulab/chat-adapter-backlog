@@ -403,7 +403,7 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
 | P7a | `docs(docs): document setup, configuration and limitations` | `documentation` | README per §13 (publishing-checklist order), `sample-messages.md`, DEVELOPMENT.md credentials table, `.env.example`, CLAUDE.md "State of the repo" final form, feature matrix values recorded for a future catalog PR. |
 | P7b | `test(adapter): add opt-in live suite against a real space` | none | §12.3 suite, self-skipping; run once locally and paste the `rateLimit(host)` snapshot into the PR. |
 | P7c | `ci(ci): run the live suite on manual dispatch only` (optional) | none | A `workflow_dispatch` input that provides `BACKLOG_*` from repository secrets; never on PRs from forks. Skip if the maintainer prefers local-only. |
-| P7d | `chore(release): publish the first release` | none | Verify Trusted Publishing and the `production` environment exist (DEVELOPMENT.md prerequisites), then run `release.yml` with `minor` (§7). |
+| P7d | `chore(release): publish the first release` | none | Follow DEVELOPMENT.md "The first release, step by step": dry-run `release.yml` with `minor`, publish `0.1.0` with a temporary token, then configure Trusted Publishing and delete the token (§7). |
 
 **Status, 2026-09-08.**
 
@@ -423,7 +423,8 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
   and none reads a `BACKLOG_*` secret; the suite is opt-in, so nothing in CI
   depends on it (spec §15.1 row 19).
 - **P7d — not started.** Issue **#53** carries it. Visibility is settled as
-  a premise (spec §15 row 28).
+  a premise (spec §15 row 28), and the workflow it runs was made re-runnable
+  and dry-run-by-default on 2026-09-23 (§7).
 
 - **Acceptance**: `npm pack --dry-run` contains only `dist/`, `package.json`,
   `README.md`, `LICENSE`; a scratch consumer on Node 20 imports the package
@@ -506,12 +507,13 @@ are D15's and are independent of the version number.
 The mechanism around that number was reconsidered before the first release
 in [docs/plans/release-mechanism.md](./release-mechanism.md), which verifies
 what trusted publishing and provenance actually require and evaluates
-release-please and its alternatives against D15. Its candidate A was accepted
-on 2026-09-23 — keep the `workflow_dispatch` and make the publish job converge
-so that a failed run finishes by being re-run — and deriving the bump from the
-commits (its F) is deferred, so the bump is still picked by hand. The
-implementation is #106; until it merges, this section and P7d describe what
-`release.yml` does.
+release-please and its alternatives against D15. Its candidate A was adopted
+on 2026-09-23: `release.yml` keeps the `workflow_dispatch`, converges so that
+a failed run finishes by being re-run, and dry-runs by default. Deriving the
+bump from the commits (its F) is deferred, so the bump is still picked by
+hand. The first release's order of operations — a temporary token first,
+trusted publishing only once the package exists — is DEVELOPMENT.md's
+"The first release, step by step".
 
 ## 8. Out of scope / later
 
