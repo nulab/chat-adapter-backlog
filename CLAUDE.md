@@ -547,7 +547,7 @@ is no longer a change invisible to consumers (docs/specs/adapter.md §3.1,
 ## `examples/`
 
 `examples/*` are **standalone projects**, not workspace members: each one
-depends on the published adapter (`"@nulab/chat-adapter-backlog": "^0"`),
+depends on the published adapter (`"@nulab/chat-adapter-backlog": "^0.1.0"`),
 installs on its own, and deploys from its own directory. Copying one out of
 this repository has to leave it working, which is the rule that settles most
 questions about them. `pnpm-workspace.yaml` names no packages, and nothing in
@@ -569,7 +569,7 @@ suggestion:
 
 ```
 examples/<name>/
-  README.md  package.json  vercel.json  .env.example  tsconfig.json
+  README.md  package.json  vercel.json  .vercelignore  .env.example  tsconfig.json
   api/webhooks/backlog.ts   # the Vercel function, nothing else
   src/bot.ts                # Chat + adapter + handler registration; the only side effects
   src/<logic>.ts            # the decision, as a pure function
@@ -582,7 +582,9 @@ the rule — the thing a reader came for should not be tangled in the wiring.
 
 Package name `chat-adapter-backlog-example-<name>`, `private: true`, and the
 three scripts `typecheck` / `deploy` / `deploy:prod`. `vercel.json` sets
-`framework: null` and orchestrates nothing.
+`framework: null` and `installCommand: "npm install"` — pnpm inside a clone
+finds the root `pnpm-workspace.yaml` and installs the repository instead — and
+orchestrates nothing else.
 
 Two rules about what an example may do, both load-bearing:
 

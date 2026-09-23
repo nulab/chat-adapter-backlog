@@ -3,6 +3,8 @@
 Mention the bot on an issue together with the people you would accept as an
 owner, and it hands the issue to one of them at random and says who got it.
 
+## What it does
+
 It is the round-robin somebody usually does by hand in a triage meeting: you
 already know which two or three people could take the ticket, and you only want
 the coin flip made and recorded. This is the smallest useful bot in this
@@ -112,9 +114,9 @@ appears.
 Locally:
 
 ```sh
-pnpm install
-pnpm typecheck
-pnpm deploy      # npx vercel deploy
+npm install
+npm run typecheck
+npm run deploy      # npx vercel deploy
 ```
 
 ### Environment variables
@@ -164,6 +166,13 @@ candidates.
   window reassigns again — the same shortlist, a fresh coin flip.
 - **The rate limit is shared.** The reassignment and the comment both spend the
   bot user's `update` bucket, alongside everything else the adapter posts.
+- **A 429 waits at most 20 seconds.** `src/bot.ts` lowers the adapter's
+  `rateLimit.maxWaitMs` from its 60-second default, because the function is
+  itself stopped at 60 seconds (`maxDuration`) and a longer wait would be cut
+  off silently. A call that would wait longer rejects with
+  `AdapterRateLimitError` instead, which the function's logs show as a message
+  processing error; the reassignment or the comment for that delivery is not made, and nothing
+  retries it, because the webhook was already answered.
 - **Nothing is remembered.** The bot never subscribes to a thread, so follow-up
   messages that do not mention it are not seen. Mention it again to reassign
   again.

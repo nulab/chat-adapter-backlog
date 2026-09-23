@@ -14,9 +14,6 @@ setup](#shared-setup) working.
 | [`custom-field-done-gate`](./custom-field-done-gate) | Closing an issue with a required custom field still empty hands it back to whoever closed it.                            | A small exchange: check, then push back. |
 | [`bug-intake`](./bug-intake)                         | A bug report gets a first-response triage comment written by an AI, and is handed to the intake contact when it is done. | Applied: an AI writes the reply.         |
 
-**The directories are coming in separate PRs**, so the links above are dead
-until the PR that adds that example merges.
-
 ## Each example is a standalone project
 
 An example is **not** a workspace member of this repository. It depends on the
@@ -27,14 +24,20 @@ or its tests.
 
 That also sets what an example does _not_ have: no test runner, no lint or
 format hook of its own, no entry in `pnpm-lock.yaml`, and a `vercel.json` that
-orchestrates nothing.
+names the install command and orchestrates nothing else.
 
 ```sh
 cd examples/<name>
-pnpm install
-pnpm typecheck
-pnpm deploy      # npx vercel deploy
+npm install
+npm run typecheck
+npm run deploy      # npx vercel deploy
 ```
+
+The examples use **npm**, not the pnpm this repository is built with. Inside a
+clone, `pnpm install` in an example directory finds the repository's
+`pnpm-workspace.yaml` in a parent directory and installs the repository instead
+of the example; npm has no such lookup, so it installs the directory it is run
+in, copied out or not.
 
 ## Shared setup
 
@@ -63,6 +66,15 @@ Backlog cannot sign webhooks, so the secret travels in the hook URL:
 openssl rand -hex 32
 ```
 
+The URL you register in Backlog, once the deployment exists, is:
+
+```
+https://<your-app>/api/webhooks/backlog?host=<host>&token=<secret>
+```
+
+`<host>` is the space host, exactly as in `BACKLOG_HOST`, and `<secret>` is the
+value above, exactly as in `BACKLOG_WEBHOOK_SECRET`.
+
 Read **Webhook authenticity** in the [root README](../README.md#webhook-authenticity--read-this)
 before you deploy anything. The short version: the URL is the credential, so
 keep it out of logs and issue trackers, and check the `host` you register
@@ -71,10 +83,12 @@ against the space you register it in.
 ### 3. A Vercel project whose Root Directory is the example
 
 In the Vercel project settings, set **Root Directory** to
-`examples/<the example>` and leave the install and build commands alone —
-there is nothing to orchestrate, because the example installs the adapter from
-npm like any other dependency. (Copy the directory out of this repository and
-the Root Directory is simply the repository root.)
+`examples/<the example>` and leave the install and build commands alone.
+The example's `vercel.json` already sets the install command to `npm install`,
+so the install does not depend on which lockfile Vercel finds: an example has
+none of its own, and the `pnpm-lock.yaml` at the top of this repository
+describes the adapter, not the example. (Copy the directory out of this
+repository and the Root Directory is simply the repository root.)
 
 One Vercel project per example. They are separate deployments with separate
 webhook URLs, and running two of them against the same project in Backlog is
@@ -139,6 +153,7 @@ examples/<name>/
   README.md                 # What it does / Try it / How it works / Deploy / Limits
   package.json
   vercel.json
+  .vercelignore             # keeps a local .env out of the deployment
   .env.example
   tsconfig.json
   api/webhooks/backlog.ts   # the Vercel function
@@ -175,3 +190,10 @@ than boilerplate:
   from a single request.
 - None of them subscribes to threads; each answers the delivery in front of it
   and keeps nothing between requests.
+- A 429 is waited out for at most 20 seconds, not the adapter's default 60,
+  so that the wait cannot outlast the function's own 60-second ceiling; past
+  that, the handler fails in the logs instead of being cut off silently.
+- With no framework, Vercel serves every file outside `api/` as it stands, so
+  `src/*.ts`, `README.md` and `tsconfig.json` are readable on the deployment.
+  They are the same files as this repository and hold no secret; what would, a
+  local `.env`, is kept out by `.vercelignore`.

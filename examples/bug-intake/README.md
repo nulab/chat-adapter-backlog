@@ -27,7 +27,8 @@ disappearing.
 ## Try it
 
 1. **File a thin bug.** Create an issue of type `Bug` with a summary and
-   almost no description.
+   almost no description — say, only "Exporting a report does nothing." The
+   bot answers with a comment like this one, addressed to the reporter:
 
    ```markdown
    <@U10>
@@ -147,9 +148,9 @@ the Vercel CLI through `npx`, so install it globally or let `npx` fetch it; it
 is deliberately not a dependency of this example.
 
 ```sh
-pnpm install
-pnpm typecheck
-pnpm deploy      # npx vercel deploy
+npm install
+npm run typecheck
+npm run deploy      # npx vercel deploy
 ```
 
 Then set:
@@ -184,6 +185,13 @@ the same change made from the issue list. Never use **allEvent**.
   they also share its per-minute budget with everything else the adapter does,
   and a request that fails after the retry surfaces as a thrown error with the
   webhook already answered.
+- **A 429 waits at most 20 seconds.** `src/bot.ts` lowers the adapter's
+  `rateLimit.maxWaitMs` from its 60-second default, because the function is
+  itself stopped at 60 seconds (`maxDuration`) and a longer wait would be cut
+  off silently. A call that would wait longer rejects with
+  `AdapterRateLimitError` instead, which the function's logs show as a message
+  processing error; the intake comment or the hand-off for that delivery is not made, and nothing
+  retries it, because the webhook was already answered.
 - **A new issue or a close costs one Get Issue**, including when the issue
   turns out to be of another type. Ordinary comments cost nothing, because the
   two questions that select a delivery are answered from the message alone.
