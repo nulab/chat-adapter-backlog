@@ -1,6 +1,6 @@
 import { waitUntil } from '@vercel/functions';
 
-import { chat } from '../../src/bot';
+import { chat } from '../../src/bot.js';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;

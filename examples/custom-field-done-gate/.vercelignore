@@ -1,0 +1,4 @@
+# With no framework, every file outside api/ is served as static output, and a
+# CLI deploy uploads a local .env unless something says not to.
+.env
+.env.*

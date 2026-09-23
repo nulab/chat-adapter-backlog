@@ -12,7 +12,7 @@ import {
   closedIssueId,
   handBackComment,
   requiredFieldState,
-} from './done-gate';
+} from './done-gate.js';
 
 /**
  * Read and validated at module load, so a typo fails the first cold start
@@ -40,7 +40,12 @@ const env = z
  */
 const RECENT_COMMENTS = 5;
 
-const backlog = createBacklogAdapter();
+// Well under `maxDuration` in api/webhooks/backlog.ts. At the default of 60 s a
+// 429 can wait as long as the function may run, so the platform stops it
+// mid-wait — after the webhook has already answered 200 — and the reply is lost
+// without an error. Past 20 s the call rejects with `AdapterRateLimitError`
+// instead, which the Chat core logs as a message processing error.
+const backlog = createBacklogAdapter({ rateLimit: { maxWaitMs: 20_000 } });
 
 export const chat = new Chat({
   adapters: { backlog },

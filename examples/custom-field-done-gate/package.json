@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@chat-adapter/state-memory": "^4.40.0",
-    "@nulab/chat-adapter-backlog": "^0",
+    "@nulab/chat-adapter-backlog": "^0.1.0",
     "@vercel/functions": "^3.9.5",
     "chat": "^4.40.0",
     "zod": "^4.5.4"
