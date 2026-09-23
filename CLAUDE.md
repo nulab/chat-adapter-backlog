@@ -582,9 +582,11 @@ the rule — the thing a reader came for should not be tangled in the wiring.
 
 Package name `chat-adapter-backlog-example-<name>`, `private: true`, and the
 three scripts `typecheck` / `deploy` / `deploy:prod`. `vercel.json` sets
-`framework: null` and `installCommand: "npm install"` — pnpm inside a clone
-finds the root `pnpm-workspace.yaml` and installs the repository instead — and
-orchestrates nothing else.
+`framework: null` and `installCommand: "npm install"`, and orchestrates
+nothing else. npm because pnpm inside a clone finds the root
+`pnpm-workspace.yaml` and installs the repository instead; an explicit command
+because Vercel picks the package manager from the lockfile it finds, an example
+has none of its own, and an overridden `pnpm install` runs pnpm 6 there.
 
 Two rules about what an example may do, both load-bearing:
 

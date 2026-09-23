@@ -60,3 +60,7 @@ lefthook-local.yml
 
 # `vercel link` writes the project and org ids here, per example directory.
 .vercel/
+
+# An example ships no lockfile: a committed one would change which package
+# manager Vercel detects for it.
+examples/*/package-lock.json

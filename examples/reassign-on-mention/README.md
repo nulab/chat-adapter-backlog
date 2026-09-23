@@ -171,8 +171,8 @@ candidates.
   itself stopped at 60 seconds (`maxDuration`) and a longer wait would be cut
   off silently. A call that would wait longer rejects with
   `AdapterRateLimitError` instead, which the function's logs show as a message
-  processing error; the reassignment or the comment for that delivery is not made, and nothing
-  retries it, because the webhook was already answered.
+  processing error; the reassignment or the comment for that delivery is not
+  made, and nothing retries it, because the webhook was already answered.
 - **Nothing is remembered.** The bot never subscribes to a thread, so follow-up
   messages that do not mention it are not seen. Mention it again to reassign
   again.

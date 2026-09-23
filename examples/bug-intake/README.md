@@ -190,8 +190,8 @@ the same change made from the issue list. Never use **allEvent**.
   itself stopped at 60 seconds (`maxDuration`) and a longer wait would be cut
   off silently. A call that would wait longer rejects with
   `AdapterRateLimitError` instead, which the function's logs show as a message
-  processing error; the intake comment or the hand-off for that delivery is not made, and nothing
-  retries it, because the webhook was already answered.
+  processing error; the intake comment or the hand-off for that delivery is not
+  made, and nothing retries it, because the webhook was already answered.
 - **A new issue or a close costs one Get Issue**, including when the issue
   turns out to be of another type. Ordinary comments cost nothing, because the
   two questions that select a delivery are answered from the message alone.
