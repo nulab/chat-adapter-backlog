@@ -41,17 +41,12 @@ credentials issue #52 is waiting on. 6 holds in its second half: the
 repository and constructs the adapter from the environment alone on Node 20 on
 every push and pull request — including the run `release.yml` calls before it
 publishes — so the consumer side is a gate rather than a check somebody
-remembers to do once. Two things are still true of it. The release itself has
-not happened: the package is unreleased (#53), and the repository's visibility
-has to be settled before `release.yml` runs at all (spec §15.4). And the
-consumer that job builds installs with `--ignore-scripts`, because
-`preinstall: only-allow pnpm` in the published manifest fails an npm
-consumer's install with exit 127 (`only-allow` is a devDependency they never
-install; pnpm consumers escape it because pnpm ignores dependency lifecycle
-scripts, measured 2026-09-09) — so "installs into a consumer" holds for a pnpm
-consumer today and for an npm consumer once **#99** stops that script from
-being published. The live run (#52), #99 and the release (#53) are the whole
-distance between here and the first release.
+remembers to do once. The same job type checks the usage the README
+documents and every `examples/*` against that tarball. What is still missing
+is the release itself: the package is unreleased (#53), and the repository's
+visibility has to be settled before `release.yml` runs at all (spec §15.4).
+The live run (#52) and the release (#53) are the whole distance between here
+and the first release.
 
 ## 2. Ground rules recap
 
@@ -432,8 +427,7 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
   categorised (every `feat` PR carried `enhancement`). The first two are no
   longer P7d's to check by hand: the `consumer` job in `ci.yml` asserts the
   installed tree is exactly those four entries and constructs the adapter from
-  the environment on Node 20, so #53 is left with the release notes — and with
-  the manifest defect that job's `--ignore-scripts` documents (#99, §1).
+  the environment on Node 20, so #53 is left with the release notes.
 - **Catalog decision**: community listing needs only a docs page and
   allowlist entries in `vercel/chat`; vendor-official additionally needs the
   catalog/scaffold entries, a changeset, product docs and an announcement.

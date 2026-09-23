@@ -1,0 +1,112 @@
+/**
+ * The usage README.md documents, compiled by the ci.yml consumer job with
+ * `tsc --noEmit` against the installed tarball. Never run: every value here
+ * exists for the compiler, which is why nothing below is awaited at the top
+ * level or needs a credential.
+ *
+ * README.md's samples mirror this file. They are not extracted from it
+ * automatically, so a README sample that changes shape changes here in the
+ * same commit — otherwise the README can document a call that no longer
+ * compiles, which is what the 2026-09-23 release review found by hand.
+ */
+import { createMemoryState } from '@chat-adapter/state-memory';
+import {
+  createBacklogAdapter,
+  createInMemoryBacklogApi,
+  type Backlog,
+  type BacklogAdapter,
+  type BacklogChannelPostableExtras,
+  type BacklogPostableExtras,
+  type RateLimitSnapshots,
+} from '@nulab/chat-adapter-backlog';
+import { Chat, type PostableMarkdown } from 'chat';
+
+const HOST = 'example.backlog.com';
+
+const backlog = createBacklogAdapter();
+
+const chat = new Chat({
+  userName: backlog.userName,
+  adapters: { backlog },
+  state: createMemoryState(),
+});
+
+chat.onNewMention(async (thread, message) => {
+  const subject = await message.subject;
+  if (subject?.type === 'pull_request') {
+    await thread.post({ markdown: `Reviewing ${subject.title}` });
+    return;
+  }
+
+  // A named type rather than an object literal passed inline: `post` is typed
+  // by Chat SDK, which knows nothing of `notifiedUserId`, so a literal would
+  // fail its excess-property check.
+  const reply: PostableMarkdown & BacklogPostableExtras = {
+    markdown: `Saw: ${message.text}`,
+    notifiedUserId: [100],
+  };
+  await thread.post(reply);
+});
+
+export function POST(
+  request: Request,
+  waitUntil: (task: Promise<unknown>) => void
+): Promise<Response> {
+  return chat.webhooks.backlog(request, { waitUntil });
+}
+
+export async function fileIssue(): Promise<void> {
+  const issue: PostableMarkdown & BacklogChannelPostableExtras = {
+    markdown: '# Deploy fails on staging\n\nReproduces on every push to main.',
+    issueTypeId: 12,
+    priorityId: 3,
+    assigneeId: 100,
+  };
+  await chat.channel(`backlog:${HOST}:500`).post(issue);
+}
+
+export async function reachBacklogDirectly(): Promise<{
+  granted: RateLimitSnapshots;
+  observed: RateLimitSnapshots;
+  botUserName: string;
+}> {
+  const api = backlog.api(HOST);
+  const granted = await api.getRateLimit();
+  await api.getIssue(8001);
+  await api.listPullRequests(500, 700, { count: 20 });
+
+  const client: Backlog = backlog.client(HOST);
+  await client.getCustomFields(500);
+
+  return {
+    granted,
+    observed: backlog.rateLimit(HOST),
+    botUserName: backlog.botUserName(HOST),
+  };
+}
+
+export function createTestAdapter(): BacklogAdapter {
+  const api = createInMemoryBacklogApi({
+    projects: [
+      {
+        id: 500,
+        projectKey: 'EXAMPLE',
+        name: 'Example',
+        textFormattingRule: 'markdown',
+      },
+    ],
+    issueTypes: { 500: [{ id: 1, name: 'Task' }] },
+    repositories: [
+      { id: 700, projectId: 500, name: 'example-repo', description: '' },
+    ],
+  });
+
+  return createBacklogAdapter({
+    host: HOST,
+    apiKey: 'test',
+    botUserId: 999,
+    botUserName: 'Chatbot',
+    webhookSecret: 'test-webhook-secret',
+    createApi: () => api,
+  });
+}

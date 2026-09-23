@@ -364,8 +364,8 @@ merges — and as a reusable workflow called by the release. Five jobs:
 | `lint`       | `pnpm lint` then `pnpm format:check`.                                              |
 | `typecheck`  | `pnpm typecheck`.                                                                  |
 | `build`      | `pnpm build`, then imports `dist/index.js` in a real Node process and asserts the entry loads and `dist/index.d.ts` exists. |
-| `consumer`   | `pnpm pack`, then installs the tarball with npm into a directory outside the repository and runs `scripts/consumer-smoke/smoke.mjs` on Node 20. |
-| `test`       | Matrix over Node 20, 22, 24 and 26. Asserts the running Node is the major the job asked for, then `pnpm test`. |
+| `consumer`   | `pnpm pack`, then installs the tarball with npm into a directory outside the repository, runs `scripts/consumer-smoke/smoke.mjs` on Node 20, and type checks the documented usage and every `examples/*` against the same tarball. |
+| `test`       | Matrix over Node 20, 22, 24 and 26. Asserts the running Node is the major the job asked for, then runs the suite (`vitest run`) with a bare `node`. |
 
 Every job provisions pnpm with `pnpm/action-setup` and `standalone: true`,
 which installs the pnpm build with Node.js linked in and reads the version from
@@ -406,10 +406,11 @@ the only guard against that recurring — it is also what caught the
 re-materializing install rather than letting it pass as three green checks.
 
 A bare `node` appears only where a job has deliberately put one on PATH with
-`actions/setup-node`: the assertion and the suite in `test`, and the install
-and the consumer script in `consumer`. Everywhere else it goes through
-`pnpm exec node`, the build job's smoke test included — the runner images ship
-a Node of their own, and it would quietly service any step that asked for it.
+`actions/setup-node`: the assertion and the suite in `test`, and the npm
+installs, the consumer script and the type checks in `consumer`. Everywhere
+else it goes through `pnpm exec node`, the build job's smoke test included —
+the runner images ship a Node of their own, and it would quietly service any
+step that asked for it.
 
 Installs use `pnpm install --frozen-lockfile`, so `pnpm-lock.yaml` must be
 committed alongside any `package.json` change.
@@ -430,33 +431,39 @@ exactly `dist/`, `package.json`, `README.md` and `LICENSE`, that
 `createBacklogAdapter()` with no argument builds an adapter out of the five
 `BACKLOG_*` variables on Node 20, the floor of `engines.node`.
 
-The install passes `--ignore-scripts`, which covers for a defect rather than a
-preference: `package.json` carries `preinstall: only-allow pnpm`, npm runs a
-dependency's `preinstall`, and `only-allow` is a devDependency no consumer
-installs, so npm installing the published tarball fails with exit 127 before
-any of the package is loaded (measured 2026-09-09). pnpm consumers do not see
-it, because pnpm ignores dependency lifecycle scripts, and `pnpm pack` strips
-`prepare` and `packageManager` from the packed manifest but not `preinstall`.
-Issue **#99** carries the fix, which is likely to be dropping `only-allow` in
-favour of `devEngines.packageManager` — the field this repository already pins
-Node with — so that nothing publishes a lifecycle script at all. The flag
-comes off with that fix, and the assertion that keeps it off belongs there
-too: asserting the packed manifest has no lifecycle script only becomes
-possible once it has none.
+The install runs lifecycle scripts, as a consumer's does, so a `preinstall`
+the tarball should not carry (#99) fails it rather than being stepped around.
+`scripts/check-published-scripts.mjs` is the guard that names the cause; this
+install is where a consumer would have met it.
 
-`examples/` is not built, type checked or tested by CI, and that is a property
-of what an example is rather than an omission: each one is a standalone project
-that installs the published adapter from npm, so checking one here would mean
-either installing a version of this package that may not exist yet, or pointing
-it at `src/` — which would let an example compile against a declaration the
-published package does not ship, the exact thing the check would be for. The
-root `lint` and `format:check` do cover `examples/`, because those need no
-install.
+Two type checks follow, against the declarations that shipped rather than
+`src/`. `attw` and `check-published-types.mjs` prove the declarations resolve
+and import nothing a consumer lacks, but not that the calls the README
+documents compile. `scripts/consumer-smoke/documented-usage.ts` writes those
+calls out — the `Chat` construction, `chat.webhooks.backlog`, the
+`BacklogPostableExtras` and `BacklogChannelPostableExtras` postables,
+`message.subject`, `adapter.api`/`client`/`rateLimit`/`botUserName` and
+`createInMemoryBacklogApi` — and the job compiles it strict, under `NodeNext`,
+with `tsc --noEmit`. Nothing extracts the README's code blocks into it, so a
+README sample that changes shape changes that file in the same commit. Its
+`chat`, `@chat-adapter/state-memory`, TypeScript and `@types/node` are exact
+versions — the ones `pnpm-lock.yaml` resolves, and `@types/node` on the
+major the consumer runs — because no lockfile exists out there and a range
+would turn the job red for an upstream release rather than a change here.
 
-The consequence is worth stating plainly: an example can break without CI
-saying so. It is checked by running `npm install` and `npm run typecheck`
-inside its own directory, which is what its README tells a reader to do — npm,
-not pnpm, for the reason `examples/README.md` gives.
+Then every `examples/*` is copied under `$RUNNER_TEMP`, its
+`@nulab/chat-adapter-backlog` dependency rewritten to the tarball, installed
+with npm and checked with its own `npm run typecheck`. An example is a
+standalone project that depends on the published adapter, and the tarball is
+that release before it exists — the only way to check an example without
+pointing it at `src/`, which would let it compile against a declaration the
+package does not ship. The step checks every example before it fails, so one
+red run names all of the broken ones. The root `lint` and `format:check` cover
+`examples/` as well.
+
+By hand, an example is checked the way its README tells a reader to: `npm
+install` and `npm run typecheck` inside its own directory — npm, not pnpm, for
+the reason `examples/README.md` gives.
 
 ## Releasing
 

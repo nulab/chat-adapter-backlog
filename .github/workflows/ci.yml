@@ -161,20 +161,14 @@ jobs:
       # not ship would still be answered, and the job would pass for a reason
       # a consumer does not have.
       #
-      # `--ignore-scripts` covers for a defect, so the defect is named here
-      # rather than hidden by it: issue #99. The packed manifest carries
-      # `preinstall: only-allow pnpm`, npm runs a dependency's preinstall, and
-      # `only-allow` is a devDependency no consumer installs, so an npm
-      # install of the published tarball fails with exit 127 before any of
-      # this runs (measured 2026-09-09; pnpm consumers escape it because pnpm
-      # ignores dependency scripts, and `pnpm pack` strips `prepare` and
-      # `packageManager` but not `preinstall`). Nothing asserted below needs a
-      # lifecycle script.
+      # Lifecycle scripts run, as they do for a consumer: a `preinstall` the
+      # tarball should not carry (#99) fails this step rather than being
+      # stepped around.
       #
-      # Drop this flag when #99 is fixed, and pin the fix there by asserting
-      # that the packed manifest declares no lifecycle script at all. That
-      # assertion cannot come first: on today's manifest it fails, and a guard
-      # whose first run is red is the bug restated rather than a guard.
+      # The consumer's own devDependencies are exact versions, the ones
+      # pnpm-lock.yaml resolves, because there is no lockfile out here: a
+      # range would let a new `chat` or TypeScript release turn this job red
+      # for a change this repository did not make.
       - name: Install it into a consumer outside the repository
         env:
           TARBALL: ${{ runner.temp }}/chat-adapter-backlog.tgz
@@ -182,7 +176,7 @@ jobs:
         run: |
           cp -R scripts/consumer-smoke "$CONSUMER"
           cd "$CONSUMER"
-          npm install --no-audit --no-fund --ignore-scripts "$TARBALL"
+          npm install --no-audit --no-fund "$TARBALL"
 
       # The five variables src/adapter.ts reads, and no config object: that
       # `createBacklogAdapter()` resolves all of them from the environment is
@@ -199,6 +193,44 @@ jobs:
           BACKLOG_BOT_USER_NAME: Chatbot
           BACKLOG_WEBHOOK_SECRET: consumer-smoke-webhook-secret
         run: node smoke.mjs
+
+      # attw and check-published-types.mjs prove the declarations resolve and
+      # import nothing a consumer lacks; neither proves the calls README.md
+      # documents compile. Those are written out in documented-usage.ts and
+      # compiled here, against the declarations that shipped.
+      - name: Type check the documented usage against the tarball
+        working-directory: ${{ runner.temp }}/consumer
+        run: npm run typecheck
+
+      # Each example depends on the published adapter, so the tarball stands
+      # in for the release that does not exist yet. Copied out of the
+      # repository for the same reason as the consumer above. Every example
+      # runs even after one fails, so a red step names all of them.
+      - name: Type check every example against the tarball
+        env:
+          TARBALL: ${{ runner.temp }}/chat-adapter-backlog.tgz
+          EXAMPLES: ${{ runner.temp }}/examples
+        run: |
+          mkdir -p "$EXAMPLES"
+          failed=()
+          for example in examples/*/; do
+            name=$(basename "$example")
+            echo "::group::$name"
+            cp -R "${example%/}" "$EXAMPLES/$name"
+            if ! (
+              cd "$EXAMPLES/$name" &&
+                npm pkg set "dependencies.@nulab/chat-adapter-backlog=file:$TARBALL" &&
+                npm install --no-audit --no-fund &&
+                npm run typecheck
+            ); then
+              failed+=("$name")
+            fi
+            echo "::endgroup::"
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::examples that do not type check against the packed tarball: ${failed[*]}"
+            exit 1
+          fi
 
   test:
     runs-on: ubuntu-latest

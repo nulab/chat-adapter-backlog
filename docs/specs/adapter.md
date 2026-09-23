@@ -2226,7 +2226,11 @@ for one scratch space is worse than requiring the two to share it.
   `name` is `"backlog"` and whose `userName` came from `BACKLOG_BOT_USER_NAME`
   (§3.2's env fallbacks, end to end). `globalThis.fetch` is replaced with a
   throw first, so "construction reaches no network" is asserted rather than
-  assumed.
+  assumed. The same job then compiles `scripts/consumer-smoke/documented-usage.ts`
+  — the usage the README documents, strict under `NodeNext` — with
+  `tsc --noEmit` against the installed declarations, and runs each
+  `examples/*`'s own type check with its adapter dependency pointed at the
+  same tarball.
 - **Feature matrix** for a future catalog listing (values per Chat SDK's
   `features` keys). Every value holds for issue **and** pull-request threads
   unless its note says otherwise, and each `partial` names the decision behind

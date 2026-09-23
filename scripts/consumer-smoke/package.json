@@ -3,5 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "A consumer of the packed @nulab/chat-adapter-backlog tarball, run by the ci.yml consumer job outside this repository."
+  "description": "A consumer of the packed @nulab/chat-adapter-backlog tarball, run by the ci.yml consumer job outside this repository.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@chat-adapter/state-memory": "4.39.0",
+    "@types/node": "20.19.43",
+    "chat": "4.39.0",
+    "typescript": "7.0.2"
+  }
 }
