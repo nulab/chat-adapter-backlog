@@ -37,7 +37,7 @@
   ],
   "scripts": {
     "prepare": "lefthook install",
-    "build": "node scripts/check-published-scripts.mjs && tsdown && node scripts/strip-orphaned-sourcemap-urls.mjs && node scripts/check-published-types.mjs",
+    "build": "node scripts/check-published-scripts.mjs && tsdown && node scripts/check-published-types.mjs",
     "dev": "tsdown --watch",
     "test": "vitest run",
     "test:watch": "vitest",

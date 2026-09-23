@@ -98,18 +98,24 @@ if (leaked.length > 0) {
  * Fails the build when a shipped `.js` or `.d.ts` points at a source map
  * that `dist/` does not contain.
  *
- * scripts/strip-orphaned-sourcemap-urls.mjs, run just before this script in
- * `pnpm build`, removes exactly that dangling comment when the `tsgo`
- * declaration generator leaves one behind (#102; see the comment on
- * `dts: { sourcemap: false }` in tsdown.config.ts for why it does). This
- * check is the regression tripwire for that fix: if a future tsdown or
- * rolldown-plugin-dts version starts leaving the comment somewhere the
- * strip script does not look, `pnpm build` fails loudly here instead of
- * publishing a broken pointer again.
+ * tsdown.config.ts splits the build into a JS pass and a declaration-only
+ * pass precisely so this never happens (#107): rolldown-plugin-dts's fake-js
+ * `outputOptions` hook sets a bundled `.d.ts`'s own sourcemap flag to
+ * `options.sourcemap || sourcemap` -- the build's own top-level `sourcemap`
+ * OR'd with the dts plugin's resolved one -- so a single build whose
+ * top-level `sourcemap: true` serves the real `index.js.map` also forces a
+ * `sourceMappingURL` comment onto `index.d.ts`, regardless of
+ * `dts.sourcemap`, which only ever controlled the matching `.d.ts.map` file
+ * (see tsdown.config.ts for the full mechanism). This check is the
+ * regression tripwire for that split: if a future config change or tsdown
+ * version reintroduces one build doing both, `pnpm build` fails loudly here
+ * instead of publishing a broken pointer again.
  */
 const SOURCE_MAPPING_URL_PATTERN = /\/\/# sourceMappingURL=(\S+)\s*$/;
 
 const orphanedSourceMaps = readdirSync(path.join(ROOT, 'dist'))
+  // `.js`/`.d.ts` because those are the only extensions `dist/` ever holds;
+  // a future third artifact type would need its own comment syntax here too.
   .filter((name) => name.endsWith('.js') || name.endsWith('.d.ts'))
   .flatMap((name) => {
     const match = readFileSync(path.join(ROOT, 'dist', name), 'utf8').match(
@@ -125,8 +131,7 @@ if (orphanedSourceMaps.length > 0) {
     `dist/ ships a sourceMappingURL comment pointing at a file it does not ` +
       `contain: ${orphanedSourceMaps.join(', ')}.\n` +
       "A consumer's tooling that follows it (bundlers, source-map-loader, " +
-      'editors) gets a 404/ENOENT. strip-orphaned-sourcemap-urls.mjs should ' +
-      'have removed this comment before this check ran; fix that script ' +
-      'rather than hand-editing dist/ (#102).'
+      'editors) gets a 404/ENOENT. Check tsdown.config.ts -- the two build ' +
+      'entries there exist to keep this from happening (#107).'
   );
 }
