@@ -19,7 +19,7 @@ on:
         default: true
       allow-released-commit:
         type: boolean
-        description: Release a commit that already carries a version tag (recovery for a run too old to re-run)
+        description: Converge on a version tag on HEAD that another run created — recovery for a run too old to re-run, only while main still points at the tagged commit
         default: false
 
 permissions:
@@ -54,6 +54,8 @@ jobs:
       NEW_VERSION_TYPE: ${{ inputs.newversion }}
     outputs:
       name: ${{ steps.pack.outputs.name }}
+      node_version: ${{ steps.toolchain.outputs.node_version }}
+      npm_version: ${{ steps.toolchain.outputs.npm_version }}
       version: ${{ steps.target.outputs.version }}
       tag: v${{ steps.target.outputs.version }}
       previous_tag: ${{ steps.target.outputs.previous_tag }}
@@ -64,20 +66,44 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Packing is the one thing in this job that needs npm rather than pnpm,
-      # and npm comes with a Node from outside the project: the Node that
-      # `pnpm install` provisions is installed without npm, npx or corepack.
-      # Same major as `devEngines.runtime` so the two do not drift.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 26
-          package-manager-cache: false
-
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           standalone: true
 
       - run: pnpm install --frozen-lockfile
+
+      # Packing and publishing need npm, and npm comes with a Node from outside
+      # the project: the Node that `pnpm install` provisions is installed
+      # without npm, npx or corepack. Not `node-version: 26`: setup-node
+      # resolves a major to the newest release on the day — on 2026-09-23 a
+      # two-day-old 26.10.0 that `minimumReleaseAge` keeps out of every other
+      # install here — and `pack` and `publish` could each get a different npm.
+      # The lockfile's exact Node, read back from the runtime pnpm linked,
+      # makes both jobs and every re-run use the same one.
+      - name: Read the Node the lockfile pins
+        id: pinned
+        run: |
+          node_version=$(pnpm exec node --version)
+          echo "node_version=${node_version#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ steps.pinned.outputs.node_version }}
+          package-manager-cache: false
+
+      - name: Record the toolchain
+        id: toolchain
+        env:
+          PINNED_NODE: ${{ steps.pinned.outputs.node_version }}
+        run: |
+          if [ "$(node --version)" != "v${PINNED_NODE}" ]; then
+            echo "::error::setup-node put $(node --version) on PATH, not the lockfile's v${PINNED_NODE}."
+            exit 1
+          fi
+          {
+            echo "node_version=${PINNED_NODE}"
+            echo "npm_version=$(npm --version)"
+          } >> "$GITHUB_OUTPUT"
 
       # The target is fixed before anything is written, and a tag already on
       # HEAD wins over the bump: this is what lets a re-run after a late
@@ -88,18 +114,28 @@ jobs:
       # highest semver. Those are the same tag only because `main` is linear
       # (squash merge) and the `release` concurrency group lets one release
       # tag at a time.
+      #
+      # A tag on HEAD is converged on only by the run that created it, which
+      # `publish` records in the annotated tag's message. Not
+      # `github.run_attempt > 1`: re-running a run this guard refused is
+      # attempt 2 of a run that owns nothing, and would go green doing nothing.
       - name: Fix the target version
         id: target
         env:
-          RUN_ATTEMPT: ${{ github.run_attempt }}
           ALLOW_RELEASED_COMMIT: ${{ inputs.allow-released-commit }}
         run: |
           tag_on_head=$(git tag --points-at HEAD --list 'v*' --sort=-v:refname | head -n 1)
 
           if [ -n "$tag_on_head" ]; then
             previous_tag=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
-            if [ "$RUN_ATTEMPT" = 1 ] && [ "$ALLOW_RELEASED_COMMIT" != true ]; then
-              echo "::error::${GITHUB_SHA} is already tagged ${tag_on_head}; there is nothing new to release. Re-run the failed run to finish a partial release, or set allow-released-commit to release this tag from a new run."
+            creator=$(git for-each-ref --format='%(contents:subject)' "refs/tags/${tag_on_head}")
+            if [ "$creator" != "release.yml run ${GITHUB_RUN_ID}" ] && [ "$ALLOW_RELEASED_COMMIT" != true ]; then
+              if [[ "$creator" =~ ^release\.yml\ run\ ([0-9]+)$ ]]; then
+                created_by="run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${BASH_REMATCH[1]}"
+              else
+                created_by="something other than release.yml"
+              fi
+              echo "::error::${GITHUB_SHA} is already tagged ${tag_on_head}, created by ${created_by}; there is nothing new to release. To finish a partial release, re-run the run that created ${tag_on_head}; to converge on this tag from a new run, set allow-released-commit."
               exit 1
             fi
             version=${tag_on_head#v}
@@ -122,6 +158,29 @@ jobs:
             echo "version=${version}"
             echo "previous_tag=${previous_tag}"
           } >> "$GITHUB_OUTPUT"
+
+      # Before anything is built, and writing nothing. Bumping from a tag whose
+      # version never reached the registry would skip that version for good,
+      # and a tag for the computed version on another commit means `publish`
+      # could only fail at it after the build (release-mechanism.md §6.1).
+      - name: Check the tags against the registry
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+          PREVIOUS_TAG: ${{ steps.target.outputs.previous_tag }}
+        run: |
+          name=$(jq -r .name package.json)
+          if [ -n "$PREVIOUS_TAG" ]; then
+            status=$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/${name/\//%2f}/${PREVIOUS_TAG#v}")
+            if [ "$status" != 200 ]; then
+              echo "::error::The registry answered ${status} for ${name}@${PREVIOUS_TAG#v}, so ${PREVIOUS_TAG} tags a version that was never published. Bumping from it would skip that version; decide by hand whether to delete the tag."
+              exit 1
+            fi
+          fi
+          tagged=$(git rev-parse -q --verify "refs/tags/v${VERSION}^{commit}" || true)
+          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::v${VERSION} already tags ${tagged}, not ${GITHUB_SHA}."
+            exit 1
+          fi
 
       - name: Build
         run: pnpm run build
@@ -154,6 +213,8 @@ jobs:
           NAME: ${{ steps.pack.outputs.name }}
           VERSION: ${{ steps.target.outputs.version }}
           PREVIOUS_TAG: ${{ steps.target.outputs.previous_tag }}
+          NODE_VERSION: ${{ steps.toolchain.outputs.node_version }}
+          NPM_VERSION: ${{ steps.toolchain.outputs.npm_version }}
           DRY_RUN: ${{ inputs.dry-run }}
         run: |
           {
@@ -162,6 +223,7 @@ jobs:
             echo "| Package | \`${NAME}@${VERSION}\` |"
             echo "| Tag | \`v${VERSION}\` on \`${GITHUB_SHA}\` |"
             echo "| Notes from | \`${PREVIOUS_TAG:-the first commit}\` |"
+            echo "| Packed with | Node \`${NODE_VERSION}\`, npm \`${NPM_VERSION}\` |"
             echo "| Dry run | ${DRY_RUN} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -198,23 +260,30 @@ jobs:
             exit 1
           fi
 
-      # npm publishes, so npm comes from here. No upgrade step: every Node
-      # 26.x bundles npm 11.12.1 or newer, above the 11.5.1 that trusted
-      # publishing needs, and `npm install -g npm@latest` would install a new
-      # major the day it ships — `.npmrc`'s `min-release-age` is a project
+      # npm publishes, so npm comes from here, from the same Node `pack` read
+      # off the lockfile. No upgrade step: every Node 26.x bundles npm 11.12.1
+      # or newer, above the 11.5.1 that trusted publishing needs, and
+      # `npm install -g npm@latest` would install a new major the day it ships
+      # (12.1.0 on 2026-09-22) — `.npmrc`'s `min-release-age` is a project
       # setting and is not read in global mode. The floor is asserted below
       # instead of assumed.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 26
+          node-version: ${{ needs.pack.outputs.node_version }}
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Check npm supports trusted publishing
+      - name: Check npm supports trusted publishing and is the npm that packed
+        env:
+          PACK_NPM_VERSION: ${{ needs.pack.outputs.npm_version }}
         run: |
           npm_version=$(npm --version)
           if [ "$(printf '%s\n' 11.5.1 "$npm_version" | sort -V | head -n 1)" != 11.5.1 ]; then
             echo "::error::npm ${npm_version} predates 11.5.1, the first release with trusted publishing."
+            exit 1
+          fi
+          if [ "$npm_version" != "$PACK_NPM_VERSION" ]; then
+            echo "::error::npm ${npm_version} would publish a tarball npm ${PACK_NPM_VERSION} packed."
             exit 1
           fi
 
@@ -222,6 +291,17 @@ jobs:
         with:
           name: package
           path: ${{ runner.temp }}/package
+
+      # The artifact carries a fixed name across attempts, so make sure the
+      # tarball is the version this attempt's `pack` outputs describe.
+      - name: Check the tarball is the version being released
+        run: |
+          manifest=$(tar -xzOf "${RUNNER_TEMP}/package/${TARBALL_NAME}" package/package.json)
+          packed="$(jq -r .name <<< "$manifest")@$(jq -r .version <<< "$manifest")"
+          if [ "$packed" != "${NAME}@${VERSION}" ]; then
+            echo "::error::The package artifact holds ${packed}, not ${NAME}@${VERSION}."
+            exit 1
+          fi
 
       # A 200 only says that something was published under this version, so
       # it is compared against the provenance attestation — which commit,
@@ -288,7 +368,13 @@ jobs:
             fi
             echo "::notice::${TAG} already points at ${GITHUB_SHA}; skipping the tag."
           else
-            gh api "repos/${GH_REPO}/git/refs" -f ref="refs/tags/${TAG}" -f sha="$GITHUB_SHA" > /dev/null
+            # Annotated, and naming this run: `pack` reads the message to tell
+            # a re-run of this run, which may converge on the tag, from any
+            # other run, which may not.
+            tag_object=$(gh api "repos/${GH_REPO}/git/tags" \
+              -f tag="$TAG" -f message="release.yml run ${GITHUB_RUN_ID}" \
+              -f object="$GITHUB_SHA" -f type=commit --jq .sha)
+            gh api "repos/${GH_REPO}/git/refs" -f ref="refs/tags/${TAG}" -f sha="$tag_object" > /dev/null
           fi
 
       - name: Create GitHub release
