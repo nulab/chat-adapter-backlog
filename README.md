@@ -70,7 +70,9 @@ The memory state forgets subscriptions on restart — fine for a first run, not
 for production (see **Delivery is at-least-once** below). `waitUntil` is what
 keeps a serverless invocation alive after the 200: the handler runs in the
 background, and without it nothing holds the function open, so the runtime may
-freeze it before the reply is posted.
+freeze it before the reply is posted. On a long-lived Node server nothing
+freezes, so `waitUntil` can be omitted; on another serverless platform, pass
+that runtime's own.
 
 Every field falls back to an environment variable, so
 `createBacklogAdapter()` with no argument works when the environment is set.
@@ -516,7 +518,10 @@ await thread.post(ping);
 
 The annotated variable is not ceremony: an object literal passed straight to
 `post()` — `satisfies` included — is checked against `post()`'s own parameter
-type, which knows no Backlog extras, and fails excess-property checking.
+type, which knows no Backlog extras, and fails excess-property checking. Nor
+can the annotation be dropped: an unannotated variable compiles too, but then
+nothing type-checks the extras themselves, so a misspelt key or a string id
+reaches Backlog unnoticed.
 
 `notifiedUserId` is independent: it notifies without leaving a visible `@name`.
 Backlog silently drops ids that are not project members.
@@ -542,8 +547,9 @@ const channel = chat.channel('backlog:example.backlog.com:500');
 await channel.post(issue);
 ```
 
-The extras go through an annotated variable for the same reason as under
-**Mentions**.
+The extras go through an annotated variable for the same two reasons as under
+**Mentions**: `post()` rejects them as a literal, and only the annotation
+type-checks them.
 
 ## Errors
 
