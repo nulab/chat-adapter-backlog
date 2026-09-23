@@ -33,7 +33,7 @@ The project is done when all of the following hold on `main`:
 6. `0.1.0` is published from `release.yml` and installs into a consumer that
    imports `createBacklogAdapter` under Node 20 (§7).
 
-**Status, 2026-09-26** (`main` at `62289d6`): 1, 2, 4 and 5 hold. 3 holds in
+**Status, 2026-09-26** (`main` at `25cf0ec`): 1, 2, 4 and 5 hold. 3 holds in
 its first half only — `pnpm test` needs no network and the live suite skips
 itself, but it has never been run against a real space, which needs the
 credentials issue #52 is waiting on. 6 holds in its second half: the
@@ -422,8 +422,8 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
 - **P7c — decided against.** No live job exists in `.github/workflows/ci.yml`
   and none reads a `BACKLOG_*` secret; the suite is opt-in, so nothing in CI
   depends on it (spec §15.1 row 19).
-- **P7d — not started.** Issue **#53** carries it, and the repository's
-  visibility has to be settled first (spec §15.4).
+- **P7d — not started.** Issue **#53** carries it. Visibility is settled as
+  a premise (spec §15 row 28).
 
 - **Acceptance**: `npm pack --dry-run` contains only `dist/`, `package.json`,
   `README.md`, `LICENSE`; a scratch consumer on Node 20 imports the package
@@ -503,13 +503,15 @@ are in DEVELOPMENT.md ("Versioning"). `package.json` stays at `0.0.0` on
 `release.yml` with `minor` from the implicit `v0.0.0`. The dependency ranges
 are D15's and are independent of the version number.
 
-Whether the *mechanism* around that number should change before the first
-release is a separate, open proposal:
-[docs/plans/release-mechanism.md](./release-mechanism.md) verifies what
-trusted publishing and provenance actually require, evaluates release-please
-and its alternatives against D15, and recommends keeping the
-`workflow_dispatch` while making the publish job re-runnable. Nothing in it is
-adopted yet; until it is, this section and P7d describe what happens.
+The mechanism around that number was reconsidered before the first release
+in [docs/plans/release-mechanism.md](./release-mechanism.md), which verifies
+what trusted publishing and provenance actually require and evaluates
+release-please and its alternatives against D15. Its candidate A was accepted
+on 2026-09-23 — keep the `workflow_dispatch` and make the publish job converge
+so that a failed run finishes by being re-run — and deriving the bump from the
+commits (its F) is deferred, so the bump is still picked by hand. The
+implementation is #106; until it merges, this section and P7d describe what
+`release.yml` does.
 
 ## 8. Out of scope / later
 

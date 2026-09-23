@@ -7,14 +7,26 @@ choice) was written before anybody asked whether a release-PR tool would suit
 this repository better.
 
 **This document changes no workflow.** It records what was verified, what the
-choice actually turns on, one recommendation, and the decisions that are the
-maintainer's. The implementation is a separate PR, after the recommendation is
-accepted or replaced. Issue **#53** is the first run of whatever comes out of
-this; two of the three weaknesses it lists are solved here by design rather
-than patched (§6).
+choice actually turns on, one recommendation, and the decisions that were the
+maintainer's. The implementation is a separate PR, #106. Issue **#53** is the
+first run of whatever comes out of this; two of the three weaknesses it lists
+are solved here by design rather than patched (§6).
 
-Everything below was checked on **2026-09-09**. Where a claim could not be
-established from a primary source, it says so instead of guessing.
+**Status: accepted 2026-09-23 — candidate A, with F deferred.** The maintainer
+delegated the choice, and §4's recommendation was accepted as far as A goes:
+`release.yml` keeps `workflow_dispatch`, converges instead of sequencing, and
+gains a `dry-run` input. F — deriving the bump from the commits — is not taken
+for now, so the bump stays a human's choice. The §9 items resolve as
+recommended: the `package.json`-stays-at-`0.0.0` practice stands, the first
+publish uses a temporary granular token, and `production` carries no required
+reviewers.
+
+Everything below was checked on **2026-09-09**, except where a passage names
+**2026-09-23**: a review on that date corrected the Node and npm facts (§1.4,
+§6.2), the environment and re-run facts (§5, §6.1), and the guard design
+(§6.1). Line references (`release.yml:86`, `DEVELOPMENT.md:432-435` and the
+like) are to the files on `main` before #106 changes them. Where a claim could
+not be established from a primary source, it says so instead of guessing.
 
 ## 1. Verified premises
 
@@ -201,11 +213,20 @@ independent; only the *public repository* requirement is shared.
   and Node 26 already clears both.** Measured against
   [`https://nodejs.org/dist/index.json`](https://nodejs.org/dist/index.json)
   on 2026-09-09: **v26.0.0 (2026-05-05) bundles npm 11.12.1**, and the newest
-  26.x, **v26.8.1 (2026-08-26), bundles npm 11.19.0**. Every 26.x release
-  clears 11.5.1, and every release from v26.3.1 (npm 11.16.0) clears 11.15.0
-  as well. `actions/setup-node` with `node-version: 26` resolves the newest
-  26.x, so the job already has an npm new enough to publish through trusted
-  publishing before `release.yml:86` runs. §6.2 is what follows from that.
+  26.x on that day, **v26.8.1 (2026-08-26), bundles npm 11.19.0**. Every 26.x
+  release clears 11.5.1, and every release from v26.3.1 (npm 11.16.0) clears
+  11.15.0 as well, so the job already has an npm new enough to publish through
+  trusted publishing before `release.yml:86` runs.
+- **But `node-version: 26` is not the Node this repository pins.** Re-measured
+  2026-09-23: `actions/setup-node` with `node-version: 26` resolves the newest
+  26.x, which is now **v26.10.0 (2026-09-21, npm 11.19.1)** — two days old, so
+  younger than the three-day `minimumReleaseAge` every other tool here waits
+  out — while `pnpm-lock.yaml` pins **Node 26.8.1 (npm 11.19.0)** through
+  `devEngines.runtime`. The major-only spec makes the packer and the publisher
+  a function of the day the job runs, and two jobs of one run can even get
+  different ones. Meanwhile `npm@latest`, which `release.yml:86` installs, is
+  **12.1.0** (published 2026-09-22): a new major the step would have put into
+  the publishing job on its first run. §6.2 is what follows from both.
 
 ### 1.5 How npm matches a workflow to a trusted-publishing configuration
 
@@ -227,12 +248,15 @@ read 2026-09-09):
   `release.yml` *calls* `ci.yml` but publishes from a job of its own, so the
   claim names `release.yml` and this is not a problem — but it means the
   publish step must never be moved into a called workflow.
-- Relatedly, `id-token: write` has to be granted to **both** the calling
-  workflow's job and the called workflow, since a called workflow cannot hold
-  a permission its caller did not grant. Today `release.yml` grants it on the
-  `publish` job, which is where the publish runs, and `ci.yml` needs none —
-  but a reorganisation that moves publishing across that boundary has to move
-  the permission with it.
+- Relatedly, if publishing ever ran inside a called workflow, the caller would
+  have to grant `id-token: write`: a called workflow cannot elevate beyond what
+  its caller passes — "The `GITHUB_TOKEN` permissions passed from the caller
+  workflow can be only downgraded (not elevated) by the called workflow"
+  ([Reusing workflow configurations](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations),
+  read 2026-09-23). Today `release.yml` grants it on the `publish` job, which
+  is where the publish runs, and `ci.yml` needs none — but a reorganisation
+  that moves publishing across that boundary has to move the permission with
+  it.
 
 ## 2. What the choice actually turns on
 
@@ -247,7 +271,7 @@ semver, starting at `0.1.0`, superseding #17's proposal to track `chat`'s
 line — and it says nothing about `package.json`. The rest of the practice —
 **`package.json` stays at `0.0.0` on `main`, git tags are the version of
 record, and the bump is never committed back** — is recorded in
-`DEVELOPMENT.md:423-426` and in the comment at `release.yml:71-78`, not in the
+`DEVELOPMENT.md:432-435` and in the comment at `release.yml:71-78`, not in the
 register at all.
 
 It is that last, workflow-level half that the release-PR model collides with,
@@ -331,7 +355,7 @@ separable from A on purpose — A is worth doing whether or not F is.
 2. Keep `release.yml` triggered by `workflow_dispatch`, publishing from a job
    in that same file.
 3. Restructure the publish job so that it **converges rather than sequences**
-   (§6.1), add a `dry-run` input, and pin npm (§6.2).
+   (§6.1), add a `dry-run` input, and resolve the npm step (§6.2).
 4. Optionally add the bump-derivation script (F), making the version input an
    override rather than a requirement.
 5. Keep `.github/release.yml`'s label categories as the only changelog. Do not
@@ -347,7 +371,7 @@ position — the argument for it is that `package.json` on `main` reading
 `0.0.0` is a small lie that every consumer reading the repository has to be
 told about, and a `CHANGELOG.md` is readable without GitHub. Taking it means
 deciding, in one go: overturn the `package.json`-stays-at-`0.0.0` practice
-(per §2 that lives in `DEVELOPMENT.md:423-426` and `release.yml:71-78`, so it
+(per §2 that lives in `DEVELOPMENT.md:432-435` and `release.yml:71-78`, so it
 is those two that change — row 27's "the package's own semver from `0.1.0`"
 and D15's dependency ranges both survive untouched, and the newly-made
 decision wants a register row of its own), drop or subordinate the label
@@ -418,8 +442,18 @@ recommended.
 `release.yml` and, if the `production` environment is kept, the environment
 name spelled identically on both sides (§1.5).
 
-**Step 4 — create the `production` environment.** It does not exist yet, and
-`release.yml` declares it; a job naming a missing environment does not run.
+**Step 4 — create the `production` environment, before step 2's publish.** It
+does not exist yet, and `release.yml` declares it. A missing environment does
+**not** stop the job; GitHub creates it on the spot: "Running a workflow that
+references an environment that does not exist will create an environment with
+the referenced name", and "the newly created environment will not have any
+protection rules or secrets configured"
+([Managing environments for deployment](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
+read 2026-09-23). So the failure is not a refusal but an unprotected
+`production` with no bootstrap secret in it. That is why the step matters, and
+why it is numbered here but has to be done first: the environment, its
+deployment-branch policy of `main`, and step 2's token secret must all exist
+before the first run that is not a dry run.
 Whether it should also carry **required reviewers** is a decision of its own,
 and §9 item 4 recommends against it for `0.1.0`: the environment is the right
 *place* for a human gate on publishing — better than a release PR — but the
@@ -466,7 +500,14 @@ degenerating to the release currently being made. So step 0 comes first:
    **that tag is the target version**. Only when there is none is the target
    computed from the last tag plus the bump. The version is then an invariant
    of the input rather than a reading of the state the job is about to
-   change.
+   change. Computing it from the last tag rests on one more assumption, so
+   **assert it rather than trust it** (added 2026-09-23): the last tag's
+   version must exist on the registry. A tag with no published version behind
+   it — pushed by hand, or left over from anything that tags before it
+   publishes — would otherwise become the base of the bump, and the version it
+   names would be skipped as silently as in the tag-first ordering above.
+   Fail and name the tag. For the same reason, a tag for the *computed*
+   version that already exists on another commit is a failure, not a target.
 1. Derive `PREVIOUS_TAG` for the notes range from the last tag **excluding any
    tag on HEAD**, for the same reason.
 2. Build.
@@ -549,7 +590,7 @@ constraint on the recovery, not a detail of it: a fresh `workflow_dispatch`
 after `main` has moved is a different input, so step 0 sees a different HEAD,
 derives a different bump, and can publish a version that is not the one left
 untagged. Recovery from a partial failure is the re-run button on the failed
-run; anything else is a new release.
+run, within the window below; anything else is a new release.
 
 **And a convergence that has nothing to do must say so.** Step 0 has a
 back side: dispatch `patch` against a commit that is already released and
@@ -561,42 +602,88 @@ exist before. Six weeks later, reading the run list during an incident,
 nobody can tell that run from one that worked.
 
 The distinction the workflow needs is one the section above already draws in
-prose, and GitHub happens to expose it: **`github.run_attempt`** "begins at 1
-for the workflow run's first attempt, and increments with each re-run", while
-`github.run_id` "does not change if you re-run the workflow run"
+prose: *this* run's tag versus somebody else's. GitHub exposes the identity it
+needs — `github.run_id` "does not change if you re-run the workflow run"
 ([Contexts](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts),
-read 2026-09-09). A re-run is therefore machine-detectable, and it is exactly
-the case where converging silently is right. So:
+read 2026-09-09) — so **the guard keys on who owns the tag**. The run that
+creates a tag creates it *annotated*, with a message that names its own run
+id, and every later reading of that tag can ask whether it was made by the
+run now looking at it. A re-run keeps its run id, so it recognises its own
+tag; a new dispatch has a new one, so it does not. So:
 
-- **`run_attempt == 1` and step 0 found a tag on the release commit → fail,
-  loudly, naming the tag and the published version.** A first attempt against
-  an already-tagged commit is an operator error — a release asked for with
-  nothing new to release — and the useful thing to do is say which version
+- **Step 0 found a tag on the release commit that this run did not create →
+  fail, loudly, naming the tag, and say to re-run the run that created it.**
+  A new run against an already-tagged commit is an operator error — a release
+  asked for with nothing new to release, or a recovery attempted by dispatch
+  instead of by re-run — and the useful thing to do is say which version
   already covers this commit rather than to succeed at nothing. Note that this
   guard is *broader* than the fully-released case, and deliberately: a fresh
   dispatch onto a commit left half-released by an earlier failed run is
   precisely the mistake the paragraph above warns about, and the same
   condition catches it.
-- **`run_attempt > 1` → converge and succeed.** This is the recovery path, and
-  skipping the steps that already took effect is the whole point.
+- **The tag names this run → converge and succeed.** This is the recovery
+  path, and skipping the steps that already took effect is the whole point.
+
+The first draft of this section keyed the guard on `github.run_attempt`
+instead — attempt 1 fails on a tagged commit, a re-run converges. The review
+of 2026-09-23 found the hole in that: re-running the attempt the guard itself
+failed produces attempt 2 of a run that owns nothing, and it converges green
+having done nothing — exactly the useless report the guard exists to prevent.
+Ownership has no such hole, because re-running the refused run does not
+change whose tag it is.
 
 Two costs, both worth paying and both worth writing into the workflow rather
-than leaving to be met. Re-running is only possible while the run still
-exists — GitHub retires runs on the repository's retention setting — so the
-guard needs an escape hatch or it becomes a trap: a boolean
-`allow-released-commit` input that a human sets to recover a run that can no
-longer be re-run. And a legitimate "publish this existing tag" flow, if one is
-ever wanted, arrives on attempt 1 with a tag on HEAD and would be refused; the
-same input covers it. Recommended, with those two riders.
+than leaving to be met. First, **re-running has a deadline**: GitHub lets a
+run, its failed jobs or specific jobs be re-run "up to 30 days after its
+initial run"
+([Re-running workflows and jobs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs),
+read 2026-09-23), so past thirty days the recovery path is gone. Second, a
+legitimate "publish this existing tag" flow, if one is ever wanted, arrives
+with a tag on HEAD that this run did not create and would be refused. One
+boolean input, `allow-released-commit`, covers both: a human sets it to let a
+new run converge on a tag it does not own.
+
+That escape hatch is narrower than it sounds, and the limit is worth stating
+before somebody needs it. A `workflow_dispatch` on `main` checks out the
+branch's current HEAD, not the commit the failed run released. So
+`allow-released-commit` helps only **while `main` still points at the tagged
+commit**. Once `main` has moved, a fresh dispatch finds no tag on its HEAD,
+computes a new version from the last tag, and either fails step 0's registry
+assertion (the last tag was never published) or releases the new commits as
+the next version — neither of which finishes the old release. Beyond both the
+thirty days and a moved `main`, **recovery is by hand**, and it is short
+because only the two GitHub-side writes can be missing (publish comes first):
+
+- *published, no tag*: the attestation (step 3) names the commit that was
+  published; create the annotated tag on that commit through the Git refs API
+  or `git tag -a` and `git push`, then do the next bullet;
+- *published and tagged, no release*: `gh release create <tag> --verify-tag
+  --generate-notes`, adding `--notes-start-tag <previous tag>` when there is
+  one.
+
+A tag with no published version behind it cannot be left by the workflow
+under publish-before-tag; if one exists it was pushed by hand, step 0's
+registry assertion stops every later run on it, and the fix is to delete that
+tag, since nothing can have been published or depended on under its version.
 
 With those three, every partial failure recovers by re-running, the ordering
 stops mattering, and publish-before-tag can stay. Two concurrent releases are
 a separate question, and their safety comes from somewhere else: the existing
 `concurrency: group: release, cancel-in-progress: false` serialises them, so
-the second run derives the next version rather than racing on the same one,
-and the registry check catches a double publish of one version. That is the
+the second run starts only after the first has finished. On the same HEAD it
+then finds the first run's tag, which it does not own, and fails at the guard;
+on a HEAD that has moved on, it derives the next version from that tag. The
+registry check catches a double publish of one version either way. That is the
 concurrency group's guarantee, not the convergence's — if the group is ever
 removed, this section does not cover what happens.
+
+One case the guard does not see, recorded so nobody believes it does: a
+**fresh dispatch onto a commit that was published but never tagged** finds no
+tag on HEAD, so there is nothing to own. With the same bump it computes the
+same version, the attestation matches, and it finishes the old release —
+benign. With a different bump it publishes a second version of the same
+commit. The rule stays what it was: a partial failure is recovered by
+re-running its run.
 
 One smaller thing falls out of the same restructuring: `git describe --tags
 --abbrev=0` returns the most recent tag *reachable from HEAD*, which is not
@@ -623,19 +710,39 @@ publishing floor and the 11.15.0 `npm trust` floor. The upgrade step is not
 what makes trusted publishing work today, and a reader who trusts the comment
 will believe removing it breaks publishing.
 
+**And `@latest` is now concretely wrong, not only unpinned.** Re-measured
+2026-09-23 (§1.4): `npm@latest` is **12.1.0**, a new major published the day
+before, so the step as written would have put an npm major nobody here has
+run into the job that signs the first provenance attestation. `.npmrc`'s
+`min-release-age` would not have held it back either: a project `.npmrc` "is
+not read in global mode, such as when running `npm install -g`"
+([npmrc](https://docs.npmjs.com/cli/v11/configuring-npm/npmrc), read
+2026-09-23).
+
 So the recommendation is not "pin the version" but a choice between two, and
 either is defensible:
 
 - **Drop the step**, and replace the comment with what actually holds the
-  floor: `actions/setup-node` with `node-version: 26` supplies npm ≥ 11.12.1,
-  above the 11.5.1 requirement. Fewer moving parts, and one less unpinned
-  network install in the publishing job. The exposure is that the floor is
-  then implicit in a major-version pin — a hypothetical Node 26.x that shipped
-  an older npm would break it silently.
+  floor: the npm bundled with Node 26 is ≥ 11.12.1, above the 11.5.1
+  requirement. Fewer moving parts, and one less unpinned network install in
+  the publishing job. The exposure is that the floor is then implicit in the
+  Node version — a hypothetical Node 26.x that shipped an older npm would
+  break it silently — so assert it in the job rather than imply it.
 - **Keep it as a reproducibility pin**, at an exact version rather than
   `@latest` — the npm bundled with the pinned Node is the natural value — with
   a comment that says it is there to make the toolchain that signs provenance
   identical run to run, *not* to reach a floor the runtime misses.
+
+Either way, **take the Node version from the lockfile, not from
+`node-version: 26`** (added 2026-09-23). `setup-node` resolves a major-only
+spec to the newest release on the day, which on 2026-09-23 was a two-day-old
+v26.10.0 that the three-day `minimumReleaseAge` would have kept out of every
+other install here, while `pnpm-lock.yaml` pins 26.8.1. Reading the version
+pnpm provisions (`pnpm exec node --version` after a frozen install) and handing
+that exact version to `setup-node` makes the npm that packs and the npm that
+publishes the same one, in every job and on every re-run — which is also what
+the pack-determinism caveat in §6.1 asks for. The npm version itself can then
+be carried from the packing job to the publishing one and asserted equal.
 
 Either way the comment at `release.yml:83-84` is wrong as it stands and is
 corrected in the same change; §7 lists it, and `DEVELOPMENT.md`'s Releasing
@@ -657,8 +764,8 @@ handled.**
 
 ## 7. Migration
 
-If the recommendation is accepted, the follow-up PR is `ci(release)` or
-`fix(release)` scoped, and it:
+The recommendation was accepted (see the status at the top), and the
+follow-up PR is #106, `fix(release)` scoped. It:
 
 **Adds**
 
@@ -672,14 +779,17 @@ If the recommendation is accepted, the follow-up PR is `ci(release)` or
   `release.yml:83-84`**, which today asserts that the npm bundled with Node 26
   predates 11.5.1. It does not (§1.4), and leaving the claim in place while
   changing the step around it would preserve the error that made the step look
-  load-bearing;
+  load-bearing — and `setup-node` given the lockfile's Node version rather
+  than `26` (§6.2);
 - step 0 of §6.1 — the target version taken from a tag already on the release
-  commit when there is one — and a `PREVIOUS_TAG` derivation that excludes
-  tags on HEAD;
-- the `run_attempt` guard of §6.1: a first attempt against an already-tagged
-  commit fails loudly, a re-run converges, and an `allow-released-commit`
-  boolean input exists so the guard cannot trap a run that is too old to
-  re-run;
+  commit when there is one, the assertion that the last tag's version exists
+  on the registry, and the refusal of a computed version whose tag sits on
+  another commit — and a `PREVIOUS_TAG` derivation that excludes tags on HEAD;
+- the ownership guard of §6.1: the tag is created annotated with a message
+  naming the run, a run that finds a tag on HEAD it did not create fails
+  loudly, a re-run of the creating run converges, and an
+  `allow-released-commit` boolean input exists so the guard cannot trap a run
+  that is too old to re-run, while `main` still points at the tagged commit;
 - the attestation comparison of §6.1 step 3 (source commit from
   `/-/npm/v1/attestations/<name>@<version>`), rather than a digest comparison
   that would rest on build and pack reproducibility neither of which is
@@ -707,35 +817,18 @@ If the recommendation is accepted, the follow-up PR is `ci(release)` or
   scope (§5 step 1), and that trusted publishing **cannot** be configured
   before the package exists, so the first release authenticates differently
   (§5 step 2). Both belong next to the existing two, which is where a releaser
-  will look.
-- `docs/specs/adapter.md` §15.4 item 28: it recommends making the repository
-  public and calls the alternative a cost. Per §1.3 the alternative is not
-  "costs its provenance attestation", it is "provenance is impossible" —
-  tighten the wording and cite the npm rule.
+  will look. So does the order §5 step 4 found: the environment, its `main`
+  policy and the token secret exist before the first non-dry run.
 - `docs/plans/adapter-implementation.md` §7 and P7d: P7d says "run `release.yml`
-  with `minor`". Under F there is no bump input to pick, and under §5 the
-  first run is authenticated differently. Update both.
-- This file: mark the recommendation accepted or replaced, and record which.
+  with `minor`", and under §5 the first run is authenticated differently.
+  Update both.
 
-**Where #99 lands, without deciding it here.** Issue #99 — the published
-manifest's `preinstall: only-allow pnpm` makes an npm consumer's install exit
-127 — was opened after this document and is a `v0.1.0` blocker of its own. Its
-recommended fix (option 1, express the constraint with
-`devEngines.packageManager`) touches `package.json` and not the release path,
-so it needs nothing from this design. Its option 2 — stripping the script from
-the manifest just before publishing (`npm pkg delete scripts.preinstall`) —
-does land here, and this design has two things to say about it if it is taken:
-
-- the mutation belongs **inside the converging publish step of §6.1, before
-  the pack**, not as a step ahead of it, so that a re-run applies it
-  identically; a manifest edit that runs once outside the idempotent region is
-  exactly the kind of state a re-run would skip.
-- the `dry-run` input (§6.2, §7) is the natural place to **assert** the result:
-  a packed manifest carrying no `preinstall` or `postinstall` is a
-  one-line check on the tarball, and it fails before the registry is touched.
-
-Whichever option #99 takes, that assertion is worth having — it also catches a
-future script added to `package.json` without anyone thinking about consumers.
+**#99 is closed by #100**, which stopped shipping `scripts.preinstall`, and
+`scripts/check-published-scripts.mjs` now runs first in `pnpm build` and fails
+it on any `preinstall`, `install` or `postinstall` in `package.json`, which
+`npm publish` ships verbatim. The release path needs nothing further for it:
+the build `release.yml` runs is that build, so neither the manifest mutation
+nor the packed-manifest assertion this section once proposed is wanted.
 
 Nothing in `src/` changes, and `package.json` is untouched — under the
 recommendation it keeps its `0.0.0`.
@@ -801,6 +894,11 @@ compensating action running in exactly the circumstances where things are
 already failing.
 
 ## 9. Left to the maintainer
+
+**Resolved 2026-09-23** (see the status at the top): 1 — yes, the practice
+stands; 3 — the temporary granular token; 4 — no required reviewers; 5 — not
+now, F is deferred. The items are kept as written so the reasoning stays next
+to the answer.
 
 1. **Does the `package.json`-stays-at-`0.0.0` practice stand?** (§2, §4 —
    and note §2 on why that is not the same as reopening §15 row 27).
@@ -868,6 +966,22 @@ All read 2026-09-09.
   and a version number is never reusable.
 - [Contexts](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts) —
   `github.run_attempt` increments per re-run; `github.run_id` does not.
+
+Read 2026-09-23, for the review that corrected the passages dated so:
+
+- [Managing environments for deployment](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) —
+  a workflow naming a missing environment creates it, with no protection
+  rules or secrets.
+- [Re-running workflows and jobs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs) —
+  "up to 30 days after its initial run".
+- [Reusing workflow configurations](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations) —
+  a called workflow can only downgrade the caller's `GITHUB_TOKEN`
+  permissions.
+- [npmrc](https://docs.npmjs.com/cli/v11/configuring-npm/npmrc) — the
+  project `.npmrc` is not read by `npm install -g`.
+- [`https://nodejs.org/dist/index.json`](https://nodejs.org/dist/index.json) —
+  v26.10.0 (2026-09-21) bundles npm 11.19.1; `https://registry.npmjs.org/npm`
+  — `latest` is 12.1.0, published 2026-09-22.
 - [npm-pack](https://docs.npmjs.com/cli/v11/commands/npm-pack) and
   [npm/npm#17412](https://github.com/npm/npm/issues/17412) — no documented
   determinism guarantee, and the normalisation request is unresolved in the
@@ -884,4 +998,6 @@ Measurements taken for this document, rather than read:
 - **The `nulab` npm organisation**, 2026-09-09: fourteen packages, four of
   them scoped.
 - **The npm bundled with Node 26**, 2026-09-09 from
-  `nodejs.org/dist/index.json`: v26.0.0 → 11.12.1, v26.8.1 → 11.19.0.
+  `nodejs.org/dist/index.json`: v26.0.0 → 11.12.1, v26.8.1 → 11.19.0;
+  re-measured 2026-09-23: v26.10.0 → 11.19.1, against the lockfile's pinned
+  26.8.1.
