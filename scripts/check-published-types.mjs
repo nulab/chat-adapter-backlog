@@ -99,17 +99,11 @@ if (leaked.length > 0) {
  * that `dist/` does not contain.
  *
  * tsdown.config.ts splits the build into a JS pass and a declaration-only
- * pass precisely so this never happens (#107): rolldown-plugin-dts's fake-js
- * `outputOptions` hook sets a bundled `.d.ts`'s own sourcemap flag to
- * `options.sourcemap || sourcemap` -- the build's own top-level `sourcemap`
- * OR'd with the dts plugin's resolved one -- so a single build whose
- * top-level `sourcemap: true` serves the real `index.js.map` also forces a
- * `sourceMappingURL` comment onto `index.d.ts`, regardless of
- * `dts.sourcemap`, which only ever controlled the matching `.d.ts.map` file
- * (see tsdown.config.ts for the full mechanism). This check is the
- * regression tripwire for that split: if a future config change or tsdown
- * version reintroduces one build doing both, `pnpm build` fails loudly here
- * instead of publishing a broken pointer again.
+ * pass to keep this from happening -- see the comment there for why a
+ * single build can't. This check is the regression tripwire for that split:
+ * if a future config change or tsdown version reintroduces one build doing
+ * both, `pnpm build` fails loudly here instead of publishing a broken
+ * pointer again.
  */
 const SOURCE_MAPPING_URL_PATTERN = /\/\/# sourceMappingURL=(\S+)\s*$/;
 

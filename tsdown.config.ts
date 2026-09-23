@@ -27,29 +27,20 @@ export default defineConfig([
     },
   },
   {
-    // A second, declaration-only build rather than one config with
-    // `dts: { sourcemap: false }` (what #107 originally shipped, and had to
-    // correct): rolldown-plugin-dts's fake-js `outputOptions` hook sets the
-    // bundled `.d.ts`'s own sourcemap flag to `options.sourcemap || sourcemap`
-    // -- the *build's* top-level `sourcemap` OR'd with the dts plugin's own
-    // resolved one (rolldown-plugin-dts@0.27.14 dist/index.mjs ~409). In one
-    // config, `sourcemap: true` above -- needed for `index.js.map` -- is that
-    // same build's flag for the declaration pass too, so it always wins the
-    // OR: `index.d.ts` gets a `//# sourceMappingURL=index.d.ts.map` comment
-    // no matter what `dts.sourcemap` says, while `dts.sourcemap: false` only
-    // ever suppressed the matching `.d.ts.map` file -- so the comment shipped
-    // orphaned, pointing at a file the tarball never contains (#102).
-    // TypeScript 7's `tsgo` generator and `tsconfig.json`'s `declarationMap`
-    // are not part of this: disproved by running `tsgo` standalone with the
-    // plugin's own flags, and by flipping each independently.
-    //
-    // A second build whose own top-level `sourcemap` is `false` removes that
-    // side of the OR. `dts.sourcemap: false` here still has to be explicit,
-    // too: left unset, it falls back to tsconfig.json's `declarationMap: true`
-    // and the OR is true again -- this time matched by a real `.d.ts.map`,
-    // but one still unresolvable in the tarball, since it points at
-    // `../src/*.ts` and `files: ["dist"]` publishes no `src/` (#95, the
-    // reason this repo drops the map at all).
+    // A second, declaration-only build, not one config with
+    // `dts: { sourcemap: false }`: rolldown-plugin-dts's fake-js
+    // `outputOptions` hook sets a bundled `.d.ts`'s sourcemap flag to
+    // `options.sourcemap || sourcemap` -- the build's own top-level
+    // `sourcemap` OR'd with the dts plugin's resolved one
+    // (rolldown-plugin-dts@0.27.14 dist/index.mjs ~409). A single config's
+    // `sourcemap: true` above, needed for `index.js.map`, would win that OR
+    // for the declaration pass too and orphan a `sourceMappingURL` comment
+    // on `index.d.ts` regardless of `dts.sourcemap` (#107). `tsconfig.json`'s
+    // `declarationMap` and the `tsgo` generator are not the switch here.
+    // This build's own `sourcemap: false` removes that side of the OR;
+    // `dts.sourcemap: false` still has to be explicit too, or it falls back
+    // to `declarationMap: true` and reintroduces a real but still
+    // unresolvable `.d.ts.map` (#95).
     entry: { index: 'src/index.ts' },
     format: ['esm'],
     target: 'es2022',
