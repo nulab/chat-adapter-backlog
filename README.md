@@ -12,7 +12,7 @@ an agent replies by commenting.
 Releases on its own cadence, starting at `0.1.0`, and still pre-1.0: while the
 major is `0`, a breaking change to the public surface ships as a minor release.
 
-Feature-complete against the adapter contract of `chat@4.39.0`: all 17 required
+Feature-complete against the adapter contract of `chat@4.40.0`: all 17 required
 members are present, plus 10 of the 27 optional ones. A few of them go as far
 as Backlog allows and no further — a reaction is a star, and there is no typing
 indicator to show. What each member does, and every place Backlog itself stops
@@ -28,7 +28,7 @@ nothing about installing or using the package.
 pnpm add @nulab/chat-adapter-backlog chat
 ```
 
-`chat` is a peer dependency at `^4.39.0` — a caret range, so upgrading the core
+`chat` is a peer dependency at `^4.40.0` — a caret range, so upgrading the core
 does not require a matching adapter release. Node 20 or newer.
 
 ## Quick start
@@ -344,8 +344,7 @@ Limitations worth knowing before you build on this:
   everything else, so the failure reaches this adapter as a stream with no
   content and lands in Backlog as a comment holding one space. Iterate
   `fullStream` yourself if you want the error to surface (measured against
-  Chat SDK 4.40 and AI SDK 7 on 2026-09-06; the chunk filter is identical in
-  the pinned 4.39.0).
+  Chat SDK 4.40 and AI SDK 7 on 2026-09-06).
 - **Backlog notation is not Markdown.** A project set to `backlog` uses a
   different syntax, and the converter is deliberately lossy in two places:
   inline code becomes plain text and table column alignment is dropped.

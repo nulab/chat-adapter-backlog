@@ -56,7 +56,7 @@ between here and the first release.
 - Library discipline: no `process.exit`, no swallowed send errors, no mutation
   of the caller's message, no hard-coded host / limit / activity-type name, no
   skipped webhook verification. No `console.*` in shipped code.
-- `chat@4.39.0` is the contract; anything read from its `.d.ts` beats the docs
+- `chat@4.40.0` is the contract; anything read from its `.d.ts` beats the docs
   page. Node 20 APIs only in `src/`.
 - Comments say Why-not; tests say What; commit bodies say Why. A Backlog
   behaviour that the code depends on is cited to a developer.nulab.com URL or
@@ -459,7 +459,7 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
 | Project-key renames | Broken references | Numeric ids only (D8); `issueKey` appears only in metadata and URLs. |
 | Multi-space id collisions | Cross-space dedupe/routing errors | Host in every thread, channel, message and user id (D8); test "same payload to two hosts yields two threads". |
 | Mention false positives (hand-typed `@Chatbot`, name collision) | Bot answers when not asked | Documented; left boundary in the regex; assignment-based mention as the reliable trigger. |
-| `chat` minor release changes the `Adapter` type | Typecheck breaks on `^4.39.0` consumers | Peer range per D15; Dependabot bumps `chat` dev dependency weekly so drift surfaces in CI, not at a consumer. |
+| `chat` minor release changes the `Adapter` type | Typecheck breaks on `^4.40.0` consumers | Peer range per D15; Dependabot bumps `chat` dev dependency weekly so drift surfaces in CI, not at a consumer. |
 | Stack rebases after squash merges | Conflicts, duplicated diffs | Depth ≤ 3; record parent tips; `git rebase --onto`; merge P1 promptly. |
 
 ## 6. Decisions this plan assumed

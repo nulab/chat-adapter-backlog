@@ -339,7 +339,7 @@ Read before implementing:
 
 The interface is `Adapter<TThreadId, TRawMessage>`, shipped in `chat`'s own
 `.d.ts` — read it there rather than trusting the docs page, which is not fully
-in sync. As of `chat@4.39.0` it has **17 required members**:
+in sync. As of `chat@4.40.0` it has **17 required members**:
 
 - Properties: `name`, `userName`
 - Lifecycle: `initialize(chat)`
@@ -378,8 +378,8 @@ Conventions to follow:
 - **Dependency on `chat`:** the published docs prescribe
   `"peerDependencies": { "chat": "^4.0.0" }` plus
   `"dependencies": { "@chat-adapter/shared": "^4.0.0" }`, while every
-  first-party `@chat-adapter/*` package (checked: `@chat-adapter/github@4.39.0`)
-  instead pins both exactly in `dependencies` (`"chat": "4.39.0"`). The exact
+  first-party `@chat-adapter/*` package (checked: `@chat-adapter/github@4.40.0`)
+  instead pins both exactly in `dependencies` (`"chat": "4.40.0"`). The exact
   pin only works inside Vercel's release-locked monorepo; a package released on
   its own cadence should follow the docs and use the peer range. Whichever is
   chosen, record why in the commit.
@@ -388,7 +388,7 @@ Conventions to follow:
 
 If `stream()` is left unimplemented, the SDK falls back to posting a message
 and editing it every `streamingUpdateIntervalMs`, which defaults to **500 ms**
-(`chat@4.39.0`). Against Backlog that is roughly 120 edits per minute into a
+(`chat@4.40.0`). Against Backlog that is roughly 120 edits per minute into a
 150-per-minute Update bucket — one streamed reply can exhaust the user's write
 quota. `@chat-adapter/github` overrides `stream()` for exactly this reason: it
 accumulates the whole `textStream` and calls `postMessage` once. Do the same
@@ -529,7 +529,7 @@ is no longer a change invisible to consumers (docs/specs/adapter.md §3.1,
 
 - Vitest, colocated `src/**/*.test.ts`. Mock the platform client with
   `vi.mock` — not msw, not nock.
-- Use `@chat-adapter/tests` (v4.39.0). Verified exports: the contract suites
+- Use `@chat-adapter/tests` (v4.40.0). Verified exports: the contract suites
   `threadIdContract`, `selfMessageContract` and `connectWebhookContract`; the
   factories `createMockAdapter`, `createMockChatInstance`, `createMockState`,
   `createTestMessage`, `createMockLogger` / `mockLogger`; plus subpaths
