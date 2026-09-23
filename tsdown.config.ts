@@ -8,10 +8,18 @@ export default defineConfig({
   // assembles the declaration pass's options without forwarding the top-level
   // flag, so `rolldown-plugin-dts` falls back to tsconfig.json's
   // `declarationMap` -- which is `true`. Saying it here is what drops
-  // `index.d.ts.map`, and it turns the map and the `sourceMappingURL` off
-  // together, so the `.d.ts` never points at a file that is not there. The
-  // map is unresolvable in the tarball either way: it refers to
-  // `../src/*.ts`, and `files: ["dist"]` publishes no `src/`.
+  // `index.d.ts.map` -- unresolvable in the tarball either way, since it
+  // refers to `../src/*.ts` and `files: ["dist"]` publishes no `src/`.
+  //
+  // It does not, on its own, drop the `sourceMappingURL` comment that would
+  // point at that map: with TypeScript 7 installed, rolldown-plugin-dts
+  // picks its `tsgo` generator, which shells out to the `tsgo` binary
+  // against tsconfig.json's own `declarationMap: true` and is only ever
+  // told to add `--declarationMap`, never to negate it, so the comment
+  // survives into `index.d.ts` regardless of this option (#102, measured
+  // with tsdown 0.22.14 and 0.23.x). scripts/strip-orphaned-sourcemap-urls.mjs
+  // removes it after tsdown runs, and scripts/check-published-types.mjs
+  // fails the build if it ever comes back.
   dts: { sourcemap: false },
   // tsdown turns this on by default whenever `platform` resolves to `node`,
   // which would publish `index.mjs`. Every `@chat-adapter/*` adapter ships a
