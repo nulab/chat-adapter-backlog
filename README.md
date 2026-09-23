@@ -520,8 +520,9 @@ The annotated variable is not ceremony: an object literal passed straight to
 `post()` — `satisfies` included — is checked against `post()`'s own parameter
 type, which knows no Backlog extras, and fails excess-property checking. Nor
 can the annotation be dropped: an unannotated variable compiles too, but then
-nothing type-checks the extras themselves, so a misspelt key or a string id
-reaches Backlog unnoticed.
+nothing type-checks the extras themselves. A misspelt key is silently ignored,
+and a mistyped value surfaces only at run time as a `ValidationError`; the
+annotation catches both at compile time.
 
 `notifiedUserId` is independent: it notifies without leaving a visible `@name`.
 Backlog silently drops ids that are not project members.
