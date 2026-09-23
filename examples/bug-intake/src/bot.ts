@@ -16,7 +16,7 @@ import {
   movedToDoneStatus,
   writeIntakeBody,
   type IntakePrompt,
-} from './intake';
+} from './intake.js';
 
 /**
  * Read and validated at module load. `INTAKE_CONTACT_USER_ID` especially: a
@@ -38,17 +38,22 @@ const env = z
   })
   .parse(process.env);
 
-const backlog = createBacklogAdapter();
+// Well under `maxDuration` in api/webhooks/backlog.ts. At the default of 60 s a
+// 429 can wait as long as the function may run, so the platform stops it
+// mid-wait — after the webhook has already answered 200 — and the reply is lost
+// without an error. Past 20 s the call rejects with `AdapterRateLimitError`
+// instead, which the Chat core logs as a message processing error.
+const backlog = createBacklogAdapter({ rateLimit: { maxWaitMs: 20_000 } });
 
-export const bot = new Chat({
+export const chat = new Chat({
   userName: backlog.userName,
   adapters: { backlog },
   state: createMemoryState(),
 });
 
-const logger = bot.getLogger('bug-intake');
+const logger = chat.getLogger('bug-intake');
 
-bot.onNewMessage(/[\s\S]*/, async (thread, message) => {
+chat.onNewMessage(/[\s\S]*/, async (thread, message) => {
   // Checked before the read below rather than relying on the core's own
   // self-message suppression: the bot comments on every issue it triages, and
   // each of those comments would otherwise cost a Get Issue to find out it is

@@ -417,8 +417,9 @@ root `lint` and `format:check` do cover `examples/`, because those need no
 install.
 
 The consequence is worth stating plainly: an example can break without CI
-saying so. It is checked by running `pnpm typecheck` inside its own directory
-after `pnpm install` there, which is what its README tells a reader to do.
+saying so. It is checked by running `npm install` and `npm run typecheck`
+inside its own directory, which is what its README tells a reader to do — npm,
+not pnpm, for the reason `examples/README.md` gives.
 
 ## Releasing
 
