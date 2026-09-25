@@ -334,8 +334,11 @@ Backlog has already published it in every rewritten comment body (D19).
 
 ### 3.4 Postable extras
 
-Consumers intersect these with a Chat SDK postable
-(`thread.post({ markdown, notifiedUserId: [1] } satisfies PostableMarkdown & BacklogPostableExtras)`).
+Consumers intersect these with a Chat SDK postable through an annotated
+variable (`const reply: PostableMarkdown & BacklogPostableExtras = { markdown, notifiedUserId: [1] }; await thread.post(reply);`,
+and `BacklogChannelPostableExtras` for `channel.post`). An object literal
+passed inline — `satisfies` included — stays fresh and fails `post()`'s
+excess-property check, because `post()`'s parameter type names no extras.
 Extras are read with a strict schema: a present-but-mistyped extra is a
 `ValidationError`, never silently dropped.
 
