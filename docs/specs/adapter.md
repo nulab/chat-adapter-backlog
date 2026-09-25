@@ -2323,7 +2323,8 @@ their numbers, so an existing "§15 question 7" reference still resolves;
 18–31 are decisions that until now lived only in a plan, or in no document at
 all. Every open item has a row, so the Verdict column alone is a complete
 answer to "what is left to decide". Reviewed 2026-09-08 against `main` at
-`72b0148`.
+`72b0148`; row 28 was settled on 2026-09-09 and §15.4 records when it left the
+open list.
 
 ### 15.1 Register
 
@@ -2356,7 +2357,7 @@ answer to "what is left to decide". Reviewed 2026-09-08 against `main` at
 | 25 | D-PR8 `fetchSubject().type` for a pull request | **confirmed** — `'pull_request'` | `subjectType: 'pull_request'` in `src/subject/pull-request.ts`, documented on `SubjectClient` (`src/subject/client.ts`); `src/reads.test.ts` and `src/subject/pull-request.test.ts` assert it (#22) |
 | 26 | D-PR9 root message part tag | **confirmed** — `r` for both kinds | `src/ids.ts` encodes and parses `r`; `src/ids.test.ts` and the `threadIdContract` roundtrip cover it (#22) |
 | 27 | D15 version line | **confirmed 2026-09-07** — the package's own semver, starting at `0.1.0`; #17, which had it track `chat`'s line, is superseded | #58; §7 of the implementation plan and DEVELOPMENT.md "Versioning". The dependency **ranges** are the other half of D15 and are unchanged (§14) |
-| 28 | Repository visibility at publish time | **open — blocks `0.1.0`** | §15.4 |
+| 28 | Repository visibility at publish time | **confirmed 2026-09-09** — the repository is public at publish time; the first publish authenticates with a token and later ones with Trusted Publishing | A maintainer decision rather than a code one, so its evidence is a prerequisite the maintainer supplies, not a module: recorded in §15.4 and in [docs/plans/release-mechanism.md](../plans/release-mechanism.md) §1.3 and §5, which carry the two npm rules it rests on — provenance requires a public source repository, and Trusted Publishing cannot be configured for a package that does not exist yet. DEVELOPMENT.md's prerequisites list gains it with the release change (#106) |
 | 29 | Whether done criterion 3 stands: the live suite must run against a real space before `0.1.0` | **open — blocks `0.1.0`** | §15.4. The suite exists and self-skips (row 11); the run itself is issue #52 |
 | 30 | M9 and M12, the two pull-request questions left unmeasured | **open — does not block `0.1.0`** | §15.4; [docs/plans/pull-request-support.md](../plans/pull-request-support.md) §5. No code reads either |
 | 31 | Catalog listing: community or vendor-official | **open — does not block `0.1.0`** | §15.4. §13 holds the feature-matrix values a listing needs |
@@ -2468,25 +2469,27 @@ named PR amends, which is where it must be read from.
 
 ### 15.4 Open
 
-Four items are still the maintainer's to decide, in the order they would stop
-a release: the first two block `0.1.0`, the last two do not. A closing
+**Item 28 left this list on 2026-09-09** and row 28 now carries the verdict.
+The maintainer's decision: the conditions a publish needs are theirs to
+supply, and a repository being `internal` while it is developed says nothing
+about its state on the day it publishes. So **the repository is public at
+publish time**, which is what `--provenance` requires and what makes the
+README, its absolute links, the licence badge and `homepage` resolve for the
+anonymous readers who get them the day the package appears. The first publish
+cannot use Trusted Publishing, because npm will not configure a trusted
+publisher for a package that does not exist yet, so it authenticates with a
+token; every later release uses Trusted Publishing.
+[docs/plans/release-mechanism.md](../plans/release-mechanism.md) §1.2, §1.3
+and §5 carry the sources and the route. This is a premise the release now
+rests on, **not** a completed task — nothing here asserts that the repository
+has already been switched.
+
+**Three items are still the maintainer's to decide**, in the order they would
+stop a release: the first blocks `0.1.0`, the last two do not. A closing
 paragraph names what the same review carved into follow-up issues instead,
 because those are work, not decisions.
 
-**28. Repository visibility at publish time — blocks `0.1.0`.** The
-repository is `internal` while `release.yml` runs
-`npm publish --access public`. On the day the package appears on the registry
-its README is served to anonymous readers, and every absolute link in it, the
-license badge's target and `package.json`'s `homepage` resolve to a 404 for
-them; `--provenance` from a non-public repository is also unverified here.
-Recommendation: make the repository public before running the release, which
-settles all four at once. The alternative — publishing from an internal
-repository with relative links and no badge — costs the package its
-provenance attestation and is harder to undo, because the README published
-for a version is immutable. Either way the call has to be made **before** the
-first `release.yml` run (#82 carries the same note for the releaser).
-
-**29. The live suite has never been run — blocks `0.1.0`.** Criterion 3 of
+**29. The live suite has never been run — the one remaining `0.1.0` blocker.** Criterion 3 of
 [docs/plans/adapter-implementation.md](../plans/adapter-implementation.md) §1
 requires it to have run at least once against a real space, with the result
 in the release PR, and §12.3 is written for that run. It needs credentials

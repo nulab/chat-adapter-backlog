@@ -33,7 +33,7 @@ The project is done when all of the following hold on `main`:
 6. `0.1.0` is published from `release.yml` and installs into a consumer that
    imports `createBacklogAdapter` under Node 20 (§7).
 
-**Status, 2026-09-23** (`main` at `61a4b85`): 1, 2, 4 and 5 hold. 3 holds in
+**Status, 2026-09-26** (`main` at `25cf0ec`): 1, 2, 4 and 5 hold. 3 holds in
 its first half only — `pnpm test` needs no network and the live suite skips
 itself, but it has never been run against a real space, which needs the
 credentials issue #52 is waiting on. 6 holds in its second half: the
@@ -43,11 +43,14 @@ every push and pull request — including the run `release.yml` calls before it
 publishes — so the consumer side is a gate rather than a check somebody
 remembers to do once. The same job type checks the usage the README
 documents against that tarball, and on pushes and pull requests every
-`examples/*` too. What is still missing is the release itself: the package is
-unreleased (#53), and the repository's visibility has to be settled before
-`release.yml` runs at all (spec §15.4). The live run (#52), the visibility
-decision (§15.4) and the release (#53) are the whole distance between here and
-the first release.
+`examples/*` too. Its first half has not happened: the package is unreleased
+(#53). Repository visibility is no longer part of that distance — it was
+settled on 2026-09-09 as a premise the maintainer supplies, the repository
+being public at publish time (spec §15 row 28). Nor is the one defect found
+meanwhile in the published artefact: **#99** (`scripts.preinstall` reached the
+published manifest and made an npm consumer's install exit 127) was closed by
+#100 on 2026-09-11. What is left is the live-suite run (**#52**), the one
+remaining `0.1.0` blocker (spec §15.4), and then the release itself (#53).
 
 ## 2. Ground rules recap
 
@@ -419,8 +422,8 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
 - **P7c — decided against.** No live job exists in `.github/workflows/ci.yml`
   and none reads a `BACKLOG_*` secret; the suite is opt-in, so nothing in CI
   depends on it (spec §15.1 row 19).
-- **P7d — not started.** Issue **#53** carries it, and the repository's
-  visibility has to be settled first (spec §15.4).
+- **P7d — not started.** Issue **#53** carries it. Visibility is settled as
+  a premise (spec §15 row 28).
 
 - **Acceptance**: `npm pack --dry-run` contains only `dist/`, `package.json`,
   `README.md`, `LICENSE`; a scratch consumer on Node 20 imports the package
@@ -499,6 +502,16 @@ are in DEVELOPMENT.md ("Versioning"). `package.json` stays at `0.0.0` on
 `main` and git tags are the version of record, so the first release is
 `release.yml` with `minor` from the implicit `v0.0.0`. The dependency ranges
 are D15's and are independent of the version number.
+
+The mechanism around that number was reconsidered before the first release
+in [docs/plans/release-mechanism.md](./release-mechanism.md), which verifies
+what trusted publishing and provenance actually require and evaluates
+release-please and its alternatives against D15. Its candidate A was accepted
+on 2026-09-23 — keep the `workflow_dispatch` and make the publish job converge
+so that a failed run finishes by being re-run — and deriving the bump from the
+commits (its F) is deferred, so the bump is still picked by hand. The
+implementation is #106; until it merges, this section and P7d describe what
+`release.yml` does.
 
 ## 8. Out of scope / later
 
