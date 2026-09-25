@@ -18,6 +18,17 @@ updates:
     cooldown:
       default-days: 3
       semver-major-days: 7
+    # `@chat-adapter/tests` declares `vitest: ^4.0.0` as a peer (4.40.0 and
+    # 4.41.0 alike), and its `matchers.d.ts` augments vitest's own types, so a
+    # vitest major runs the contract suites outside the range their author
+    # supports. vitest 5 also drops Node 20 from its engines, while
+    # `engines.node` is `>=20` and the test matrix runs on 20. Lift this once
+    # that peer admits the next major and the matrix no longer needs Node 20.
+    ignore:
+      - dependency-name: vitest
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@vitest/*'
+        update-types: ['version-update:semver-major']
     groups:
       dev-dependencies:
         dependency-type: development
