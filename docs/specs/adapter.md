@@ -334,8 +334,11 @@ Backlog has already published it in every rewritten comment body (D19).
 
 ### 3.4 Postable extras
 
-Consumers intersect these with a Chat SDK postable
-(`thread.post({ markdown, notifiedUserId: [1] } satisfies PostableMarkdown & BacklogPostableExtras)`).
+Consumers intersect these with a Chat SDK postable through an annotated
+variable (`const reply: PostableMarkdown & BacklogPostableExtras = { markdown, notifiedUserId: [1] }; await thread.post(reply);`,
+and `BacklogChannelPostableExtras` for `channel.post`). An object literal
+passed inline — `satisfies` included — stays fresh and fails `post()`'s
+excess-property check, because `post()`'s parameter type names no extras.
 Extras are read with a strict schema: a present-but-mistyped extra is a
 `ValidationError`, never silently dropped.
 
@@ -2211,8 +2214,26 @@ for one scratch space is worse than requiring the two to share it.
   see); the raw-versus-domain paragraph pointing at `src/index.ts`'s header
   rather than restating it; the smoke-test paragraph updated to the new
   assertion.
-- **CI smoke test** (`ci.yml`): asserts `typeof m.createBacklogAdapter === "function"`
-  and `new m.BacklogAdapter({...minimal config...}).name === "backlog"`.
+- **CI smoke tests** (`ci.yml`), two jobs against two different artifacts. The
+  `build` job asserts `typeof m.createBacklogAdapter === "function"` and
+  `new m.BacklogAdapter({...minimal config...}).name === "backlog"` against
+  `./dist/index.js` on the pinned runtime, so a bundle tsdown emitted but
+  cannot load fails the job that produced it. The `consumer` job packs the
+  tarball, installs it with npm into a directory outside the repository and
+  runs `scripts/consumer-smoke/smoke.mjs` on Node 20 — the floor of
+  `engines.node` — asserting the published surface a path import never
+  consults: the entry resolves through `exports` inside the consumer's
+  `node_modules`, the installed tree is exactly `dist/`, `package.json`,
+  `README.md` and `LICENSE`, `exports["."].types` names a file that shipped,
+  and `createBacklogAdapter()` with **no** argument builds an adapter whose
+  `name` is `"backlog"` and whose `userName` came from `BACKLOG_BOT_USER_NAME`
+  (§3.2's env fallbacks, end to end). `globalThis.fetch` is replaced with a
+  throw first, so "construction reaches no network" is asserted rather than
+  assumed. The same job then compiles `scripts/consumer-smoke/documented-usage.ts`
+  — the usage the README documents, strict under `NodeNext` — with
+  `tsc --noEmit` against the installed declarations, and — on pushes and pull
+  requests, not in the run `release.yml` calls — runs each `examples/*`'s own
+  type check with its adapter dependency pointed at the same tarball.
 - **Feature matrix** for a future catalog listing (values per Chat SDK's
   `features` keys). Every value holds for issue **and** pull-request threads
   unless its note says otherwise, and each `partial` names the decision behind

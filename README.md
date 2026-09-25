@@ -25,16 +25,20 @@ nothing about installing or using the package.
 ## Installation
 
 ```sh
-pnpm add @nulab/chat-adapter-backlog chat
+pnpm add @nulab/chat-adapter-backlog chat @chat-adapter/state-memory @vercel/functions
 ```
 
 `chat` is a peer dependency at `^4.40.0` — a caret range, so upgrading the core
-does not require a matching adapter release. Node 20 or newer.
+does not require a matching adapter release. Node 20 or newer. The other two
+packages are only what **Quick start** uses: swap in a durable state adapter
+and your runtime's own `waitUntil` as needed.
 
 ## Quick start
 
 ```ts
 import { Chat } from 'chat';
+import { createMemoryState } from '@chat-adapter/state-memory';
+import { waitUntil } from '@vercel/functions';
 import { createBacklogAdapter } from '@nulab/chat-adapter-backlog';
 
 const backlog = createBacklogAdapter({
@@ -47,16 +51,28 @@ const backlog = createBacklogAdapter({
 
 // The config key must equal the adapter's name: Chat SDK routes thread ids by
 // their prefix, and every thread id this adapter mints starts with "backlog:".
-const chat = new Chat({ adapters: { backlog } });
+const chat = new Chat({
+  adapters: { backlog },
+  state: createMemoryState(),
+  userName: backlog.userName,
+});
 
 chat.onNewMention(async (thread, message) => {
   await thread.post({ markdown: `Saw: ${message.text}` });
 });
 
 export async function POST(request: Request) {
-  return chat.webhooks.backlog(request);
+  return chat.webhooks.backlog(request, { waitUntil });
 }
 ```
+
+The memory state forgets subscriptions on restart — fine for a first run, not
+for production (see **Delivery is at-least-once** below). `waitUntil` is what
+keeps a serverless invocation alive after the 200: the handler runs in the
+background, and without it nothing holds the function open, so the runtime may
+freeze it before the reply is posted. On a long-lived Node server nothing
+freezes, so `waitUntil` can be omitted; on another serverless platform, pass
+that runtime's own.
 
 Every field falls back to an environment variable, so
 `createBacklogAdapter()` with no argument works when the environment is set.
@@ -485,11 +501,27 @@ To mention someone outbound, use the helpers — writing `<@U…>` notifies the
 user even without `notifiedUserId`:
 
 ```ts
-import { mentionUser, mentionTeam, MENTION_PROJECT_MEMBERS } from '@nulab/chat-adapter-backlog';
+import type { PostableMarkdown } from 'chat';
+import {
+  mentionUser,
+  mentionTeam,
+  MENTION_PROJECT_MEMBERS,
+  type BacklogPostableExtras,
+} from '@nulab/chat-adapter-backlog';
 
 await thread.post({ markdown: `${mentionUser(100)} please take a look` });
-await thread.post({ markdown: 'ping', notifiedUserId: [100, 101] });
+
+const ping: PostableMarkdown & BacklogPostableExtras = { markdown: 'ping', notifiedUserId: [100, 101] };
+await thread.post(ping);
 ```
+
+The annotated variable is not ceremony: an object literal passed straight to
+`post()` — `satisfies` included — is checked against `post()`'s own parameter
+type, which knows no Backlog extras, and fails excess-property checking. Nor
+can the annotation be dropped: an unannotated variable compiles too, but then
+nothing type-checks the extras themselves. A misspelt key is silently ignored,
+and a mistyped value surfaces only at run time as a `ValidationError`; the
+annotation catches both at compile time.
 
 `notifiedUserId` is independent: it notifies without leaving a visible `@name`.
 Backlog silently drops ids that are not project members.
@@ -502,14 +534,22 @@ The first block becomes the summary as plain text (Backlog renders no markup in
 summaries), the rest becomes the description:
 
 ```ts
-const channel = chat.channel('backlog:example.backlog.com:500');
-await channel.post({
+import type { PostableMarkdown } from 'chat';
+import type { BacklogChannelPostableExtras } from '@nulab/chat-adapter-backlog';
+
+const issue: PostableMarkdown & BacklogChannelPostableExtras = {
   markdown: '# Deploy fails on staging\n\nReproduces on every push to main.',
   issueTypeId: 12,   // optional; defaults to the project's first type
   priorityId: 3,     // optional; defaults to the middle priority
   assigneeId: 100,   // optional
-});
+};
+const channel = chat.channel('backlog:example.backlog.com:500');
+await channel.post(issue);
 ```
+
+The extras go through an annotated variable for the same two reasons as under
+**Mentions**: `post()` rejects them as a literal, and only the annotation
+type-checks them.
 
 ## Errors
 

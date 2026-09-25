@@ -60,6 +60,27 @@ process, constructs an adapter from it and asserts `adapter.name === 'backlog'`.
 Changing the public entry means changing that smoke test in the same commit, or
 the build job breaks.
 
+A second job, `consumer`, is the same claim about the **published** package
+rather than the bundle: it packs the tarball, installs it with npm outside the
+repository and runs `scripts/consumer-smoke/smoke.mjs` on Node 20, where the
+entry has to resolve through `exports` and `createBacklogAdapter()` gets no
+argument at all — the five `BACKLOG_*` variables are the whole configuration.
+So `exports`, `files`, the env fallbacks and the floor of `engines.node` fail
+here rather than at a consumer. Changing any of those four means changing that
+consumer in the same commit; its assertions are one file, in the order a
+consumer meets them.
+
+The same job then compiles `scripts/consumer-smoke/documented-usage.ts` with
+`tsc --noEmit` against the installed declarations, and — except in the run
+`release.yml` calls, where `skip-examples` turns it off so an upstream release
+cannot block a publish through an example — type checks every `examples/*`
+against the same tarball. That file is the usage README.md documents, written
+out by hand rather than extracted: a README sample that changes shape changes
+it in the same commit, or the job keeps passing on the old shape while the
+README shows one that may not compile. Its `chat`, `@chat-adapter/state-memory`
+and TypeScript versions are read from `pnpm-lock.yaml` by the job, so a bump
+there reaches the consumer without an edit in `scripts/consumer-smoke/`.
+
 ## Design documents
 
 The goal state and the route to it are written down, not inferred from this
@@ -550,11 +571,14 @@ is no longer a change invisible to consumers (docs/specs/adapter.md §3.1,
 depends on the published adapter (`"@nulab/chat-adapter-backlog": "^0.1.0"`),
 installs on its own, and deploys from its own directory. Copying one out of
 this repository has to leave it working, which is the rule that settles most
-questions about them. `pnpm-workspace.yaml` names no packages, and nothing in
-CI installs, type checks or tests an example — only the root `lint` and
-`format:check` reach into `examples/` (oxfmt formats the Markdown too: it
-aligns tables and normalises bullets, though it never reflows prose, so write
-a README and let `pnpm format` settle it).
+questions about them. `pnpm-workspace.yaml` names no packages, and the one
+thing CI does with an example as a project is the `consumer` job's: copy it
+out of the repository, point its adapter dependency at the packed tarball,
+`npm install` and `npm run typecheck`. So an example has to compile against
+what the package ships, not against `src/`, and it has no tests for CI to run.
+The root `lint` and `format:check` reach into `examples/` as well (oxfmt
+formats the Markdown too: it aligns tables and normalises bullets, though it
+never reflows prose, so write a README and let `pnpm format` settle it).
 
 `examples/README.md` is the index and carries the setup all of them share; an
 example's own README does not repeat it.

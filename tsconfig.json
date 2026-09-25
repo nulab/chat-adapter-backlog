@@ -19,14 +19,10 @@
     "skipLibCheck": true,
 
     // Nothing here emits -- tsdown builds, and the `typecheck` script is
-    // `tsc --noEmit`. These two are read by tsdown's declaration pass: with
-    // `sourcemap` on it writes a `sourceMappingURL` into every `.d.ts` and
-    // only emits the matching `.d.ts.map` when `declarationMap` is set, so
-    // dropping them leaves the published types pointing at missing files.
-    // `dts: { sourcemap: false }` in tsdown.config.ts overrides
-    // `declarationMap` for that pass, turning the URL and the map off
-    // together, which is why no `.d.ts.map` is published. Leave the value
-    // here: it is the coupling that holds if that option is ever removed.
+    // `tsc --noEmit`. `declarationMap` is inert for the build: every entry in
+    // tsdown.config.ts sets `dts.sourcemap` itself, which always wins over
+    // rolldown-plugin-dts's fallback to this field -- see tsdown.config.ts
+    // for what actually decides a published `.d.ts`'s `sourceMappingURL`.
     "declaration": true,
     "declarationMap": true,
     "noEmit": true
