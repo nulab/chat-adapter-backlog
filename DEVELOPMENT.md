@@ -364,7 +364,8 @@ merges — and as a reusable workflow called by the release. Five jobs:
 | `lint`       | `pnpm lint` then `pnpm format:check`.                                              |
 | `typecheck`  | `pnpm typecheck`.                                                                  |
 | `build`      | `pnpm build`, then imports `dist/index.js` in a real Node process and asserts the entry loads and `dist/index.d.ts` exists. |
-| `test`       | Matrix over Node 20, 22, 24 and 26. Asserts the running Node is the major the job asked for, then `pnpm test`. |
+| `consumer`   | `pnpm pack`, then installs the tarball with npm into a directory outside the repository, runs `scripts/consumer-smoke/smoke.mjs` on Node 20, and type checks the documented usage and every `examples/*` against the same tarball. |
+| `test`       | Matrix over Node 20, 22, 24 and 26. Asserts the running Node is the major the job asked for, then runs the suite (`vitest run`) with a bare `node`. |
 
 Every job provisions pnpm with `pnpm/action-setup` and `standalone: true`,
 which installs the pnpm build with Node.js linked in and reads the version from
@@ -376,7 +377,15 @@ before pnpm has run.
 `pnpm install --frozen-lockfile` and get the runtime the lockfile pins, exactly
 like a contributor — no job carries a Node version of its own.
 
-`test` is the exception, and the only job that names Node versions.
+`test` and `consumer` are the two that name a Node version, and they get it on
+PATH in opposite ways. `consumer` installs with the runtime, because building
+and packing are development commands and belong on the pinned Node; Node 20
+reaches the consumer half because nothing after the pack goes through pnpm
+but a read of the lockfile. `test` cannot do that — every step it has left is a pnpm command — so it
+installs with `--no-runtime` instead.
+
+`test` is the exception among the gates, and the only job that names several
+Node versions.
 `actions/setup-node` puts the major under test on PATH and the install adds
 `--no-runtime`, so no linked runtime shadows it. That flag is what makes a
 matrix possible at all: with the runtime linked, `node_modules/.bin/node` wins
@@ -396,9 +405,12 @@ earlier matrix went green while testing a single version, and this assertion is
 the only guard against that recurring — it is also what caught the
 re-materializing install rather than letting it pass as three green checks.
 
-Nothing in CI calls a bare `node`. The runner images ship their own, and it
-would quietly service any step that asked for it, so the build job's smoke test
-goes through `pnpm exec node`.
+A bare `node` appears only where a job has deliberately put one on PATH with
+`actions/setup-node`: the assertion and the suite in `test`, and the npm
+installs, the consumer script and the type checks in `consumer`. Everywhere
+else it goes through `pnpm exec node`, the build job's smoke test included —
+the runner images ship a Node of their own, and it would quietly service any
+step that asked for it.
 
 Installs use `pnpm install --frozen-lockfile`, so `pnpm-lock.yaml` must be
 committed alongside any `package.json` change.
@@ -407,19 +419,73 @@ The build job's smoke test asserts on the value the entry point exports today.
 If you change the public entry, the smoke test in `ci.yml` has to change with
 it.
 
-`examples/` is not built, type checked or tested by CI, and that is a property
-of what an example is rather than an omission: each one is a standalone project
-that installs the published adapter from npm, so checking one here would mean
-either installing a version of this package that may not exist yet, or pointing
-it at `src/` — which would let an example compile against a declaration the
-published package does not ship, the exact thing the check would be for. The
-root `lint` and `format:check` do cover `examples/`, because those need no
-install.
+`consumer` covers what a path import cannot. It packs the tarball with
+`pnpm pack --out` — a name of its own, because the default is derived from
+`version`, which stays `0.0.0` on `main` — installs it with npm under
+`$RUNNER_TEMP`, and runs `scripts/consumer-smoke/smoke.mjs` from there:
+outside the repository, so nothing can be answered by the repo's own
+`node_modules`. What it asserts is the published surface rather than the
+bundle — that the entry resolves through `exports`, that the installed tree is
+exactly `dist/`, `package.json`, `README.md` and `LICENSE`, that
+`exports["."].types` names a file that shipped, and that
+`createBacklogAdapter()` with no argument builds an adapter out of the five
+`BACKLOG_*` variables on Node 20, the floor of `engines.node`.
 
-The consequence is worth stating plainly: an example can break without CI
-saying so. It is checked by running `npm install` and `npm run typecheck`
-inside its own directory, which is what its README tells a reader to do — npm,
-not pnpm, for the reason `examples/README.md` gives.
+The install runs lifecycle scripts, as a consumer's does, so a `preinstall`
+the tarball should not carry (#99) fails it rather than being stepped around.
+`scripts/check-published-scripts.mjs` is the guard that names the cause; this
+install is where a consumer would have met it.
+
+Two type checks follow, against the declarations that shipped rather than
+`src/`. `attw` and `check-published-types.mjs` prove the declarations resolve
+and import nothing a consumer lacks, but not that the calls the README
+documents compile. `scripts/consumer-smoke/documented-usage.ts` writes those
+calls out — the `Chat` construction, `chat.webhooks.backlog`, the
+`BacklogPostableExtras` and `BacklogChannelPostableExtras` postables, the
+mention helpers, `installations` with a resolver-function `apiKey`,
+`rateLimit.maxWaitMs`, `adapter.api`/`client`/`rateLimit`/`botUserName` and
+`createInMemoryBacklogApi` — and the job compiles it strict, under `NodeNext`,
+with `tsc --noEmit`. It reads `message.subject` too, but proves nothing about
+the `'pull_request'` it compares against: `chat` types `subject.type` as
+`string`, so that literal is pinned by the suite, not the compiler. Nothing
+extracts the README's code blocks into it, so a README sample that changes
+shape changes that file in the same commit.
+
+Its `chat`, `@chat-adapter/state-memory` and TypeScript are exact versions,
+because no lockfile exists out there and a range would turn the job red for an
+upstream release rather than a change here. They are not committed in
+`scripts/consumer-smoke/package.json`: the job reads each from
+`pnpm-lock.yaml` (`pnpm list --lockfile-only`) and writes it in with
+`npm pkg set` before `npm install`, so the lockfile is the one place they are
+written down. A committed pin would have no owner — Dependabot watches `/`
+only — and the first peer bump it missed would make npm refuse the install
+with ERESOLVE. `@types/node` is the exception and stays committed, on the
+major the consumer runs: the lockfile only holds the types for the pinned
+runtime.
+
+Then every `examples/*` is copied under `$RUNNER_TEMP`, its
+`@nulab/chat-adapter-backlog` dependency rewritten to the tarball, installed
+with npm and checked with its own `npm run typecheck`. An example is a
+standalone project that depends on the published adapter, and the tarball is
+that release before it exists — the only way to check an example without
+pointing it at `src/`, which would let it compile against a declaration the
+package does not ship. The step checks every example before it fails, so one
+red run names all of the broken ones. The root `lint` and `format:check` cover
+`examples/` as well.
+
+That step is skipped when `release.yml` calls the workflow (`skip-examples`),
+and that is a trade-off, not an oversight. An example declares ranges and
+ships no lockfile, so an upstream release can turn it red with nothing changed
+here, and a release gated on it would be blocked by an example rather than by
+the package. The cost is that a release can go out while an example is broken
+against it; pull requests and pushes to `main` still run the step, so the
+break is reported there. The skip is an input because nothing else can tell a
+called run apart: inside a reusable workflow the `github` context, and so
+`github.event_name`, belongs to the caller.
+
+By hand, an example is checked the way its README tells a reader to: `npm
+install` and `npm run typecheck` inside its own directory — npm, not pnpm, for
+the reason `examples/README.md` gives.
 
 ## Releasing
 

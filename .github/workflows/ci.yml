@@ -8,7 +8,18 @@ on:
   # use — got no checks at all until its parent merged and GitHub retargeted it,
   # which is the moment feedback stops being useful.
   pull_request:
+  # release.yml sets `skip-examples`. Neither `github.event_name` nor any other
+  # `github` field can tell the two apart: "When a reusable workflow is
+  # triggered by a caller workflow, the `github` context is always associated
+  # with the caller workflow" (docs.github.com, Reusing workflow
+  # configurations), so a called run reads `workflow_dispatch`, never
+  # `workflow_call`. On push and pull_request `inputs` is empty and the flag
+  # reads as unset.
   workflow_call:
+    inputs:
+      skip-examples:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -105,6 +116,158 @@ jobs:
             }
           "
           test -f dist/index.d.ts
+
+  consumer:
+    runs-on: ubuntu-latest
+    name: Consumer (Node ${{ matrix.node }})
+
+    strategy:
+      matrix:
+        # A matrix of one, so the major is written once and the assertion
+        # inside smoke.mjs checks the version this job actually asked for.
+        # Node 20 rather than the range `test` covers: `exports` resolution
+        # and the packed manifest do not vary by major, and the floor of
+        # `engines.node` is where the package's promise is weakest — every
+        # other job here runs the Node `devEngines.runtime` pins.
+        node: [20]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The install half needs npm, and the Node `pnpm install` provisions
+      # ships without npm, npx or corepack — the same reason release.yml's
+      # publish job sets up a Node of its own. It is also the Node the
+      # consumer runs on, so both halves come from here.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          standalone: true
+
+      # With the runtime, unlike `test`: building and packing are development
+      # commands and belong on the pinned Node. Node 20 stays reachable
+      # because nothing after the pack goes through pnpm except reading the
+      # lockfile, so a bare `node` or `npm` is the one actions/setup-node put
+      # on PATH.
+      - run: pnpm install --frozen-lockfile
+
+      # Its own build rather than `needs: [build]` and an artifact: the
+      # tarball has to be packed from a tree this job produced, and a job that
+      # waits on another reports that job's failure as its own skip.
+      - name: Build
+        run: pnpm run build
+
+      # `--out`, not the default filename: `pnpm pack` names the tarball after
+      # `version`, and `version` is `0.0.0` on `main` only because release.yml
+      # bumps the manifest inside its publish job and never commits it back.
+      # Naming the output keeps this job out of that arrangement.
+      - name: Pack the tarball a consumer would install
+        env:
+          TARBALL: ${{ runner.temp }}/chat-adapter-backlog.tgz
+        run: pnpm pack --out "$TARBALL"
+
+      # Installed outside the repository, because inside it Node's resolution
+      # walks up into the repo's own node_modules: an import the tarball does
+      # not ship would still be answered, and the job would pass for a reason
+      # a consumer does not have.
+      #
+      # Lifecycle scripts run, as they do for a consumer: a `preinstall` the
+      # tarball should not carry (#99) fails this step rather than being
+      # stepped around.
+      #
+      # `chat`, `@chat-adapter/state-memory` and TypeScript are written into
+      # the consumer here, as the exact versions pnpm-lock.yaml resolves, not
+      # committed in its package.json. Exact, because no lockfile exists out
+      # here and a range would let an upstream release turn this job red for a
+      # change this repository did not make. From the lockfile, because
+      # nothing else bumps them: Dependabot watches `/` only, so a pin in
+      # scripts/consumer-smoke would stay behind the adapter's peer range
+      # until npm refused the install with ERESOLVE. `@types/node` is the one
+      # committed pin: it follows the Node this consumer runs, and the
+      # lockfile holds only the types for the pinned runtime.
+      - name: Install it into a consumer outside the repository
+        env:
+          TARBALL: ${{ runner.temp }}/chat-adapter-backlog.tgz
+          CONSUMER: ${{ runner.temp }}/consumer
+        run: |
+          locked() {
+            pnpm list "$1" --lockfile-only --json --depth 0 |
+              jq -er --arg name "$1" '.[0].devDependencies[$name].version'
+          }
+          chat=$(locked chat)
+          state_memory=$(locked @chat-adapter/state-memory)
+          typescript=$(locked typescript)
+          cp -R scripts/consumer-smoke "$CONSUMER"
+          cd "$CONSUMER"
+          npm pkg set \
+            "devDependencies.chat=$chat" \
+            "devDependencies.@chat-adapter/state-memory=$state_memory" \
+            "devDependencies.typescript=$typescript"
+          npm install --no-audit --no-fund "$TARBALL"
+
+      # The five variables src/adapter.ts reads, and no config object: that
+      # `createBacklogAdapter()` resolves all of them from the environment is
+      # the half of the claim the `build` job's explicit construction cannot
+      # reach. The values are the spec §13 vocabulary; the secret is dummy but
+      # not short, since under 16 bytes construction is a ValidationError.
+      - name: Construct the adapter from the environment alone
+        working-directory: ${{ runner.temp }}/consumer
+        env:
+          EXPECTED_NODE_MAJOR: ${{ matrix.node }}
+          BACKLOG_HOST: example.backlog.com
+          BACKLOG_API_KEY: consumer-smoke-api-key
+          BACKLOG_BOT_USER_ID: '999'
+          BACKLOG_BOT_USER_NAME: Chatbot
+          BACKLOG_WEBHOOK_SECRET: consumer-smoke-webhook-secret
+        run: node smoke.mjs
+
+      # attw and check-published-types.mjs prove the declarations resolve and
+      # import nothing a consumer lacks; neither proves the calls README.md
+      # documents compile. Those are written out in documented-usage.ts and
+      # compiled here, against the declarations that shipped.
+      - name: Type check the documented usage against the tarball
+        working-directory: ${{ runner.temp }}/consumer
+        run: npm run typecheck
+
+      # Each example depends on the published adapter, so the tarball stands
+      # in for the release that does not exist yet. Copied out of the
+      # repository for the same reason as the consumer above. Every example
+      # runs even after one fails, so a red step names all of them.
+      #
+      # Skipped when release.yml calls this workflow. An example declares its
+      # dependencies as ranges and ships no lockfile, as a copied-out project
+      # does, so an upstream release can turn this step red without a change
+      # here — and during a release that would block `npm publish` on an
+      # example, not on the package. Pull requests and pushes to main still
+      # run it, so a broken example is reported there first.
+      - name: Type check every example against the tarball
+        if: ${{ !inputs.skip-examples }}
+        env:
+          TARBALL: ${{ runner.temp }}/chat-adapter-backlog.tgz
+          EXAMPLES: ${{ runner.temp }}/examples
+        run: |
+          mkdir -p "$EXAMPLES"
+          failed=()
+          for example in examples/*/; do
+            name=$(basename "$example")
+            echo "::group::$name"
+            cp -R "${example%/}" "$EXAMPLES/$name"
+            if ! (
+              cd "$EXAMPLES/$name" &&
+                npm pkg set "dependencies.@nulab/chat-adapter-backlog=file:$TARBALL" &&
+                npm install --no-audit --no-fund &&
+                npm run typecheck
+            ); then
+              failed+=("$name")
+            fi
+            echo "::endgroup::"
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "::error::examples that do not type check against the packed tarball: ${failed[*]}"
+            exit 1
+          fi
 
   test:
     runs-on: ubuntu-latest
