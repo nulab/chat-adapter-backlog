@@ -489,35 +489,109 @@ the reason `examples/README.md` gives.
 
 ## Releasing
 
-`.github/workflows/release.yml`, triggered manually
-(`workflow_dispatch`) with a `patch` / `minor` / `major` choice.
+`.github/workflows/release.yml`, triggered manually (`workflow_dispatch`).
+The design and the evidence behind it are in
+[docs/plans/release-mechanism.md](./docs/plans/release-mechanism.md).
+
+| Input                   | Default | Meaning                                                                                                        |
+| ----------------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `newversion`            | `patch` | `patch` / `minor` / `major`, applied to the latest tag.                                                        |
+| `dry-run`               | `true`  | Build and pack, upload the tarball as the `package` artifact, and stop: nothing reaches npm or the repository. |
+| `allow-released-commit` | `false` | Let a new run converge on a version tag on the commit that another run created. For recovery only — see below. |
+
+A dispatch nobody thought about is therefore a dry run. To release, set
+`dry-run` to `false`.
 
 What it does:
 
 1. Runs the whole CI workflow and stops if anything fails.
-2. Reads the latest git tag (`v0.0.0` if there is none), writes it into
-   `package.json`, then applies the requested bump — **git tags are the version
-   of record**. `package.json` stays at `0.0.0` on `main` and the bump is never
-   committed back.
-3. Builds.
-4. Upgrades to the latest npm (Trusted Publishing needs the OIDC support added
-   in npm 11.5.1, which is newer than the npm bundled with Node 26). The
-   publish job is the only one that needs an npm at all, and gets it from
-   `actions/setup-node`; the build in that job still runs on the Node pnpm
-   provisions.
-5. `npm publish --provenance --access public`, authenticated by
-   [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers) via
-   GitHub OIDC (`id-token: write`) — there is no npm token anywhere in the
-   repository.
-6. Pushes the new `vX.Y.Z` tag and creates a GitHub release with generated
-   notes, categorized by `.github/release.yml`.
+2. **`pack`** — fixes the target version, then builds and packs. If a `v*` tag
+   already points at the commit, that tag is the version; otherwise it is the
+   latest tag (`v0.0.0` if there is none) plus the requested bump. **Git tags
+   are the version of record**: `package.json` stays at `0.0.0` on `main` and
+   the bump is never committed back. Before building, it checks that the
+   latest tag's version is on the registry — a tag that was never published
+   would otherwise be bumped past and its version skipped — and that no tag
+   for the target version sits on another commit. This job runs the install
+   and the build, and holds neither `id-token: write` nor `contents: write`.
+   The run summary shows the package, the tag, the notes range and the Node
+   and npm that packed; the packed file list is in the log.
+3. **`publish`** — skipped on a dry run. It runs in the `production`
+   environment, refuses any ref but `main`, and never checks out or runs the
+   repository's code: it downloads the tarball `pack` made, checks it holds
+   the version being released, and converges on three effects, each skipped
+   if it already exists.
+   - **npm.** If the version is not on the registry,
+     `npm publish <tarball> --provenance --access public`. If it is, the
+     provenance attestation must name this commit, this repository and
+     `release.yml`, or the step fails; a version published without provenance
+     fails too, and is a human's call.
+   - **The tag**, created through the API on the released commit as an
+     annotated tag whose message names the run (`release.yml run <id>`). An
+     existing tag that points anywhere else fails the step.
+   - **The GitHub release**, with notes generated from the previous tag and
+     categorized by `.github/release.yml`.
 
 A `concurrency` group serializes releases.
+
+**Node and npm.** Packing and publishing use the npm bundled with the Node
+the lockfile pins (`devEngines.runtime`; 26.9.0 with npm 11.19.1 as of
+2026-09-26). `pack` installs, reads that version back with
+`pnpm exec node --version`, and hands the exact version to
+`actions/setup-node` in both jobs; `publish` asserts that its npm is the one
+that packed, and that it is at least the 11.5.1 trusted publishing needs.
+`node-version: 26` would resolve the newest 26.x on the day — a two-day-old
+26.10.0 on 2026-09-23, which `minimumReleaseAge` keeps out of every other
+install here — and could give the two jobs different npms. The build still
+runs on the Node pnpm provisions. An upgrade to `npm@latest` was removed on
+purpose — it would have installed npm 12.1.0 the day it shipped, and
+`.npmrc`'s `min-release-age` does not reach it: a project `.npmrc` "is not
+read in global mode"
+([npmrc](https://docs.npmjs.com/cli/v11/configuring-npm/npmrc)).
+
+**Authentication.** `npm publish` tries OIDC first: once a trusted publisher is
+configured on npmjs.com, every release is authenticated by it and there is no
+npm token in the repository. If the `production` environment holds an
+`NPM_TOKEN` secret, it is used whenever the OIDC exchange fails — which is the
+case for the first publish only (see the checklist below). Leaving the secret
+unset is how every later release runs.
+
+### When a release fails part-way
+
+**Re-run the failed run**, at the same commit, within 30 days — GitHub allows
+a re-run "up to 30 days after its initial run"
+([re-running workflows](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)).
+The job re-derives the same version (the tag on the commit, or the same latest
+tag plus the same bump), skips whatever already took effect and finishes the
+rest. "Re-run failed jobs" re-runs `publish` alone, which downloads the
+`package` artifact the first `pack` uploaded, so it works only while that
+artifact is within the repository's artifact retention; otherwise use "Re-run
+all jobs", which packs again. Do not dispatch a new run instead: a run that
+finds a version tag on the commit that it did not create fails on purpose,
+naming the tag and the run that did, so that "release again" can never succeed
+at doing nothing. Re-running the run the guard refused fails the same way; it
+is the run that *created* the tag that has to be re-run.
+
+`allow-released-commit` is for the case a re-run cannot reach: the failed run
+is more than 30 days old. A dispatch always runs the tip of `main`, so this
+works only while `main` still points at the tagged commit; with the input set,
+the run converges exactly like a re-run. Once `main` has moved on, finish the
+half-done release by hand — create the missing tag (annotated) or GitHub
+release on the commit the registry's attestation names. A `v*` tag whose
+version was never published stops every later run at `pack`; nothing can
+depend on a version that does not exist, so delete that tag.
+
+Two endings are loud and correct, not bugs. The registry's read path can lag
+its write path, so a re-run seconds after a publish can see 404, publish again
+and get 403 — wait and re-run. And a version already on the registry from
+another commit, or without provenance, stops the run for a human to decide.
 
 ### Versioning
 
 Plain [semver](https://semver.org), starting at `0.1.0`: the first release is
-`release.yml` with `minor`.
+`release.yml` with `minor`. `newversion` defaults to `patch` because that is
+the common case afterwards; while no `v*` tag exists, `pack` refuses anything
+but `minor`.
 
 | Change                                                   | Bump                                  |
 | -------------------------------------------------------- | ------------------------------------- |
@@ -529,16 +603,51 @@ Plain [semver](https://semver.org), starting at `0.1.0`: the first release is
 ships, test against it, widen or move the peer range, and release a new major
 of this package.
 
-### One-time prerequisites, not set up by anything in this repository
+### The first release, step by step
 
-Both of these must exist before the first release can succeed, and neither is
-created by the code here:
+Nothing in this repository creates any of the settings below, and the order is
+not negotiable in two places: trusted publishing **cannot** be configured
+before the package exists on npm — `npm trust` and npmjs.com require the
+package to be on the registry already
+([npm-trust](https://docs.npmjs.com/cli/v11/commands/npm-trust/)) — so the
+first publish authenticates with a token; and the repository has to be public
+before anything publishes, because provenance is refused for a non-public
+source repository
+([trusted publishing](https://docs.npmjs.com/trusted-publishers/)).
 
-- **Trusted Publishing must be configured on npmjs.com** for
-  `@nulab/chat-adapter-backlog`, pointing at this repository and the
-  `release.yml` workflow. Without it, `npm publish` falls back to asking for a
-  token and the job fails.
-- **The `production` GitHub environment must exist** in the repository
-  settings. The publish job declares `environment: production`; add any
-  required reviewers or branch restrictions there. See
-  [managing environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
+1. **Make the repository public.** It has to have happened before the run, not
+   be planned: a run against a non-public repository fails at the publish.
+2. **Confirm the publishing account may publish into the `@nulab` scope** on
+   npm. The scope and the organization already exist.
+3. **Create the `production` environment** with a deployment-branch policy of
+   `main`, and no required reviewers — a reviewer would make a failed release
+   impossible to re-run unattended. It must exist, with its `main` policy,
+   before the first dispatch with `dry-run` off: a dispatch naming a missing
+   environment does not fail, it creates the environment unprotected and with
+   no secrets
+   ([managing environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)).
+4. **Store a temporary token as the environment's `NPM_TOKEN` secret**: a
+   granular access token with read-write permission on the `@nulab` scope and
+   the shortest expiry that covers the day. The secret must exist before the
+   real dispatch. npm requires 2FA or a granular token with **Bypass 2FA**
+   enabled for creating and publishing packages
+   ([requiring 2FA](https://docs.npmjs.com/requiring-2fa-for-package-publishing-and-settings-modification)),
+   so without that option a non-interactive publish stops with `EOTP`; rotate
+   the secret to a token that has it and re-run. npm says not to enable it
+   where an organization requires fully enforced 2FA; if `nulab` does, the
+   first publish needs another route (release-mechanism.md §5 step 2). npm
+   also plans to remove direct publishing with such tokens in January 2027,
+   which a token used once before then does not meet.
+5. **Dispatch `release.yml` with `minor`, `dry-run` left on.** Check the
+   summary says `@nulab/chat-adapter-backlog@0.1.0`, and the packed file list
+   holds only `dist/`, `package.json`, `README.md` and `LICENSE`. The dry run
+   needs neither the environment nor the token, so it can also go first.
+6. **Dispatch `release.yml` with `minor` and `dry-run` off.** `0.1.0` is
+   published with provenance, tagged and released.
+7. **Configure trusted publishing on npmjs.com** for the package: repository
+   `nulab/chat-adapter-backlog`, workflow `release.yml`, environment
+   `production`. Every field must match exactly — a mismatch surfaces as a
+   misleading 404 at the next publish.
+8. **Delete the `NPM_TOKEN` secret, then revoke the token on npmjs.com.** From
+   here on releases authenticate through OIDC alone, and nothing in the
+   workflow changes.
