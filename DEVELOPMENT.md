@@ -535,8 +535,8 @@ What it does:
 A `concurrency` group serializes releases.
 
 **Node and npm.** Packing and publishing use the npm bundled with the Node
-the lockfile pins (`devEngines.runtime`; 26.8.1 with npm 11.19.0 as of
-2026-09-23). `pack` installs, reads that version back with
+the lockfile pins (`devEngines.runtime`; 26.9.0 with npm 11.19.1 as of
+2026-09-26). `pack` installs, reads that version back with
 `pnpm exec node --version`, and hands the exact version to
 `actions/setup-node` in both jobs; `publish` asserts that its npm is the one
 that packed, and that it is at least the 11.5.1 trusted publishing needs.
