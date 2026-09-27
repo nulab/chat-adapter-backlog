@@ -267,6 +267,10 @@ for that installation — the user its credential acts as
 over the fetched one, so a deployment can pin the display name its users type
 while leaving the id to the API.
 
+- **A blank `BACKLOG_BOT_USER_ID=` or `BACKLOG_BOT_USER_NAME=` counts as
+  unset** and is looked up — the exception to "an explicit empty value is a
+  validation error", because a copied `.env.example` leaves those lines
+  blank. An empty `botUserName` in `config` is still an error.
 - **Both configured → no request at all**, ever. This is the only way to make
   the adapter spend nothing on who it is, and what the `consumer` smoke job
   asserts (§13).
@@ -279,8 +283,8 @@ while leaving the id to the API.
   nothing cached. The core memoises its adapters' `initialize` and never
   retries a rejected one, so a rejection there would refuse every later
   webhook, for every adapter of the `Chat`, until the process restarts.
-- **The next caller that needs the identity asks again**, and concurrent
-  callers share one request. The webhook path is one such caller (§5.1
+- **The next caller that needs the identity asks again**; callers that
+  arrive together each ask. The webhook path is one such caller (§5.1
   row 11): a delivery whose identity still cannot be learned is answered 503
   and **not dispatched**, because dispatching it without the self-message
   check would let the bot answer its own comments. The async members that
@@ -2038,7 +2042,9 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   and not cached; `userName` default; `botUserName(host)` per installation,
   bot identity (D23): both halves configured → no `GET /users/myself` at all;
   either missing → one per installation missing it, with the configured half
-  winning; a failed lookup resolves `initialize`, is retried by the next
+  winning; blank `BACKLOG_BOT_*` variables are looked up;
+  `botUserName(host)` before the identity is known throws; a failed lookup
+  resolves `initialize`, is retried by the next
   webhook, and a webhook that still cannot learn it is 503 and not dispatched;
   `parseMessage` before the identity is known throws; the fetched id
   suppresses self messages and the fetched name is the mention the core

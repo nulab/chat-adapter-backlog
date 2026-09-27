@@ -4165,6 +4165,36 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
     ).toThrow(ValidationError);
   });
 
+  it('blank BACKLOG_BOT_USER_ID and BACKLOG_BOT_USER_NAME are looked up rather than rejected', async () => {
+    process.env.BACKLOG_BOT_USER_ID = '';
+    process.env.BACKLOG_BOT_USER_NAME = '';
+    const { api, getMyself } = myselfCountingApi();
+    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+
+    await adapter.initialize(
+      createMockChatInstance({ logger: createMockLogger() })
+    );
+
+    expect(getMyself).toHaveBeenCalledTimes(1);
+    expect(adapter.botUserName(FIXTURE.host)).toBe(FIXTURE.bot.name);
+  });
+
+  it('botUserName before the identity is known is refused rather than guessed', () => {
+    const adapter = createBacklogAdapter(
+      identitylessConfig(() => myselfCountingApi().api)
+    );
+
+    let failure: unknown;
+    try {
+      adapter.botUserName(FIXTURE.host);
+    } catch (cause) {
+      failure = cause;
+    }
+
+    expect(failure).toBeInstanceOf(AdapterError);
+    expect((failure as AdapterError).code).toBe('BOT_IDENTITY_UNRESOLVED');
+  });
+
   it('with neither configured, initialize reads both from one GET /users/myself', async () => {
     const { api, getMyself } = myselfCountingApi();
     const adapter = createBacklogAdapter(identitylessConfig(() => api));
@@ -4298,21 +4328,6 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
     expect(response.status).toBe(503);
     expect(await response.text()).toBe('Bot identity unavailable');
     expect(chat).not.toHaveDispatched('processMessage');
-  });
-
-  it('webhooks that arrive together on a cold instance share one lookup', async () => {
-    const { api, getMyself } = myselfCountingApi();
-    getMyself.mockRejectedValueOnce(new Error('network down'));
-    const adapter = createBacklogAdapter(identitylessConfig(() => api));
-    const chat = createMockChatInstance({ logger: createMockLogger() });
-    await adapter.initialize(chat);
-
-    await Promise.all([
-      adapter.handleWebhook(webhookRequest(issueCommented({ commentId: 1 }))),
-      adapter.handleWebhook(webhookRequest(issueCommented({ commentId: 2 }))),
-    ]);
-
-    expect(getMyself).toHaveBeenCalledTimes(2);
   });
 
   it('parseMessage before the identity is known is refused rather than guessed', () => {

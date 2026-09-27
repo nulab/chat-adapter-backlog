@@ -353,6 +353,15 @@ function resolveCredential(candidate: {
   fail('exactly one of apiKey or accessToken is required');
 }
 
+/**
+ * Only for the two optional `BACKLOG_BOT_*` variables: a blank line copied
+ * from `.env.example` means "look it up", whereas a blank required variable
+ * stays the validation error `requireWithEnvFallback` reports.
+ */
+function blankAsUnset(value: string | undefined): string | undefined {
+  return value === '' ? undefined : value;
+}
+
 function resolveShapeA(
   config: BacklogAdapterConfig,
   requireSecret: boolean
@@ -391,13 +400,14 @@ function resolveShapeA(
     );
   }
 
-  const botUserIdFromEnv = process.env[ENV_BOT_USER_ID];
+  const botUserIdFromEnv = blankAsUnset(process.env[ENV_BOT_USER_ID]);
   const botUserId =
     config.botUserId ??
     (botUserIdFromEnv === undefined
       ? undefined
       : parseBotUserIdFromEnv(botUserIdFromEnv, ENV_BOT_USER_ID));
-  const botUserName = config.botUserName ?? process.env[ENV_BOT_USER_NAME];
+  const botUserName =
+    config.botUserName ?? blankAsUnset(process.env[ENV_BOT_USER_NAME]);
 
   const webhookSecret =
     config.webhookSecret !== undefined
@@ -630,14 +640,6 @@ export class BacklogAdapter implements Adapter<
    * the next caller that needs the identity asks again.
    */
   private readonly botIdentities = new Map<string, BotIdentity>();
-  /**
-   * The lookup in flight per host, so the webhooks that arrive together on a
-   * cold instance share one `GET /users/myself` instead of spending one each.
-   */
-  private readonly pendingBotIdentities = new Map<
-    string,
-    Promise<BotIdentity>
-  >();
   private readonly createTransport: (
     installation: ResolvedInstallation
   ) => AdapterTransport;
@@ -768,13 +770,7 @@ export class BacklogAdapter implements Adapter<
         : (installation) => ({ api: createApi(installation) });
   }
 
-  /**
-   * `config.userName`, else the first installation's bot name — configured,
-   * or fetched by `initialize`. Empty until that fetch has answered: the core
-   * reads `adapter.userName || chat.userName` (`.claude/rules/
-   * chat-sdk-core-facts.md`), so an empty string hands mention matching to
-   * the `Chat`'s own name rather than to a guess.
-   */
+  /** `""` rather than a guess until fetched: the core then falls back to `chat.userName`. */
   get userName(): string {
     return (
       this.configuredUserName ??
@@ -784,25 +780,9 @@ export class BacklogAdapter implements Adapter<
   }
 
   /**
-   * Stores the `ChatInstance`, swaps to its logger (docs/specs/adapter.md
-   * §4.1) and resolves every bot identity configuration left incomplete —
-   * one `GET /users/myself` per such installation, none at all when every
-   * installation configured both `botUserId` and `botUserName` (D23).
-   * Storing `chat` ahead of any member that reads it is deliberate:
-   * `initialize` runs once, long before the webhook (P3) dispatch that needs
-   * it, and the core tolerates construction happening long before
-   * `initialize` (`.claude/rules/chat-sdk-core-facts.md`). The summary line
-   * gives an operator one log entry confirming which host(s) and ingress
-   * limits this instance came up with, without requiring the reader to have a
-   * debugger attached to inspect construction.
-   *
-   * A failed lookup is a `warn`, not a rejection. The core memoises the
-   * promise of its adapters' `initialize` calls and never retries a rejected
-   * one, so throwing here would refuse every later webhook for every adapter
-   * of the `Chat` until the process restarts. The host whose lookup failed is
-   * asked again by the first webhook or call that needs its identity, and a
-   * webhook that still cannot learn it is answered 503 rather than dispatched
-   * without a self-message check (§5.1 row 11).
+   * A failed bot identity lookup is logged, never thrown: the core memoises a
+   * rejected `initialize` and never retries it, which would refuse every later
+   * webhook until the process restarts (docs/specs/adapter.md D23).
    */
   async initialize(chat: ChatInstance): Promise<void> {
     this.chat = chat;
@@ -827,42 +807,22 @@ export class BacklogAdapter implements Adapter<
     );
   }
 
-  /**
-   * The bot's identity on `host`, from configuration or one shared
-   * `GET /users/myself` (D23). A configured half wins over the fetched one,
-   * so a deployment can pin the display name its users type while leaving the
-   * id to the API. A failed lookup rejects and is not cached.
-   */
   private async botIdentity(host: string): Promise<BotIdentity> {
     const installation = this.resolveInstallation(host);
     const known = this.botIdentities.get(host);
     if (known !== undefined) {
       return known;
     }
-    let pending = this.pendingBotIdentities.get(host);
-    if (pending === undefined) {
-      pending = this.api(host)
-        .getMyself()
-        .then((myself) => {
-          const identity: BotIdentity = {
-            id: installation.botUserId ?? myself.id,
-            name: installation.botUserName ?? myself.name,
-          };
-          this.botIdentities.set(host, identity);
-          return identity;
-        })
-        .finally(() => this.pendingBotIdentities.delete(host));
-      this.pendingBotIdentities.set(host, pending);
-    }
-    return pending;
+    const myself = await this.api(host).getMyself();
+    const identity: BotIdentity = {
+      id: installation.botUserId ?? myself.id,
+      name: installation.botUserName ?? myself.name,
+    };
+    this.botIdentities.set(host, identity);
+    return identity;
   }
 
-  /**
-   * `botIdentity` for the synchronous members, which cannot await a lookup:
-   * `parseMessage` and `botUserName(host)`. Every path the adapter drives
-   * itself has awaited `botIdentity` first, so this throws only for a host
-   * whose identity neither configuration nor `initialize` could supply.
-   */
+  /** For the synchronous members, which cannot await `botIdentity`. */
   private knownBotIdentity(host: string): BotIdentity {
     this.resolveInstallation(host);
     const identity = this.botIdentities.get(host);
@@ -974,11 +934,6 @@ export class BacklogAdapter implements Adapter<
    * cannot build or match its own mention string from it. Only the name is
    * exposed, not the installation: `botUserId` stays private (§3.3) and a
    * credential must never leave through a getter.
-   *
-   * Synchronous, so a name left to `GET /users/myself` is readable only once
-   * `initialize` has fetched it; before that it throws
-   * `AdapterError(…, "BOT_IDENTITY_UNRESOLVED")` rather than answer a name
-   * the bot does not have (D23).
    */
   botUserName(host: string): string {
     return this.knownBotIdentity(host).name;

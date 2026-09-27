@@ -129,13 +129,10 @@ assert.equal(
 // The three variables README.md calls required, and nothing else: the bot
 // identity is left to `GET /users/myself`, which `initialize` would make —
 // construction still must not.
-const { BACKLOG_BOT_USER_ID, BACKLOG_BOT_USER_NAME } = process.env;
 delete process.env.BACKLOG_BOT_USER_ID;
 delete process.env.BACKLOG_BOT_USER_NAME;
 assert.equal(adapterModule.createBacklogAdapter().name, 'backlog');
 assert.equal(networkAttempts, 0, 'construction reached the network');
-process.env.BACKLOG_BOT_USER_ID = BACKLOG_BOT_USER_ID;
-process.env.BACKLOG_BOT_USER_NAME = BACKLOG_BOT_USER_NAME;
 
 // `console.error`, not `console.log`: oxlint's `no-console` allows `warn` and
 // `error` only, and `--max-warnings 0` makes the difference a failing lint.

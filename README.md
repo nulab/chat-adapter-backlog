@@ -92,8 +92,8 @@ not a request to fall back.
 | `BACKLOG_HOST` | yes | Space host without a scheme, port or path. |
 | `BACKLOG_API_KEY` | one of the two | Personal API key, sent in the `Backlog-API-Key` header. |
 | `BACKLOG_ACCESS_TOKEN` | one of the two | OAuth 2.0 bearer token instead of a key. |
-| `BACKLOG_BOT_USER_ID` | no | Numeric id of the bot user. Read from `GET /api/v2/users/myself` when unset — see **Bot identity**. |
-| `BACKLOG_BOT_USER_NAME` | no | The bot's display name, as Backlog renders it in a comment. Read from `GET /api/v2/users/myself` when unset. |
+| `BACKLOG_BOT_USER_ID` | no | Numeric id of the bot user. Read from `GET /api/v2/users/myself` when unset or blank — see **Bot identity**. |
+| `BACKLOG_BOT_USER_NAME` | no | The bot's display name, as Backlog renders it in a comment. Read from `GET /api/v2/users/myself` when unset or blank. |
 | `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter. At least 16 bytes. |
 
 ## Configuration
