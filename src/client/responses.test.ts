@@ -14,7 +14,7 @@ import {
   pullRequest,
   star,
   user,
-} from '../test/fixtures/rest.js';
+} from '../test/fixtures/rest';
 import {
   download,
   readIssue,
@@ -22,7 +22,7 @@ import {
   readPullRequest,
   readPullRequestComment,
   readUser,
-} from './responses.js';
+} from './responses';
 
 function without<T extends object>(value: T, key: keyof T): unknown {
   const copy: Partial<T> = { ...value };

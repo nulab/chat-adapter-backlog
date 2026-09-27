@@ -6,6 +6,7 @@ import {
   mentionPattern,
   mentionUser,
 } from '../ids';
+import { authorOf } from '../reads';
 
 import { payloadOf } from './payload';
 
@@ -17,7 +18,7 @@ import type {
   BacklogRawMessage,
   BacklogSubjectRef,
 } from '../types';
-import type { Attachment, Author, MessageData } from 'chat';
+import type { Attachment, MessageData } from 'chat';
 
 export type MessageActivity = Exclude<WebhookActivity, { type: 4 | 14 }>;
 export type BulkUpdateActivity = Extract<WebhookActivity, { type: 14 }>;
@@ -33,7 +34,7 @@ export interface InboundContext {
 
 type Notification = WebhookActivity['notifications'][number];
 
-export interface MentionEvidence {
+interface MentionEvidence {
   /** Unset turns off the two rules that match the name; the id rules remain. */
   botUserName: string | undefined;
   botUserId: number;
@@ -58,7 +59,7 @@ export interface MentionEvidence {
 // both by display name (measured).
 const ASSIGNMENT_CHANGE_FIELDS: readonly string[] = ['assigner', 'assignee'];
 
-export function detectMention(evidence: MentionEvidence): boolean {
+function detectMention(evidence: MentionEvidence): boolean {
   const { botUserName, botUserId, text, assigneeId, changes } = evidence;
   // Not narrowed to one `reason`: an allowlist could only drop a directed
   // notification whose code nobody has measured yet.
@@ -114,25 +115,6 @@ function changeAttachments(
   return changes
     .filter((change) => change.field === 'attachment' && change.newValue)
     .flatMap((change) => subject.webhookChangeAttachment(change) ?? []);
-}
-
-/**
- * `isBot` mirrors `isMe`: Backlog has no bot attribute, and the `"unknown"`
- * the type allows would make the core's `getParticipants` drop the author.
- */
-function authorOf(
-  host: string,
-  botUserId: number,
-  user: WebhookActivity['createdUser']
-): Author {
-  const isMe = user.id === botUserId;
-  return {
-    userId: `${host}:${user.id}`,
-    userName: user.userId ?? user.name,
-    fullName: user.name,
-    isMe,
-    isBot: isMe,
-  };
 }
 
 function commentPart(

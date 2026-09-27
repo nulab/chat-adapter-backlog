@@ -813,31 +813,7 @@ describe('buildInboundMessage — the subject the caller resolved', () => {
   });
 });
 
-describe('mention regex negative cases (§5.4)', () => {
-  it.each([['@Chatbot2'], ['foo@Chatbot'], ['<@U999>']])(
-    '%s does not match the bot mention pattern',
-    (text) => {
-      const activity = commented(issueCommented({ text }));
-
-      const fields = mapped(activity, input());
-
-      expect(fields.isMention).toBe(false);
-    }
-  );
-
-  it.each([['@Chatbot'], ['@Chatbotさん'], ['(@Chatbot)']])(
-    '%s matches the bot mention pattern',
-    (text) => {
-      const activity = commented(issueCommented({ text }));
-
-      const fields = mapped(activity, input());
-
-      expect(fields.isMention).toBe(true);
-    }
-  );
-});
-
-describe('mention detection from notifications[] (§5.4 rule 6)', () => {
+describe('mention detection from notifications[]', () => {
   it('a comment that named the bot only in the notification field is a mention', () => {
     const activity = commented(
       issueCommented({
@@ -1093,7 +1069,7 @@ describe('buildBulkUpdateMessage', () => {
   });
 });
 
-describe('one pull request comment seen twice (§6.6)', () => {
+describe('one pull request comment seen twice', () => {
   const ATTACHMENT_ID = 4242;
   const ENDPOINT_REF = [
     FIXTURE.projectId,
@@ -1178,7 +1154,7 @@ describe('one pull request comment seen twice (§6.6)', () => {
  * `notifications[]` names the bot as well (measured on a development space,
  * 2026-09-06).
  */
-describe('a comment naming the bot in its text and its notifications[] (§5.3, §5.4)', () => {
+describe('a comment naming the bot in its text and its notifications[]', () => {
   it('is mapped whole — mention, text and message id — without throwing', () => {
     const activity = commented(
       issueCommented({

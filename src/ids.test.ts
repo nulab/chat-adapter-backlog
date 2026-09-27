@@ -104,7 +104,7 @@ describe('thread ids', () => {
     );
   });
 
-  it('the old four-segment thread id is no longer accepted', () => {
+  it('a thread id whose subject names no kind is rejected', () => {
     expect(() =>
       decodeThreadId('backlog:example.backlog.com:500:8001')
     ).toThrow(ValidationError);
@@ -396,7 +396,7 @@ describe('message ids', () => {
     expect(here).not.toBe(there);
   });
 
-  it('the old ":i" root tag is no longer accepted', () => {
+  it('a message id tagging its root anything but "r" is rejected', () => {
     expect(() => decodeMessageId('example.backlog.com:8001:i')).toThrow(
       ValidationError
     );
@@ -533,10 +533,7 @@ describe('user ids', () => {
   });
 });
 
-describe('ids beyond the safe integer range', () => {
-  // `Number('99999999999999999999')` is 1e20, which prints as
-  // "100000000000000000000" — so the old codec decoded this id and re-encoded
-  // it as a different one, addressing something nobody asked for.
+describe('ids past 2^53-1, which Number would read as a float that re-encodes as a different id (1e20 for 99999999999999999999)', () => {
   const BIG = '99999999999999999999';
   const LARGEST = String(Number.MAX_SAFE_INTEGER);
 

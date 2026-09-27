@@ -6,11 +6,11 @@ import {
   mapCredentialResolverError,
   mapTransportError,
   stripQueryString,
-} from './errors.js';
-import { decideRetry } from './rate-limit.js';
+} from './errors';
+import { decideRetry } from './rate-limit';
 
-import type { BacklogErrorBodyEntry } from './errors.js';
-import type { RetryDecision } from './rate-limit.js';
+import type { BacklogErrorBodyEntry } from './errors';
+import type { RetryDecision } from './rate-limit';
 import type { Logger } from 'chat';
 
 type Fetch = typeof globalThis.fetch;

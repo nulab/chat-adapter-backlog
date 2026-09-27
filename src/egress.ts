@@ -6,9 +6,9 @@ import {
   decodeThreadId,
   encodeMessageId,
   encodeThreadId,
+  isMessageInThread,
 } from './ids';
 import { readUploadedFile, send } from './client/responses';
-import { addressesSameSubject } from './reads';
 
 import type { AddCommentInput, SubjectClient } from './subject/client';
 import type {
@@ -26,16 +26,11 @@ import type {
 } from 'chat';
 
 /**
- * A message id naming another host or subject is reported rather than
- * resolved: the two ids are independent inputs, and nothing outside the
- * caller guarantees they agree. The body and a fieldchange update are refused
- * too (D12): "edit what the bot posted" must never rewrite a human's issue.
- *
- * The subject travels out from the **thread**, never from the message id,
- * even though the two are now known to agree: taking it from the message id
- * is what let `deleteMessage` on a pull-request thread reach the issue
- * endpoints and slip past the D-PR3 guard inside the pull-request subject
- * client.
+ * A message id naming another host or subject is refused rather than
+ * followed: the two ids are independent inputs, and nothing outside the
+ * caller guarantees they agree. The body and a field-change update are
+ * refused too (D12): "edit what the bot posted" must never rewrite a human's
+ * issue.
  */
 export function requireCommentInThread(
   threadId: string,
@@ -49,10 +44,7 @@ export function requireCommentInThread(
 } {
   const thread = decodeThreadId(threadId);
   const decoded = decodeMessageId(messageId);
-  if (
-    decoded.host !== thread.host ||
-    !addressesSameSubject(thread, decoded.subject)
-  ) {
+  if (!isMessageInThread(decoded, thread)) {
     throw new ValidationError(
       'backlog',
       `${messageId} does not name a message in thread ${threadId} and cannot be ${action}`
@@ -73,18 +65,14 @@ export function requireCommentInThread(
 }
 
 /**
- * `.strict()` rather than zod's default `.strip()`: a misspelt extra would
- * otherwise be dropped without a word and the notification silently lost.
  * Membership is not checked: Backlog drops a non-member id without failing
  * the request (measured).
  */
-const backlogPostableExtrasSchema = z
-  .object({
-    notifiedUserId: z.array(z.number().int().positive()).optional(),
-  })
-  .strict();
+const backlogPostableExtrasSchema = z.object({
+  notifiedUserId: z.array(z.number().int().positive()).optional(),
+});
 
-export function extractNotifiedUserId(
+function extractNotifiedUserId(
   message: AdapterPostableMessage
 ): number[] | undefined {
   if (typeof message !== 'object' || message === null) {
@@ -94,7 +82,7 @@ export function extractNotifiedUserId(
     return undefined;
   }
   const result = backlogPostableExtrasSchema.safeParse({
-    notifiedUserId: (message as { notifiedUserId?: unknown }).notifiedUserId,
+    notifiedUserId: message.notifiedUserId,
   });
   if (!result.success) {
     throw new ValidationError(
@@ -111,7 +99,7 @@ export function extractNotifiedUserId(
  * unattached upload after an hour) without racing a later one that would
  * otherwise still be in flight.
  */
-export async function uploadFiles(
+async function uploadFiles(
   client: Backlog,
   files: FileUpload[],
   toBuffer: (file: FileUpload) => Promise<Buffer>
@@ -244,7 +232,7 @@ export async function editComment(
   );
 }
 
-export interface AddReactionInput {
+export interface ReactionInput {
   client: Backlog;
   subject: SubjectClient;
   commentId: number;
@@ -255,7 +243,7 @@ export interface AddReactionInput {
  * Reads the comment before starring: `POST /stars` is not idempotent
  * (measured), so without the read every retry would add another star.
  */
-export async function addReaction(input: AddReactionInput): Promise<void> {
+export async function addReaction(input: ReactionInput): Promise<void> {
   const { client, subject, commentId, botUserId } = input;
   const comment = await subject.getComment(commentId);
   const alreadyStarred = comment.stars.some(
@@ -267,20 +255,11 @@ export async function addReaction(input: AddReactionInput): Promise<void> {
   await send(client.postStar(subject.starTarget(commentId)));
 }
 
-export interface RemoveReactionInput {
-  client: Backlog;
-  subject: SubjectClient;
-  commentId: number;
-  botUserId: number;
-}
-
 /**
  * Re-reads the comment rather than trusting a prior snapshot, because a star
  * is removed by its own id.
  */
-export async function removeReaction(
-  input: RemoveReactionInput
-): Promise<void> {
+export async function removeReaction(input: ReactionInput): Promise<void> {
   const { client, subject, commentId, botUserId } = input;
   const comment = await subject.getComment(commentId);
   const ownStars = comment.stars.filter(

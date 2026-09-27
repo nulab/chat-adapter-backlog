@@ -1,5 +1,3 @@
-import { AdapterRateLimitError } from '@chat-adapter/shared';
-
 /**
  * Fixed rather than configurable: neither first-party Chat SDK adapter
  * exposes retry tuning. A runtime that stops a call sooner than `MAX_WAIT_MS`
@@ -72,11 +70,4 @@ export function decideRetry(
 
 function retryJitterMs(): number {
   return Math.floor(Math.random() * MAX_RETRY_JITTER_MS);
-}
-
-/** Builds the error thrown when a 429 cannot be retried further. */
-export function rateLimitError(
-  retryAfterSeconds: number
-): AdapterRateLimitError {
-  return new AdapterRateLimitError('backlog', retryAfterSeconds);
 }

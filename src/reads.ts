@@ -11,6 +11,8 @@ import {
   encodeChannelId,
   encodeMessageId,
   encodeThreadId,
+  encodeUserId,
+  isMessageInThread,
 } from './ids';
 import { readIssues, readProject, readUser } from './client/responses';
 import { parseAttachmentPath } from './subject/url';
@@ -25,9 +27,6 @@ import type {
   BacklogRawComment,
   BacklogRawIssue,
   BacklogRawMessage,
-  BacklogSubjectRef,
-  BacklogThreadId,
-  BacklogUser,
 } from './types';
 import type { Backlog } from 'backlog-js';
 import type {
@@ -78,29 +77,26 @@ function parseCursor(cursor: string | undefined): number | undefined {
 
 /**
  * Keyed on the numeric `id`, never on `userId`: that is a login handle, and
- * `null` for a user signed in with a Nulab account.
+ * `null` for a user signed in with a Nulab account. `isBot` mirrors `isMe`:
+ * Backlog has no bot attribute, and the `"unknown"` the type allows would make
+ * the core's `getParticipants` drop the author.
  */
-export function buildRestAuthor(
+export function authorOf(
   host: string,
   botUserId: number,
-  createdUser: BacklogUser
+  user: { id: number; name: string; userId?: string | null | undefined }
 ): Author {
-  const isMe = createdUser.id === botUserId;
+  const isMe = user.id === botUserId;
   return {
-    userId: `${host}:${createdUser.id}`,
-    userName: createdUser.userId ?? createdUser.name,
-    fullName: createdUser.name,
+    userId: encodeUserId({ host, userId: user.id }),
+    userName: user.userId ?? user.name,
+    fullName: user.name,
     isMe,
     isBot: isMe,
   };
 }
 
-/**
- * Everything a `Message` needs beyond the record it is built from. `subject`
- * carries both the addressing (`subject.ref`) and every call the two kinds
- * answer differently, so nothing below this line names an issue or a pull
- * request (D-PR2).
- */
+/** Everything a `Message` needs beyond the record it is built from. */
 export interface MessageBuilders {
   host: string;
   projectId: number;
@@ -116,7 +112,7 @@ export interface MessageBuilders {
  * `edited` is always `false`: a root's `updated` moves on any field change
  * and says nothing about whether the body itself was edited.
  */
-export function buildRootMessage(
+function buildRootMessage(
   builders: MessageBuilders,
   root: SubjectRoot
 ): Message<BacklogRawMessage> {
@@ -128,7 +124,7 @@ export function buildRootMessage(
     text,
     formatted: format(text),
     raw: subject.rootRaw(root),
-    author: buildRestAuthor(host, botUserId, root.createdUser),
+    author: authorOf(host, botUserId, root.createdUser),
     metadata: { dateSent: new Date(root.created), edited: false },
     // Empty by decision (D11): the webhook path carries a body's files
     // because the payload names them, and reading them here would cost a
@@ -142,7 +138,7 @@ export function buildRootMessage(
  * Unlike a root, a comment's `updated` is its own edit history, and the only
  * one a consumer gets: a comment edit fires no webhook (measured).
  */
-export function buildCommentMessage(
+function buildCommentMessage(
   builders: MessageBuilders,
   comment: BacklogRawComment
 ): Message<BacklogRawMessage> {
@@ -175,7 +171,7 @@ export function buildCommentMessage(
         oldValue: change.originalValue,
       })),
     },
-    author: buildRestAuthor(host, botUserId, comment.createdUser),
+    author: authorOf(host, botUserId, comment.createdUser),
     metadata,
     attachments: subject.commentAttachments(comment),
     isMention: false,
@@ -210,12 +206,9 @@ export async function fetchMessages(
 
   const startsWithRoot = direction === 'forward' && cursor === undefined;
   const commentLimit = startsWithRoot ? limit - 1 : limit;
-  // `max(…, 1)` rather than skipping the request when `commentLimit` is 0: a
-  // forward `limit: 1` page holds only the root, and the single comment
-  // fetched here is what separates "there are comments, come back with cursor
-  // 0" from "this thread has none, you are done". Skipping it would leave
-  // `nextCursor` always defined on that page and move the same request into
-  // the caller's next round trip.
+  // Not skipped when `commentLimit` is 0: on a forward `limit: 1` page, which
+  // holds only the root, the one comment fetched is what tells "come back
+  // with cursor 0" from "this thread has none".
   const count = Math.max(commentLimit, 1);
 
   const comments =
@@ -263,27 +256,6 @@ export async function fetchMessages(
   return result;
 }
 
-/**
- * Whether a decoded message id addresses the thread's own subject. Compared
- * through the grammar rather than field by field because a field-by-field
- * comparison needs a `kind` branch, and `subjectClientFor` is the only place
- * in `src/` allowed to have one (D-PR2); the
- * encoding is injective over subjects, so string equality is a total
- * comparison with no branch to keep in step with `BacklogSubjectRef`.
- *
- * Exported because every egress member that takes a thread id and a message
- * id owes the caller the same answer (`src/egress.ts`). A second copy of the
- * rule is what let egress take the subject from the message id while reads
- * took it from the thread id, so there is deliberately one implementation and
- * `src/egress.ts` imports it rather than restating it.
- */
-export function addressesSameSubject(
-  thread: BacklogThreadId,
-  subject: BacklogSubjectRef
-): boolean {
-  return encodeThreadId({ ...thread, subject }) === encodeThreadId(thread);
-}
-
 export interface FetchMessageInput {
   threadId: string;
   messageId: string;
@@ -307,13 +279,7 @@ export async function fetchMessage(
   const thread = decodeThreadId(threadId);
   const decoded = decodeMessageId(messageId);
 
-  if (
-    decoded.host !== thread.host ||
-    !addressesSameSubject(thread, decoded.subject)
-  ) {
-    return null;
-  }
-  if (decoded.part === 'update') {
+  if (!isMessageInThread(decoded, thread) || decoded.part === 'update') {
     return null;
   }
 
@@ -387,7 +353,7 @@ export async function fetchSubject(
     description: root.body,
     status: root.status.name,
     author: {
-      id: `${raw.host}:${root.createdUser.id}`,
+      id: encodeUserId({ host: raw.host, userId: root.createdUser.id }),
       name: root.createdUser.name,
     },
     labels: subject.subjectLabels(root),
@@ -400,7 +366,7 @@ export async function fetchSubject(
   }
   if (root.assignee !== null) {
     messageSubject.assignee = {
-      id: `${raw.host}:${root.assignee.id}`,
+      id: encodeUserId({ host: raw.host, userId: root.assignee.id }),
       name: root.assignee.name,
     };
   }
@@ -450,11 +416,8 @@ function listedIssueRoot(
 ): SubjectRoot {
   const root = subject.rootFrom({ kind: 'issue', host, issue, changes: [] });
   if (root === undefined) {
-    // Unreachable: `subjectFor` builds an issue client keyed by this very
-    // issue, and an issue client reads an `{ kind: "issue" }` raw. Throwing
-    // rather than falling back to `fetchRoot()` keeps a mistake here loud
-    // instead of quietly spending one read per row of a page the caller
-    // already paid a search-bucket call for.
+    // Unreachable for an issue client. Not a `fetchRoot()` fallback, which
+    // would hide the mistake behind one read per row.
     throw new AdapterError(
       'a listed issue did not describe its own thread root',
       'backlog',
@@ -477,7 +440,7 @@ export async function listThreads(
   const { channelId, options, client, builders, subjectFor } = input;
   const { host, projectId } = decodeChannelId(channelId);
   const limit = clampLimit(options?.limit);
-  const offset = parseOffset(options?.cursor);
+  const offset = parseCursor(options?.cursor) ?? 0;
 
   const issues = await readIssues(
     client.getIssues({ projectId: [projectId], count: limit, offset })
@@ -507,16 +470,6 @@ export async function listThreads(
   return result;
 }
 
-function parseOffset(cursor: string | undefined): number {
-  if (cursor === undefined) {
-    return 0;
-  }
-  if (!CURSOR_PATTERN.test(cursor)) {
-    throw new ValidationError('backlog', `"${cursor}" is not a valid cursor`);
-  }
-  return Number(cursor);
-}
-
 export interface GetUserInput {
   userId: string;
   client: Backlog;
@@ -529,7 +482,7 @@ export async function getUser(input: GetUserInput): Promise<UserInfo | null> {
   try {
     const user = await readUser(client.getUser(id));
     const info: UserInfo = {
-      userId: `${host}:${user.id}`,
+      userId: encodeUserId({ host, userId: user.id }),
       userName: user.userId ?? user.name,
       fullName: user.name,
       isBot: user.id === botUserId,
@@ -549,7 +502,7 @@ export async function getUser(input: GetUserInput): Promise<UserInfo | null> {
 export interface RehydrateAttachmentInput {
   attachment: Attachment;
   host: string;
-  client: () => Backlog;
+  client: Backlog;
 }
 
 /**
@@ -579,5 +532,5 @@ export function rehydrateAttachment(
   if (download === null) {
     return attachment;
   }
-  return { ...attachment, fetchData: () => download(client()) };
+  return { ...attachment, fetchData: () => download(client) };
 }

@@ -122,7 +122,7 @@ const configSchema = z
 export type SpaceConfig = z.output<typeof configSchema>;
 
 /**
- * Called by the port on every request rather than once here: resolving at
+ * Called by the client on every request rather than once here: resolving at
  * construction would pin an hourly OAuth token for the process's lifetime.
  */
 function resolve(value: Resolvable): string | Promise<string> {

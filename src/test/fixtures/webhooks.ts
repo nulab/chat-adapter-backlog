@@ -1,16 +1,8 @@
 /**
- * Webhook payload builders for the activity types the adapter processes.
- *
- * Shapes follow `.claude/rules/backlog-webhook-facts.md`: the body is one
- * Activity object as returned by Get Recent Updates, and every measured payload
- * carries extra keys (`field_text`, `type` inside `changes[]`, `shared_files`).
- * Builders therefore emit those keys rather than a minimal shape, so a schema
- * that only tolerates the documented fields fails here rather than in
- * production. `notifications` defaults to `[]` — the shape a body replayed from
- * `GET /space/activities` has — and every builder takes `notifications` so a
- * real delivery's populated array can be built too.
- *
- * @see https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/
+ * Deliveries as `.claude/rules/backlog-webhook-facts.md` and
+ * `backlog-pull-request-facts.md` record them, extra keys included, so a
+ * schema that tolerates only the documented fields fails here rather than in
+ * production.
  */
 
 /** Vocabulary shared by every fixture, so no real space or person is named. */
@@ -22,17 +14,10 @@ export const FIXTURE = {
   projectKey: 'EXAMPLE',
   issueId: 8001,
   issueKeyId: 42,
-  // A second issue, so a bulk update has more than one to fan out to.
   otherIssueId: 8002,
   otherIssueKeyId: 43,
-  // A third, so a batch can be larger than a pair — the measured
-  // notification-per-issue payload updated three at once.
   thirdIssueId: 8003,
   thirdIssueKeyId: 44,
-  // The pull-request vocabulary P3's builders address a thread with: a pull
-  // request is keyed by repository id + number, never by `pullRequestId` —
-  // that space-wide id addresses no endpoint and exists here only because
-  // `POST /stars` wants it (`.claude/rules/backlog-pull-request-facts.md`).
   repositoryId: 700,
   repositoryName: 'example-repo',
   pullRequestNumber: 12,
@@ -42,35 +27,25 @@ export const FIXTURE = {
   bob: { id: 101, name: 'Bob', userId: 'bob' },
 } as const;
 
-/**
- * A `createdUser` as Backlog serialises it. `userId` is `null` for users who
- * sign in with a Nulab account, which is why the adapter falls back to `name`.
- */
-export interface FixtureUser {
+interface FixtureUser {
   id: number;
   name: string;
   userId?: string | null;
 }
 
-export interface FixtureChange {
+interface FixtureChange {
   field: string;
   new_value?: string | number | null;
   old_value?: string | number | null;
 }
 
-export interface FixtureAttachment {
+interface FixtureAttachment {
   id: number;
   name: string;
   size: number;
 }
 
-/**
- * One top-level `notifications[]` entry. `reason` follows Get Notification's
- * codes: 1 Assigned to Issue, 2 Issue Commented, 10 Assigned to Pull Request,
- * 11 Comment Added on Pull Request (`.claude/rules/backlog-api-facts.md`).
- * The adapter reads the user, never the reason (§5.4 rule 6).
- */
-export interface FixtureNotification {
+interface FixtureNotification {
   user: FixtureUser;
   reason: number;
 }
@@ -97,11 +72,7 @@ function createdUserOf(user: FixtureUser): Record<string, unknown> {
   };
 }
 
-/**
- * One `notifications[]` entry as Backlog serialises it: the read flags and the
- * full user object surround the two fields the adapter reads
- * (measured 2026-09-06).
- */
+/** `backlog-webhook-facts.md` § Payload envelope. */
 function notificationEntries(
   notifications: FixtureNotification[]
 ): Record<string, unknown>[] {
@@ -114,10 +85,6 @@ function notificationEntries(
   }));
 }
 
-/**
- * `changes[]` as Backlog serialises it: the three documented keys plus
- * `field_text` and `type`, which every measured payload carries.
- */
 function changeEntries(changes: FixtureChange[]): Record<string, unknown>[] {
   return changes.map((change) => ({
     field: change.field,
@@ -135,7 +102,6 @@ function envelope(
 ): Record<string, unknown> {
   const user = options.createdUser ?? FIXTURE.alice;
   return {
-    // The activity id, not the issue or comment id.
     id: 71828,
     project: {
       id: options.projectId ?? FIXTURE.projectId,
@@ -146,16 +112,13 @@ function envelope(
     },
     type,
     content,
-    // Empty by default because that is what a body replayed from `GET
-    // /space/activities` carries; a real delivery names the users it notified
-    // (measured 2026-09-06), which is what `notifications` builds.
     notifications: notificationEntries(options.notifications ?? []),
     createdUser: createdUserOf(user),
     created: options.created ?? DEFAULT_CREATED,
   };
 }
 
-/** Type 1 — Issue Created. `assignee` is present only on the webhook form. */
+/** Type 1 — Issue Created. */
 export function issueCreated(
   options: ActivityOptions & {
     summary?: string;
@@ -181,11 +144,8 @@ export function issueCreated(
 }
 
 /**
- * Type 1 as the activity API returns it — without `assignee`.
- *
- * Kept separate from {@link issueCreated} because assignment-based mention
- * detection can only work on the webhook form; replaying an activity body must
- * still parse.
+ * Type 1 as the activity API returns it: `backlog-webhook-facts.md` § What each
+ * issue operation emits.
  */
 export function issueCreatedFromActivityApi(
   options: ActivityOptions & {
@@ -205,7 +165,7 @@ export function issueCreatedFromActivityApi(
   );
 }
 
-/** Type 3 — Issue Commented. A plain comment carries no changes. */
+/** Type 3 — Issue Commented. */
 export function issueCommented(
   options: ActivityOptions & {
     commentId?: number;
@@ -229,8 +189,8 @@ export function issueCommented(
 }
 
 /**
- * Type 2 — Issue Updated, with the changelog comment Backlog attaches to every
- * field update. `comment.id` being set does **not** mean "no field change".
+ * Type 2 — Issue Updated, with the changelog comment every field update
+ * carries.
  */
 export function issueUpdated(
   options: ActivityOptions & {
@@ -257,12 +217,7 @@ export function issueUpdated(
   return envelope(2, content, options);
 }
 
-/**
- * Type 2 without a comment id — the `:u:<created>` message path.
- *
- * Every measured field change carried a comment id, so this shape is rare; it
- * exists so an update without one is a well-formed message rather than a 400.
- */
+/** Type 2 without a comment id, which no measured delivery lacked. */
 export function issueUpdatedWithoutComment(
   options: ActivityOptions & { changes?: FixtureChange[] } = {}
 ): Record<string, unknown> {
@@ -281,7 +236,6 @@ export function issueUpdatedWithoutComment(
   );
 }
 
-/** A status change reports ids as strings, not display names. */
 export function statusChanged(
   options: ActivityOptions = {}
 ): Record<string, unknown> {
@@ -293,8 +247,8 @@ export function statusChanged(
 }
 
 /**
- * An assignee change reports the new assignee by **display name** under the
- * field name `assigner` — not `assignee`, and not an id.
+ * `backlog-webhook-facts.md` § Type 2 `changes[]` field names and value
+ * notation.
  */
 export function assigneeChanged(
   options: ActivityOptions & {
@@ -315,7 +269,6 @@ export function assigneeChanged(
   });
 }
 
-/** A description edit carries both complete bodies in `changes[]`. */
 export function descriptionEdited(
   options: ActivityOptions & { before?: string; after?: string } = {}
 ): Record<string, unknown> {
@@ -333,11 +286,7 @@ export function descriptionEdited(
   });
 }
 
-/**
- * An attachment add arrives as a changelog comment whose `content` is
- * effectively empty; the change itself is visible only in that comment's REST
- * `changeLog`, so the webhook body carries no `changes[]` entry for it.
- */
+/** `backlog-webhook-facts.md` § What each issue operation emits. */
 export function attachmentAdded(
   options: ActivityOptions & { attachments?: FixtureAttachment[] } = {}
 ): Record<string, unknown> {
@@ -351,7 +300,6 @@ export function attachmentAdded(
   });
 }
 
-/** A comment posted together with a status change is one event, not two. */
 export function commentWithStatusChange(
   options: ActivityOptions & { text?: string } = {}
 ): Record<string, unknown> {
@@ -373,8 +321,7 @@ export function issueDeleted(
   );
 }
 
-/** One issue of a bulk update, as `content.link[]` names it. */
-export interface FixtureBulkIssue {
+interface FixtureBulkIssue {
   issueId: number;
   keyId: number;
   title: string;
@@ -396,7 +343,6 @@ const DEFAULT_BULK_ISSUES: FixtureBulkIssue[] = [
   },
 ];
 
-/** The default pair plus one, for a batch whose size is the point. */
 const THREE_BULK_ISSUES: FixtureBulkIssue[] = [
   ...DEFAULT_BULK_ISSUES,
   {
@@ -408,29 +354,8 @@ const THREE_BULK_ISSUES: FixtureBulkIssue[] = [
 ];
 
 /**
- * Type 14 — Issue Multi Updated: one delivery for a bulk update made from the
- * issue list, however many issues it covered — **one included**.
- *
- * Four details are measured (on a development space, 2026-09-06) and are the
- * reason this builder does not go through
- * {@link changeEntries} or reuse the numeric ids the other builders emit:
- *
- * - `content.link[].id` and `key_id` are decimal **strings** here, while every
- *   other activity writes the same fields as numbers.
- * - `changes[]` entries carry `field`, `new_value` and `type` and **no**
- *   `old_value` — a bulk update reports where the issues ended up, not where
- *   each of them started.
- * - `link[].comment` exists even when the comment box was left empty, with
- *   `content: ""`, and its `id` is a comment that really was written on that
- *   issue.
- * - `notifications[]` carries one reason-1 entry **per issue** when the batch
- *   changed the assignee, and none of them says which issue it belongs to.
- *   One delivery holding several indistinguishable entries is peculiar to 14.
- *
- * `content.comment` repeats the typed text with no `id` of its own, and
- * `individual_update` was `false` on all six measured deliveries — the bulk
- * update screen has no way to give two issues different values, so no known
- * operation produces a `true`.
+ * Type 14 — Issue Multi Updated, string ids and no `old_value` included:
+ * `backlog-webhook-facts.md` § What each issue operation emits.
  */
 export function issueMultiUpdated(
   options: ActivityOptions & {
@@ -467,14 +392,8 @@ export function issueMultiUpdated(
 }
 
 /**
- * A bulk update of several fields at once, as the issue list makes one: four
- * `changes[]` entries in two value systems and one assignee notification per
- * issue (measured on a development space, 2026-09-06).
- *
- * The notation is type 2's, not a bulk-specific one — `priority` is a
- * **id** written as a string while `component` (the category), `milestone`
- * and `assigner` are display names — and the only thing that makes it a
- * bulk update's `changes[]` is the absent `old_value`.
+ * Several fields and one assignee notification per issue:
+ * `backlog-webhook-facts.md` § What each issue operation emits.
  */
 export function bulkFieldsChanged(
   options: ActivityOptions & {
@@ -493,23 +412,11 @@ export function bulkFieldsChanged(
       { field: 'assigner', new_value: assignee.name },
       { field: 'priority', new_value: '2' },
     ],
-    // One reason-1 entry per issue, the same user repeated: Backlog emits the
-    // notification per issue, and the entries name no issue, so they are
-    // indistinguishable from one another.
     notifications: issues.map(() => ({ user: assignee, reason: 1 })),
   });
 }
 
-/**
- * A bulk update of a **single** issue — still a type 14, and still with an
- * empty `notifications[]` when no assignee changed (measured on a development
- * space, 2026-09-06).
- *
- * What separates a type 2 from a type 14 is the screen the update was made
- * from, not how many issues it covered: one issue ticked on the issue list
- * arrives here, while the same field changed on the issue's own page arrives
- * as a type 2.
- */
+/** One issue ticked on the issue list is still a type 14. */
 export function bulkStatusChangedOnOneIssue(
   options: ActivityOptions & { statusId?: string } = {}
 ): Record<string, unknown> {
@@ -520,7 +427,7 @@ export function bulkStatusChangedOnOneIssue(
   });
 }
 
-/** Type 17 — Comment Notification Added. Repeats an existing comment. */
+/** Type 17 — Comment Notification Added, repeating an existing comment. */
 export function commentNotificationAdded(
   options: ActivityOptions & { commentId?: number; text?: string } = {}
 ): Record<string, unknown> {
@@ -539,41 +446,20 @@ export function commentNotificationAdded(
 }
 
 /**
- * The mention notation a pull-request **summary** keeps: the server rewrites
- * `<@U…>` to `@<display name>` in a description or a comment, but not in a
- * summary, where the literal survives (measured 2026-09-06,
- * `.claude/rules/backlog-pull-request-facts.md` "Mentions"). Detection must
- * therefore match both forms, so both have a fixture.
+ * The form a pull-request summary keeps: `backlog-pull-request-facts.md` § What
+ * each pull-request operation emits.
  */
 export const RAW_MENTION = `<@U${FIXTURE.bot.id}>`;
 
 /** The rewritten form a description or a comment carries instead. */
 export const RESOLVED_MENTION = `@${FIXTURE.bot.name}`;
 
-/**
- * A pull request is addressed by repository id and number; `pullRequestId` is
- * the space-wide id that only `POST /stars` accepts.
- */
 interface PullRequestOptions extends ActivityOptions {
   repositoryId?: number;
   repositoryName?: string;
   number?: number;
   pullRequestId?: number;
-  /**
-   * The subject's **current** assignee, which the webhook form carries on 18,
-   * 19 and 20 alike while the activity form carries it on none of them
-   * (measured 2026-09-06). `null` — an unassigned pull request — is the
-   * default because these builders model the webhook form, which is the only
-   * form the adapter ever receives.
-   */
   assignee?: FixtureUser | null;
-  /**
-   * The diff(1)-style body a description edit puts on its type 19, and `null`
-   * on every other delivery (measured 2026-09-06). Only
-   * `pullRequestDescriptionEdited` sets it, so the pairing of the key with the
-   * `description` change is a property of the fixtures rather than of each
-   * caller.
-   */
   diff?: string | null;
 }
 
@@ -586,13 +472,8 @@ function repositoryOf(options: PullRequestOptions): Record<string, unknown> {
 }
 
 /**
- * The `content` key set types 18, 19 and 20 share in the form the adapter
- * receives (`.claude/rules/backlog-pull-request-facts.md`): the activity
- * form's keys — no `attachments`, no `status`, `repository.name` on every one
- * — plus the four the **webhook** adds, `assignee`, `base`, `branch` and
- * `diff` (measured 2026-09-06 by diffing five deliveries against the same
- * activities). `base` and `branch` are constants here because nothing reads
- * them and no measured delivery omitted them.
+ * Types 18–20, webhook form: `backlog-pull-request-facts.md` § What each
+ * pull-request operation emits.
  */
 function pullRequestContent(
   options: PullRequestOptions & {
@@ -619,10 +500,8 @@ function pullRequestContent(
             id: assignee.id,
             userId: assignee.userId ?? null,
             name: assignee.name,
-            // Not the `roleType` the same user carries under
-            // `notifications[].user`, which was 2 for the same account
-            // (measured 2026-09-06). Nothing reads either; the fixture keeps
-            // them different so nothing starts to.
+            // Differs from `notifications[].user.roleType`, as measured, so
+            // nothing starts to read one for the other.
             roleType: 94,
             lang: 'ja',
           },
@@ -633,15 +512,7 @@ function pullRequestContent(
   };
 }
 
-/**
- * Type 18 — Pull Request Added.
- *
- * The attachments a create call takes are **not in the activity at all**, so
- * no option adds them; the `assignee` it takes is, on the webhook form
- * (measured 2026-09-06), which is what makes opening a pull request for the
- * bot a mention. `linkedIssue` populates `content.issue`, which is display
- * data and never routing (D-PR6).
- */
+/** Type 18 — Pull Request Added, which carries no attachments. */
 export function pullRequestAdded(
   options: PullRequestOptions & {
     summary?: string;
@@ -661,7 +532,6 @@ export function pullRequestAdded(
   );
 }
 
-/** `content.issue` — the linked issue, or `null` when none is linked. */
 function linkedIssueOf(
   options: PullRequestOptions & { linkedIssue?: boolean }
 ): Record<string, unknown> | null {
@@ -677,7 +547,7 @@ function linkedIssueOf(
   };
 }
 
-/** Type 20 — Comment Added on Pull Request. A plain comment carries no changes. */
+/** Type 20 — Comment Added on Pull Request. */
 export function pullRequestCommented(
   options: PullRequestOptions & {
     commentId?: number;
@@ -700,8 +570,8 @@ export function pullRequestCommented(
 }
 
 /**
- * Type 19 — Pull Request Updated, with the changelog comment Backlog attaches
- * to every field update. A `PATCH` carrying a `comment` puts its text here.
+ * Type 19 — Pull Request Updated, with the changelog comment every field update
+ * carries.
  */
 export function pullRequestUpdated(
   options: PullRequestOptions & {
@@ -735,12 +605,8 @@ export function pullRequestUpdated(
 }
 
 /**
- * The multi-field `PATCH` measured on a pull request the bot was **already**
- * assigned to: `summary`, `description` and `issue` in one `changes[]`, the
- * unchanged assignee still in `content.assignee`, and an empty
- * `notifications[]` — Backlog notified nobody (measured 2026-09-06). This is
- * the shape §5.4 rule 4 turns on, so it is a builder rather than three
- * `changes` entries written out at a call site.
+ * A multi-field `PATCH` that notified nobody: `backlog-pull-request-facts.md` §
+ * What each pull-request operation emits.
  */
 export function pullRequestMultiFieldUpdated(
   options: PullRequestOptions & { commentId?: number } = {}
@@ -770,12 +636,7 @@ export function pullRequestMultiFieldUpdated(
   });
 }
 
-/**
- * A description edit, the one delivery measured to carry a non-null
- * `content.diff` (measured 2026-09-06): a diff(1)-style body of the edit, alongside the
- * `description` change that carries both full bodies. Every other pull-request
- * delivery has `diff: null`, which is what the other builders emit.
- */
+/** The one delivery measured with a non-null `content.diff`. */
 export function pullRequestDescriptionEdited(
   options: PullRequestOptions & {
     newBody?: string;
@@ -793,11 +654,7 @@ export function pullRequestDescriptionEdited(
   });
 }
 
-/**
- * A merge or a close: both arrive as type 19 with a status change, never as a
- * type of their own, and the status is an **id string** — `1` Open, `2`
- * Closed, `3` Merged (measured 2026-09-06).
- */
+/** A merge or a close, both a type 19 status change. */
 export function pullRequestStatusChanged(
   options: PullRequestOptions & {
     newStatusId?: string;
@@ -818,13 +675,8 @@ export function pullRequestStatusChanged(
 }
 
 /**
- * An assignee change reports both assignees by **display name** under the
- * field name `assignee` — the issue side calls the same thing `assigner`.
- * `previousName` defaults to `""`, the `old_value` of the assignment measured
- * on the activity form, where nobody had been assigned before. The webhook
- * capture measured the other two shapes: a reassignment carries the old
- * display name there, and an unassignment is `assigneeName: ""` with the old
- * name kept (all measured 2026-09-06).
+ * `backlog-pull-request-facts.md` § What each pull-request operation emits,
+ * assignee rows.
  */
 export function pullRequestAssigneeChanged(
   options: PullRequestOptions & {
@@ -845,11 +697,7 @@ export function pullRequestAssigneeChanged(
   });
 }
 
-/**
- * A comment posted with `attachmentId[]`: the change names the file and
- * carries **no id**, so the attachment can only be resolved by name against
- * the pull request's attachment list (D-PR10).
- */
+/** The file is named in `changes[]`, with no id (D-PR10). */
 export function pullRequestCommentWithAttachment(
   options: PullRequestOptions & {
     commentId?: number;
@@ -871,13 +719,8 @@ export function pullRequestCommentWithAttachment(
 }
 
 /**
- * Type 21, for the "200 Ignored" case only.
- *
- * No type-21 activity was ever observed, so this body is a **guess** wearing
- * the type-18 content shape (measured 2026-09-06,
- * `.claude/rules/backlog-pull-request-facts.md`). It is only ever fed to the
- * ladder's type gate, which ignores it before any schema runs; nothing may
- * assert on its content.
+ * Type 21 was never observed, so this body is a guess: assert on nothing but
+ * its type.
  */
 export function pullRequestDeleted(
   options: PullRequestOptions = {}
@@ -885,11 +728,7 @@ export function pullRequestDeleted(
   return envelope(21, pullRequestContent(options), options);
 }
 
-/**
- * Type 12 — Git Pushed. A push carries no pull-request reference at all, so
- * it can never be routed to a thread even when it is the push that merges a
- * pull request (measured 2026-09-06).
- */
+/** Type 12 — Git Pushed, which names no pull request. */
 export function gitPushed(
   options: PullRequestOptions & { ref?: string } = {}
 ): Record<string, unknown> {
@@ -924,13 +763,7 @@ interface RequestOptions {
   url?: string;
 }
 
-/**
- * Build the inbound `Request` the Chat SDK route would hand `handleWebhook`.
- *
- * `host` and `token` are the query parameters the adapter authenticates on:
- * pass `null` to omit either one. Backlog signs nothing, so there is no header
- * to forge here — the path secret is the whole check.
- */
+/** `null` omits the `host` or `token` query parameter. */
 export function webhookRequest(
   payload: unknown,
   options: RequestOptions = {}
@@ -948,9 +781,6 @@ export function webhookRequest(
   const body = options.body ?? JSON.stringify(payload);
   return new Request(url, {
     method,
-    // Backlog documents neither the Content-Type nor the User-Agent it sends,
-    // so nothing in the adapter may key on them; the fixture sends the
-    // conventional pair to prove that.
     headers: { 'content-type': 'application/json' },
     ...(method === 'GET' || method === 'HEAD' ? {} : { body }),
   });

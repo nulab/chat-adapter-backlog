@@ -24,6 +24,7 @@ import type {
   SubjectContext,
   SubjectNames,
   SubjectRoot,
+  WebhookAttachment,
 } from './client';
 import type { Backlog, Option } from 'backlog-js';
 import type { Attachment } from 'chat';
@@ -137,10 +138,6 @@ export function createPullRequestSubjectClient(
     };
   }
 
-  function readComment(request: Promise<unknown>): Promise<BacklogRawComment> {
-    return readPullRequestComment(request);
-  }
-
   function listComments(
     options: ListCommentsOptions
   ): Promise<BacklogRawComment[]> {
@@ -194,7 +191,7 @@ export function createPullRequestSubjectClient(
       // `backlog-js` leaves it out of this endpoint's parameter type, which
       // a variable rather than a literal lets through.
       const params: Option.PullRequest.PostPullRequestCommentsParams = input;
-      return readComment(
+      return readPullRequestComment(
         client.postPullRequestComments(projectId, repositoryId, number, params)
       );
     },
@@ -203,7 +200,7 @@ export function createPullRequestSubjectClient(
       commentId: number,
       content: string
     ): Promise<BacklogRawComment> {
-      return readComment(
+      return readPullRequestComment(
         client.patchPullRequestComments(
           projectId,
           repositoryId,
@@ -250,11 +247,7 @@ export function createPullRequestSubjectClient(
       );
     },
 
-    webhookAttachment(attachment: {
-      id: number;
-      name: string;
-      size?: number | undefined;
-    }): Attachment {
+    webhookAttachment(attachment: WebhookAttachment): Attachment {
       return {
         type: 'file',
         name: attachment.name,

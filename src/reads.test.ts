@@ -515,11 +515,9 @@ describe('rehydrateAttachment', () => {
     `https://${host}/api/v2/projects/${PROJECT_ID}/git/repositories/${REST.repositoryId}/pullRequests/${REST.pullRequestNumber}/attachments/4242`;
 
   it('a serialised attachment regains fetchData through the client for the configured host', async () => {
-    const client = vi.fn(() =>
-      stubClient({
-        getPullRequestAttachment: vi.fn().mockResolvedValue(fileData('trace')),
-      })
-    );
+    const getPullRequestAttachment = vi
+      .fn()
+      .mockResolvedValue(fileData('trace'));
     const rehydrated = rehydrateAttachment({
       attachment: {
         type: 'file',
@@ -527,12 +525,12 @@ describe('rehydrateAttachment', () => {
         url: pullRequestAttachmentUrl(HOST),
       },
       host: HOST,
-      client,
+      client: stubClient({ getPullRequestAttachment }),
     });
 
     const data = await rehydrated.fetchData?.();
     expect(data?.toString()).toBe('trace');
-    expect(client).toHaveBeenCalledTimes(1);
+    expect(getPullRequestAttachment).toHaveBeenCalledTimes(1);
   });
 
   it('an attachment url on a foreign host is returned unchanged', () => {
@@ -543,13 +541,15 @@ describe('rehydrateAttachment', () => {
     };
 
     expect(
-      rehydrateAttachment({
-        attachment,
-        host: HOST,
-        client: () => {
-          throw new Error('no download expected');
-        },
-      })
+      rehydrateAttachment({ attachment, host: HOST, client: stubClient({}) })
+    ).toEqual(attachment);
+  });
+
+  it('an attachment with no url is returned unchanged', () => {
+    const attachment: Attachment = { type: 'file', name: 'trace.log' };
+
+    expect(
+      rehydrateAttachment({ attachment, host: HOST, client: stubClient({}) })
     ).toEqual(attachment);
   });
 });

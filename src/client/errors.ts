@@ -1,13 +1,12 @@
 import {
   AdapterError,
+  AdapterRateLimitError,
   AuthenticationError,
   NetworkError,
   PermissionError,
   ResourceNotFoundError,
   ValidationError,
 } from '@chat-adapter/shared';
-
-import { rateLimitError } from './rate-limit.js';
 
 /**
  * The shape carried on `error.cause` for every mapped error. `url` never
@@ -101,11 +100,10 @@ function mapByCodeOrStatus(
     case 6:
       return new ResourceNotFoundError('backlog', 'resource');
     case 7:
-      return new ValidationError('backlog', message);
     case 10:
       return new ValidationError('backlog', message);
     case 13:
-      return rateLimitError(retryAfterSeconds ?? 0);
+      return new AdapterRateLimitError('backlog', retryAfterSeconds ?? 0);
     case 1:
     case 2:
     case 3:
@@ -133,7 +131,7 @@ function mapByStatus(
     case 400:
       return new ValidationError('backlog', message);
     case 429:
-      return rateLimitError(retryAfterSeconds ?? 0);
+      return new AdapterRateLimitError('backlog', retryAfterSeconds ?? 0);
     default:
       return new AdapterError(
         message,
@@ -143,14 +141,24 @@ function mapByStatus(
   }
 }
 
-/** Maps a transport-level failure (fetch rejection, abort, DNS failure). */
+export function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 export function mapTransportError(cause: unknown): NetworkError {
-  const message = cause instanceof Error ? cause.message : String(cause);
   return new NetworkError(
     'backlog',
-    message,
+    errorMessage(cause),
     cause instanceof Error ? cause : undefined
   );
+}
+
+/**
+ * The injected `fetch` has already mapped an `AdapterError`; wrapping it again
+ * would bury Backlog's error code under a `NetworkError`.
+ */
+export function asAdapterError(cause: unknown): AdapterError {
+  return cause instanceof AdapterError ? cause : mapTransportError(cause);
 }
 
 /**
@@ -161,8 +169,7 @@ export function mapTransportError(cause: unknown): NetworkError {
 export function mapCredentialResolverError(
   cause: unknown
 ): AuthenticationError {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  return new AuthenticationError('backlog', message);
+  return new AuthenticationError('backlog', errorMessage(cause));
 }
 
 /** A query string can carry `apiKey=`, so it never reaches an error. */

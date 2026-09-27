@@ -45,6 +45,12 @@ export interface SubjectContext {
 export type ListCommentsOptions = Option.Issue.GetIssueCommentsParams;
 export type AddCommentInput = Option.Issue.PostIssueCommentsParams;
 
+export interface WebhookAttachment {
+  id: number;
+  name: string;
+  size?: number | undefined;
+}
+
 export interface SubjectClient {
   readonly ref: BacklogSubjectRef;
 
@@ -69,11 +75,7 @@ export interface SubjectClient {
 
   rootRaw(root: SubjectRoot): BacklogRawMessage;
   commentAttachments(comment: BacklogRawComment): Attachment[];
-  webhookAttachment(attachment: {
-    id: number;
-    name: string;
-    size?: number | undefined;
-  }): Attachment;
+  webhookAttachment(attachment: WebhookAttachment): Attachment;
   /**
    * The file a webhook `changes[]` entry the caller has already recognised as
    * an attachment add names, or `undefined` for a kind whose payload never
@@ -99,11 +101,7 @@ export interface SubjectClient {
   readonly repositoryIdForName: number | undefined;
 }
 
-/**
- * The one place a subject's kind selects behaviour (D-PR2): every member of
- * the adapter reaches Backlog as `decode -> subjectClientFor -> the same code
- * for both kinds`.
- */
+/** The one place a subject's kind selects behaviour (D-PR2). */
 export function subjectClientFor(
   client: Backlog,
   ref: BacklogSubjectRef,

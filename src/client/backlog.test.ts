@@ -8,10 +8,10 @@ import {
 import { createMockLogger } from '@chat-adapter/tests';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { issue, REST } from '../test/fixtures/rest.js';
-import { createBacklogClient } from './backlog.js';
+import { issue, REST } from '../test/fixtures/rest';
+import { createBacklogClient } from './backlog';
 
-import type { Credential } from './backlog.js';
+import type { Credential } from './backlog';
 import type { Logger } from 'chat';
 
 const fetchMock = vi.fn<typeof globalThis.fetch>();

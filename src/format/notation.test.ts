@@ -203,7 +203,6 @@ describe('BacklogNotationConverter outbound (fromAst)', () => {
       },
     ]);
 
-    // §9.6: alignment has no notation counterpart, so it is silently dropped.
     expect(converter.fromAst(ast)).not.toContain('left');
     expect(converter.fromAst(ast)).not.toContain('right');
     expect(converter.fromAst(ast)).toBe('|Name|Value|h');
@@ -214,8 +213,6 @@ describe('BacklogNotationConverter outbound (fromAst)', () => {
       paragraph([{ type: 'inlineCode', value: 'const x' }]),
     ]);
 
-    // §9.4/§9.6: Backlog notation has no inline-code syntax, so the value is
-    // emitted unchanged — indistinguishable from plain text once rendered.
     expect(converter.fromAst(ast)).toBe('const x');
   });
 
@@ -224,10 +221,8 @@ describe('BacklogNotationConverter outbound (fromAst)', () => {
       paragraph([text("price is ''100'' and 50%% off [[x]]")]),
     ]);
 
-    // §9.7: Backlog notation does have a `\` escape, but `fromAst` does not
-    // apply it, so these markers decorate the rendered comment. Pinned here so
-    // the day the escape is measured and implemented, this test has to be
-    // rewritten rather than quietly kept passing.
+    // Pinned so the day notation's `\` escape is measured and implemented,
+    // this test has to be rewritten rather than quietly kept passing.
     expect(converter.fromAst(ast)).toBe("price is ''100'' and 50%% off [[x]]");
   });
 });
@@ -362,7 +357,7 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
   it('leaves markers at two depths as two lists, not one list of two items', () => {
     const ast = converter.toAst('-- indented\n- back');
 
-    // §9.5: joining them would read better here and cost the depth in every
+    // Joining them would read better here and cost the depth in every
     // other case, so a shallower marker always starts its own list. Do not
     // "simplify" this to one two-item list.
     expect(ast.children).toEqual([
@@ -436,9 +431,7 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
   });
 
   it('a marker followed by only whitespace ends the list and stays a paragraph', () => {
-    // The middle line is `-` and one space. A marker carrying no text is not
-    // an item, so this reads like the bare `-` above rather than becoming an
-    // item whose only child is an empty paragraph (§9.5).
+    // The middle line is `-` and one space.
     const ast = converter.toAst('- one\n- \n- two');
 
     expect(ast.children).toEqual([
@@ -449,9 +442,7 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
   });
 
   it('a thematic break ends the list whether or not it trails a space', () => {
-    // `----` and `----` plus one space. Inside a list the second used to match
-    // as a marker of depth four with no text, so an invisible character decided
-    // between a thematic break and a nested empty item (§9.5).
+    // `----`, then `----` and one space.
     const withoutSpace = converter.toAst('- one\n----\n- two');
     const withSpace = converter.toAst('- one\n---- \n- two');
 
@@ -464,9 +455,7 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
   });
 
   it('four hyphens followed by text are a list item, not a thematic break', () => {
-    // The emptiness rule is about the missing text, not about the `----` run.
-    // A `list` is all the depth mdast records, so the marker's own depth of
-    // four is only visible where it nests.
+    // mdast records a marker's depth only where a list nests.
     expect(converter.toAst('---- four').children).toEqual([
       list(false, [textItem('four')]),
     ]);
@@ -478,9 +467,7 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
   });
 
   it('a marker with no text ends the outer list too, not just its own depth', () => {
-    // The middle line is `--` and one space. Nothing absorbs a line that is no
-    // list item, so the run above it ends with it and `two` opens a list of its
-    // own instead of nesting under `one` (§9.5).
+    // The middle line is `--` and one space.
     const ast = converter.toAst('- one\n-- \n-- two');
 
     expect(ast.children).toEqual([
@@ -491,8 +478,6 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
   });
 
   it('the whitespace between a marker and its text is taken greedily', () => {
-    // So an item's text never begins with whitespace, and a marker followed by
-    // nothing but spaces has no text at all (§9.5).
     expect(converter.toAst('-   one').children).toEqual([
       list(false, [textItem('one')]),
     ]);
@@ -565,8 +550,8 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
   it('splits a row at every |, a link url included', () => {
     const ast = converter.toAst('|[[a>https://example.backlog.com/?x=1|y]]|b|');
 
-    // §9.5 gives `|` no escape, so a cell ends at the next one wherever it
-    // falls; the halves of the split link are left as the text they now are.
+    // `|` has no escape in notation, so the halves of the split link are left
+    // as the text they now are.
     expect(ast.children).toEqual([
       {
         type: 'table',
@@ -693,14 +678,11 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
     '#thumbnail(url)',
     '[WikiPage]',
     'BLG-1',
-  ])(
-    'leaves %s as plain text, outside the §9.5 inbound construct list',
-    (notation) => {
-      const ast = converter.toAst(notation);
+  ])('leaves %s as plain text', (notation) => {
+    const ast = converter.toAst(notation);
 
-      expect(ast.children).toEqual([paragraph([text(notation)])]);
-    }
-  );
+    expect(ast.children).toEqual([paragraph([text(notation)])]);
+  });
 });
 
 describe('BacklogNotationConverter card fallback', () => {

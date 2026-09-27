@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { decideRetry } from './rate-limit.js';
+import { decideRetry } from './rate-limit';
 
 import type { MockInstance } from 'vitest';
 
