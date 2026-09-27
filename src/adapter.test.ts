@@ -2088,8 +2088,8 @@ describe('BacklogAdapter.handleWebhook — a notifications[] the adapter cannot 
 const ROOT_CREATED = new Date('2026-01-01T00:00:00Z');
 
 /**
- * The `{ kind: "issue" }` raw as `fetchMessages` and `postChannelMessage`
- * hand it out, matching `egressAdapter`'s seeded issue so the same fixture
+ * The `{ kind: "issue" }` raw as `fetchMessages` and `listThreads` hand it
+ * out, matching `egressAdapter`'s seeded issue so the same fixture
  * describes the same thread on both paths.
  */
 function rawIssue(): Extract<BacklogRawMessage, { kind: 'issue' }>['issue'] {

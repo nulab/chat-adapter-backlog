@@ -507,7 +507,7 @@ stated where it differs.
 
 | Member | Status | Behaviour / core degradation when absent |
 | --- | --- | --- |
-| `stream(threadId, textStream, options?)` | **implemented, buffered** (D4) | Consumes the whole stream, joins `markdown_text` chunks, then one `postMessage`; returns its `RawMessage`. Never returns `null` before the stream is consumed (that re-enables the core's 500 ms edit loop). Empty stream — an abort that buffered nothing included — → posts `" "`, matching the core's own fallback, so a `SentMessage` always exists (§15 question 7, settled). |
+| `stream(threadId, textStream, options?)` | **implemented, buffered** (D4) | Consumes the whole stream, joins `markdown_text` chunks, then one `postMessage`; returns its `RawMessage`. Never returns `null` before the stream is consumed (that re-enables the core's 500 ms edit loop). Empty stream — an abort that buffered nothing included — → posts `" "`, matching the core's own fallback, so a `SentMessage` always exists (§15 question 7, settled). `options.signal` is not read: only the core's `thread.post` path ends the stream on abort (§6.4). |
 | `isDM(threadId)` | implemented | Always `false`. |
 | `fetchMessage(threadId, messageId)` | implemented | §7.2. |
 | `fetchSubject(raw)` | implemented | §7.4; the parent issue (`type: "issue"`) or pull request (`type: "pull_request"`) as `MessageSubject`. |
@@ -1075,7 +1075,9 @@ result. Rationale is rate-limit protection (D4). The adapter does not watch
 `options.signal`: the core hands `stream()` an iterable that already ends when
 its signal aborts (`takeUntilAborted` in `ThreadImpl.handleStream`), so an
 abort posts what was buffered so far — `" "` when that is nothing, the same as
-an empty stream (§4.2, §15 question 7).
+an empty stream (§4.2, §15 question 7). A consumer calling `adapter.stream()`
+directly, outside `thread.post`, gets no such wrapping: its `options.signal`
+is ignored, and the call returns when its own iterable ends.
 
 ### 6.5 Reactions
 
@@ -1619,11 +1621,14 @@ web URL needs the `projectKey` and its REST object does not carry one (§7.3):
 
 ### 9.2 No conversion fallback
 
-The converters are used unwrapped. Neither `toAst` has a throwing path — the
-notation parser treats any unrecognised markup as text, and `parseMarkdown`
-accepts any string — so a wrapper turning a `toAst` throw into a plain
-paragraph would guard nothing. A `fromAst` failure propagates: a post that
-cannot be rendered must fail, not silently post something else.
+The converters are used unwrapped, so neither `toAst` may throw on any input:
+one hostile comment would otherwise fail its webhook message and every read
+of its thread. The notation parser treats unrecognised markup as text and
+stops parsing quotes past 16 levels of nesting, keeping the deeper levels as
+quoted text — each level is a recursion, and a few thousand `> ` otherwise
+overflow the stack. `parseMarkdown` accepts any string. A `fromAst` failure
+propagates: a post that cannot be rendered must fail, not silently post
+something else.
 
 ### 9.3 Markdown projects
 
@@ -2205,7 +2210,7 @@ for one scratch space is worse than requiring the two to share it.
 | D-PR3 | `deleteMessage` on a pull-request thread throws `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call | The endpoint does not exist (400/6 `Undefined resource`, measured); `ValidationError` would blame a correct call; silent success is a fabricated result; the member is required. | `ValidationError`; no-op; omitting `deleteMessage`. |
 | D-PR4 | No adapter option selecting kinds | The webhook subscription already is that switch; a mismatch between an option and the subscription would silently drop delivered events. | `subjects: ('issue' \| 'pullRequest')[]` config. |
 | D-PR5 | Type 21 is 200 Ignored and not in the registration guidance | It was not observed: merge (UI or git push) and close both arrive as type 19 status changes, no delete operation exists in the UI or the API, and the project's activity history holds none (measured 2026-09-06); the docs and `backlog-js` disagree on its very name. | `processMessageDeleted` on 21 (nothing to test it against). |
-| D-PR6 | A pull request linked to an issue is its own thread; the link is metadata | The link can be changed (`changes[field="issue"]`, measured); routing by it would move a thread. | Routing pull-request activity into the linked issue's thread. |
+| D-PR6 | A pull request linked to an issue is its own thread; the link is data on the pull request (`fetchSubject().raw.issue`, `raw.payload.content.issue`), never a route | The link can be changed (`changes[field="issue"]`, measured); routing by it would move a thread. | Routing pull-request activity into the linked issue's thread. |
 | D-PR7 | `listThreads` lists issues only | A pull-request list is per repository, a coordinate the channel id lacks; `client(host).getPullRequests` covers it. | Interleaving every repository's pull requests (N+1 reads, two cursor grammars); listing pull requests only. |
 | D-PR8 | `fetchSubject().type` is `"pull_request"` | The `@chat-adapter/github` convention; the core types it as a free string, so bot authors already branch on that literal. | `"pullRequest"` (matches our `kind`, not the ecosystem). |
 | D-PR9 | Root part tag `r` for both kinds (was `i`) | `i` meant "issue" and would mislead on a pull request; a tagless root makes the grammar irregular. | Keep `i`; no tag. |
@@ -2265,10 +2270,10 @@ open list.
 | 18 | P0 documentation title scope: `docs(docs)` or `docs(adapter)` | **confirmed** — `docs(docs)`, and it is now history | #2 landed as `docs(docs): add adapter specification and implementation plan`; CLAUDE.md's scope table lists `docs` as covering `docs/`. Nothing is left to decide |
 | 19 | Optional CI job for the live suite | **confirmed** — skipped | `.github/workflows/ci.yml` has no live job and reads no `BACKLOG_*` secret. The suite is opt-in and self-skipping, so nothing in CI depends on it; revisit only alongside #52 |
 | 20 | D-PR1 channel of a pull-request thread | **confirmed** — the project, exactly as for issues | `channelIdFromThreadId` is the first three segments for both kinds (`src/ids.ts`); the formatting rule and the project cache are per project, and a repository has neither (#22) |
-| 21 | D-PR3 `deleteMessage` on a pull-request thread | **confirmed** — `AdapterError` with `UNSUPPORTED_OPERATION`, thrown before any call | `deleteComment` in `src/subject/pull-request.ts` rejects without a request, citing the measured 400/6 `Undefined resource`; the subject client carries `capabilities: { deleteComment: false }` so no member has to ask what kind it holds, and the README row is what tells a consumer (#22, #25) |
+| 21 | D-PR3 `deleteMessage` on a pull-request thread | **confirmed** — `AdapterError` with `UNSUPPORTED_OPERATION`, thrown before any call | `deleteComment` in `src/subject/pull-request.ts` rejects without a request, citing the measured 400/6 `Undefined resource`; no member has to ask what kind it holds, and the README row is what tells a consumer (#22, #25) |
 | 22 | D-PR4 adapter option to enable or disable pull requests | **confirmed** — none; the webhook subscription is the switch | No `subjects` field exists on `BacklogAdapterConfig` (`src/types.ts`); leaving 18–20 out of `activityTypeIds[]` is the documented way to decline them, and 14 is declined the same way (#22, #23) |
 | 23 | D-PR5 type 21 | **confirmed** — 200 Ignored, and absent from the registration guidance | `DISPATCHED_ACTIVITY_TYPES` excludes 21 (`src/webhook/payload.ts`); `src/webhook/payload.test.ts` "a git push and a type-21 activity are not among them" cites the two measurements that never saw one, the second with 21 subscribed (#23) |
-| 24 | D-PR6 a pull request linked to an issue | **confirmed** — its own thread; the link is metadata and never routes | the `issue` key of `threadMetadata` in `src/subject/pull-request.ts`, and `raw.payload.content.issue`; `src/webhook/payload.test.ts` "a pull request linked to an issue is still its own subject" (#23) |
+| 24 | D-PR6 a pull request linked to an issue | **confirmed** — its own thread; the link is data on the pull request and never routes | the `issue` key of the pull request `fetchSubject().raw` carries, and `raw.payload.content.issue`; `src/webhook/payload.test.ts` "a pull request linked to an issue is still its own subject" (#23) |
 | 25 | D-PR8 `fetchSubject().type` for a pull request | **confirmed** — `'pull_request'` | `subjectType: 'pull_request'` in `src/subject/pull-request.ts`, documented on `SubjectClient` (`src/subject/client.ts`); `src/reads.test.ts` and `src/subject/pull-request.test.ts` assert it (#22) |
 | 26 | D-PR9 root message part tag | **confirmed** — `r` for both kinds | `src/ids.ts` encodes and parses `r`; `src/ids.test.ts` and the `threadIdContract` roundtrip cover it (#22) |
 | 27 | D15 version line | **confirmed 2026-09-07** — the package's own semver, starting at `0.1.0`; #17, which had it track `chat`'s line, is superseded | #58; DEVELOPMENT.md "Versioning". The dependency **ranges** are the other half of D15 and are unchanged (§14) |
@@ -2371,7 +2376,7 @@ named PR amends, which is where it must be read from.
 | Decision | Verdict | Where it is specified |
 | --- | --- | --- |
 | A forward first page fetches one comment (`limit: 1`) | **confirmed** — as it stands | §7.1. The one comment is what distinguishes "there are comments, so restart at cursor 0" from "there are none, so this is the end". Backlog does expose Count Comment, but it costs the same one `read`, so asking it instead saves nothing (#88) |
-| `ThreadInfo.metadata` timestamps | **changed** — ISO strings, not `Date` (breaking) | §7.3. `metadata` is `Record<string, unknown>`, so a `Date` in it is invisible to the type and turns into a string in any consumer that round-trips the object through JSON — the same reason `src/types.ts`'s raw shapes carry ISO strings while `src/client/port.ts` carries `Date` (#88) |
+| `ThreadInfo.metadata` timestamps | **superseded** by D24 — `metadata` no longer carries a timestamp; at the time: ISO strings, not `Date` (breaking) | §7.3. `metadata` is `Record<string, unknown>`, so a `Date` in it is invisible to the type and turns into a string in any consumer that round-trips the object through JSON — the same reason `src/types.ts`'s raw shapes carry ISO strings while `src/client/port.ts` carries `Date` (#88) |
 | Ids, hosts and numeric config the adapter cannot honour | **changed** — rejected with a `ValidationError` instead of being carried into a request (breaking) | §2 grammar, §3.2 config table (#88) |
 | `dist/index.d.ts.map` | **changed** — no longer emitted; the JavaScript map stays | `files` does not ship `src/`, so a declaration map could only point at sources that are not published (#95, split out of #82) |
 | The d.ts pass under TypeScript 7 | **confirmed** — as it stands | attw at the `esm-only` profile, publint and `scripts/check-published-types.mjs` all pass on the current output; the follow-up #95 named — asserting that the built `.d.ts` still *declares* the package's entry points — is described in that PR and not yet filed (§15.4) |

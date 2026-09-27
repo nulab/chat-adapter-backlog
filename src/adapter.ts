@@ -1627,7 +1627,8 @@ export class BacklogAdapter implements Adapter<
   /**
    * Overridden so a stream is one comment: the core's fallback would edit the
    * message every 500 ms and exhaust the update bucket (D4). An empty stream
-   * posts `" "` because Backlog refuses an empty comment.
+   * still posts `" "` rather than nothing, so the caller always gets a
+   * `SentMessage` to edit or delete.
    */
   async stream(
     threadId: string,

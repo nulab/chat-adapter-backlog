@@ -261,8 +261,8 @@ tied back to a host, and the one candidate for a consistency check
 somebody renames a project key (docs/specs/adapter.md D19).
 
 So check the `host` in every hook URL you register. The trace to grep for when
-a space has gone quiet is `textFormattingRule lookup failed; assuming markdown`
-naming a project id that host does not have.
+a space has gone quiet is `project lookup failed` naming a project id that host
+does not have.
 
 Keep the URL out of logs and issue trackers: it carries the secret.
 

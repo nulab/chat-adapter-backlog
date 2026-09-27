@@ -259,6 +259,26 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
     ]);
   });
 
+  it.each([
+    ['> prefixed lines', `${'> '.repeat(3000)}x`],
+    ['quote macros', '{quote}\n'.repeat(5000)],
+  ])('deeply nested %s parse without failing', (_form, notation) => {
+    expect(() => converter.toAst(notation)).not.toThrow();
+  });
+
+  it('quotes nested past the depth limit keep their text as a quoted paragraph', () => {
+    const ast = converter.toAst(`${'> '.repeat(20)}deep`);
+
+    let node: Content | undefined = ast.children[0];
+    let depth = 0;
+    while (node?.type === 'blockquote') {
+      depth += 1;
+      node = node.children[0];
+    }
+    expect(depth).toBe(16);
+    expect(node).toEqual(paragraph([text(`${'> '.repeat(4)}deep`)]));
+  });
+
   it('closes an unclosed quote macro at end of input', () => {
     const ast = converter.toAst('{quote}\nquoted text');
 
