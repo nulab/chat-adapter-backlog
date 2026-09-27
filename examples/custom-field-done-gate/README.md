@@ -143,12 +143,11 @@ closes made from the issue list go unnoticed. Never use **allEvent**.
 - **Rate limits are shared with the adapter.** Reading the issue and its
   comments spends the `read` budget, and the comment and the reassignment spend
   the `update` budget, all against the bot user's own per-minute quota.
-- **A 429 waits at most 20 seconds.** `src/bot.ts` lowers the adapter's
-  `rateLimit.maxWaitMs` from its 60-second default, because the function is
-  itself stopped at 60 seconds (`maxDuration`) and a longer wait would be cut
-  off silently. A call that would wait longer rejects with
-  `AdapterRateLimitError` instead, which the function's logs show as a message
-  processing error; the hand-back for that delivery is not made, and nothing
+- **A 429 waits up to 60 seconds.** The adapter waits for Backlog's reset
+  once, so `api/webhooks/backlog.ts` sets `maxDuration` to 90 seconds rather
+  than 60, where the wait would be cut off silently. A reset further off, or a
+  second 429, rejects with `AdapterRateLimitError`, which the function's logs
+  show as a message processing error; the hand-back for that delivery is not made, and nothing
   retries it, because the webhook was already answered.
 - **State is in memory.** Deduplication holds for ten minutes and only within
   one serverless instance; see the [shared limits](../README.md#limits-they-share).

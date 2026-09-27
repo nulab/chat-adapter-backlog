@@ -190,9 +190,9 @@ than boilerplate:
   from a single request.
 - None of them subscribes to threads; each answers the delivery in front of it
   and keeps nothing between requests.
-- A 429 is waited out for at most 20 seconds, not the adapter's default 60,
-  so that the wait cannot outlast the function's own 60-second ceiling; past
-  that, the handler fails in the logs instead of being cut off silently.
+- A 429 is waited out for up to the adapter's 60 seconds, so every function
+  sets `maxDuration` to 90 seconds: a 60-second ceiling would cut the wait off
+  silently, after the webhook had already answered.
 - With no framework, Vercel serves every file outside `api/` as it stands, so
   `src/*.ts`, `README.md` and `tsconfig.json` are readable on the deployment.
   They are the same files as this repository and hold no secret; what would, a

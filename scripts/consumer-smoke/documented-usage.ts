@@ -21,7 +21,6 @@ import {
   type BacklogAdapter,
   type BacklogChannelPostableExtras,
   type BacklogPostableExtras,
-  type RateLimitSnapshots,
 } from '@nulab/chat-adapter-backlog';
 import { Chat, type PostableMarkdown } from 'chat';
 
@@ -77,23 +76,16 @@ export async function fileIssue(): Promise<void> {
 }
 
 export async function reachBacklogDirectly(): Promise<{
-  granted: RateLimitSnapshots;
-  observed: RateLimitSnapshots;
   botUserName: string;
 }> {
   const api = backlog.api(HOST);
-  const granted = await api.getRateLimit();
   await api.getIssue(8001);
   await api.listPullRequests(500, 700, { count: 20 });
 
   const client: Backlog = backlog.client(HOST);
   await client.getCustomFields(500);
 
-  return {
-    granted,
-    observed: backlog.rateLimit(HOST),
-    botUserName: backlog.botUserName(HOST),
-  };
+  return { botUserName: backlog.botUserName(HOST) };
 }
 
 declare function readKey(space: string): Promise<string>;
@@ -116,7 +108,6 @@ export function createMultiSpaceAdapter(): BacklogAdapter {
         webhookSecret: 'two-webhook-secret-value',
       },
     ],
-    rateLimit: { maxWaitMs: 5_000 },
   });
 }
 

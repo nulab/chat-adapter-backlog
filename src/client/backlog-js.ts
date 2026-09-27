@@ -9,12 +9,7 @@ import {
   mapTransportError,
   stripQueryString,
 } from './errors.js';
-import {
-  classifyBucket,
-  decideRetry,
-  RATE_LIMIT_BUCKETS,
-  RateLimitTracker,
-} from './rate-limit.js';
+import { decideRetry } from './rate-limit.js';
 import {
   commentListSchema,
   commentSchema,
@@ -31,7 +26,6 @@ import {
   pullRequestAttachmentListSchema,
   pullRequestListSchema,
   pullRequestSchema,
-  rateLimitResponseSchema,
   uploadedFileSchema,
   userResponseSchema,
 } from './schemas.js';
@@ -63,9 +57,6 @@ import type {
   ListPullRequestsOptions,
   MaybeAsync,
   PullRequestRef,
-  RateLimitBucket,
-  RateLimitSnapshots,
-  RetryOptions,
   StarTarget,
 } from './port.js';
 import type { Logger } from 'chat';
@@ -82,9 +73,6 @@ type Fetch = typeof globalThis.fetch;
  */
 const responseTimers = new WeakMap<Response, () => void>();
 
-/** Everything `backlog-js` addresses hangs off this prefix (`restBaseURL`). */
-const REST_PREFIX = '/api/v2';
-
 /** The error envelope of https://developer.nulab.com/docs/backlog/error-response/. */
 const errorBodySchema = z.object({
   errors: z
@@ -99,20 +87,16 @@ const errorBodySchema = z.object({
 });
 
 /**
- * The three readers below take the general `fetch` argument shapes rather
+ * The two readers below take the general `fetch` argument shapes rather
  * than the string `backlog-js` 0.20.1 always passes, so that the instrumented
- * fetch stays a `fetch` — a caller can hand it a `Request` and still be
- * counted in the right bucket.
+ * fetch stays a `fetch` — a caller can hand it a `Request` and still get
+ * its credential, its 429 retry and its error mapping.
  */
 function requestUrl(input: Parameters<Fetch>[0]): string {
   if (typeof input === 'string') {
     return input;
   }
   return input instanceof URL ? input.href : input.url;
-}
-
-function requestMethod(input: Parameters<Fetch>[0]): string {
-  return input instanceof Request ? input.method : 'GET';
 }
 
 function requestHeaders(input: Parameters<Fetch>[0]): Headers | undefined {
@@ -184,11 +168,10 @@ function chooseCredential(
 export interface CreateBacklogJsApiOptions {
   host: string;
   credentials: BacklogCredentials;
-  /** Injected for tests; defaults to `globalThis.fetch`. See VERIFIED-FACTS: `backlog-js`'s `fetch` option is the seam for header capture and per-call credentials. */
+  /** Injected for tests; defaults to `globalThis.fetch`. See VERIFIED-FACTS: `backlog-js`'s `fetch` option is the seam for the 429 retry, the error mapping and per-call credentials. */
   fetch?: Fetch;
   /** Request timeout via `AbortSignal`, in milliseconds. Default 30 000 (docs/specs/adapter.md §8.2). */
   timeoutMs?: number;
-  retry?: RetryOptions;
   /** Random source for bounded retry jitter; injectable so timing tests stay deterministic. */
   random?: () => number;
   /**
@@ -213,7 +196,7 @@ interface RequestArgs {
  * Handing the client out is what makes the second field worth having: a
  * consumer that needs an endpoint the port does not name reaches it through
  * the same instrumented `fetch`, rather than constructing a second client
- * that spends the same per-user rate limit without counting it.
+ * that has neither the bounded 429 retry nor the typed errors.
  */
 export interface BacklogJsTransport {
   api: BacklogApi;
@@ -232,11 +215,11 @@ export function createBacklogJsApi(
  * docs/specs/adapter.md §8.2 shape this file:
  *
  * - `backlog-js`'s entity methods (`getIssue`, `postIssue`, ...) return
- *   parsed bodies and discard the `Response`, so `X-RateLimit-*` would be
- *   swallowed on success if the headers were read off a return value. They
- *   are read in the injected `fetch` instead — the one seam every method
- *   funnels through — so the port's own low-level `request()` calls and a
- *   consumer's `getIssue()` are counted, retried and mapped alike.
+ *   parsed bodies and discard the `Response`, and turn a non-2xx into their
+ *   own error before a caller sees its `X-RateLimit-Reset`. The 429 retry and
+ *   the error mapping therefore live in the injected `fetch` — the one seam
+ *   every method funnels through — so the port's own low-level `request()`
+ *   calls and a consumer's `getIssue()` are retried and mapped alike.
  * - Credentials are resolved fresh before each request rather than once at
  *   construction, because the resolver form (VERIFIED-FACTS) must support a
  *   token that a caller refreshes between calls. The client is therefore
@@ -257,11 +240,9 @@ export function createBacklogJsTransport(
     credentials,
     fetch = globalThis.fetch,
     timeoutMs = 30_000,
-    retry,
     random,
     logger,
   } = options;
-  const tracker = new RateLimitTracker();
   const credential = chooseCredential(host, credentials);
 
   /**
@@ -278,15 +259,15 @@ export function createBacklogJsTransport(
   }
 
   /**
-   * Issues one request with header capture, the per-call credential and one
-   * bounded 429 retry.
+   * Issues one request with the per-call credential, the error mapping and
+   * the bounded 429 retry.
    *
-   * All four live in the injected `fetch` rather than around
+   * All three live in the injected `fetch` rather than around
    * `client.request()`, because that is the one seam every `backlog-js`
    * method funnels through — `request()` ends in
    * `this.fetch(url, init).then(this.checkStatus)` (0.20.1). Instrumenting
    * the call site instead would leave `getIssue()` and its two hundred
-   * siblings uncounted, and those are exactly what a caller holding
+   * siblings unretried and unmapped, and those are exactly what a caller holding
    * {@link BacklogJsTransport.client} reaches for.
    *
    * A non-2xx throws here, before `checkStatus` can turn it into a
@@ -299,8 +280,6 @@ export function createBacklogJsTransport(
     attempt: number
   ): Promise<Response> {
     const url = requestUrl(input);
-    const method = (init?.method ?? requestMethod(input)).toUpperCase();
-    const bucket = classifyBucket(method, apiPath(url));
 
     const headers = new Headers(init?.headers ?? requestHeaders(input));
     // The client is built with no credential at all, so `request()` sets no
@@ -332,7 +311,6 @@ export function createBacklogJsTransport(
       throw mapTransportError(cause);
     }
 
-    tracker.record(host, bucket, response.headers);
     if (response.ok) {
       // The timer is deliberately left running: the body has not been read
       // yet, and a proxy can answer the headers and then stall the stream, so
@@ -358,13 +336,11 @@ export function createBacklogJsTransport(
         attempt,
         response.headers.get('X-RateLimit-Reset'),
         Date.now(),
-        retry,
         random
       );
       if (decision.shouldRetry) {
         logRateLimit(
-          'rate limited; waiting for the bucket to reset',
-          bucket,
+          'rate limited; waiting for the limit to reset',
           response.headers,
           decision,
           attempt
@@ -374,7 +350,6 @@ export function createBacklogJsTransport(
       }
       logRateLimit(
         'rate limited; not retrying',
-        bucket,
         response.headers,
         decision,
         attempt
@@ -450,22 +425,6 @@ export function createBacklogJsTransport(
   }
 
   /**
-   * The path `classifyBucket` reads, which is the API path without the
-   * `/api/v2` prefix — the same string the port passes for its own calls, so
-   * one endpoint lands in one bucket whichever way it was reached.
-   */
-  function apiPath(url: string): string {
-    try {
-      const { pathname } = new URL(url);
-      return pathname.startsWith(REST_PREFIX)
-        ? pathname.slice(REST_PREFIX.length)
-        : pathname;
-    } catch {
-      return url;
-    }
-  }
-
-  /**
    * The first entry of the documented `{"errors":[…]}` envelope, or
    * `undefined` when the body is not that shape: a 502 from in front of
    * Backlog is HTML, and losing the status code to a parse failure would be
@@ -498,13 +457,12 @@ export function createBacklogJsTransport(
   /**
    * The only two lines this port logs. Every other request stays silent on
    * purpose: an `X-RateLimit-Remaining` line per request would be one entry
-   * per API call against a 150-per-minute bucket, which buries the two
+   * per API call against a per-minute limit, which buries the two
    * moments an operator acts on — the request that blocked, and the request
    * that failed instead of blocking.
    */
   function logRateLimit(
     message: string,
-    bucket: RateLimitBucket,
     headers: Headers,
     decision: RetryDecision,
     attempt: number
@@ -517,7 +475,6 @@ export function createBacklogJsTransport(
     const remaining =
       remainingHeader === null ? Number.NaN : Number(remainingHeader);
     log.warn(message, {
-      bucket,
       ...(Number.isFinite(remaining) && { remaining }),
       ...(decision.resetAt !== undefined && {
         resetAt: decision.resetAt.toISOString(),
@@ -895,35 +852,6 @@ export function createBacklogJsTransport(
         },
         (response) => toDownloadedFile(response, attachmentId)
       );
-    },
-
-    async getRateLimit(): Promise<RateLimitSnapshots> {
-      const body = await requestJson('getRateLimit', rateLimitResponseSchema, {
-        method: 'GET',
-        path: 'rateLimit',
-      });
-      const snapshots: RateLimitSnapshots = {};
-      for (const bucket of RATE_LIMIT_BUCKETS) {
-        const reported = body.rateLimit[bucket];
-        if (reported !== undefined) {
-          snapshots[bucket] = {
-            limit: reported.limit,
-            remaining: reported.remaining,
-            reset: new Date(reported.reset * 1000),
-          };
-        }
-      }
-      // The four buckets this answer describes are deliberately not fed to
-      // `tracker`: it reports what this instance's own requests observed, and
-      // mixing in a server-reported figure would make `rateLimit()` claim
-      // knowledge of buckets nothing here has spent. The `read` entry the
-      // response headers produced by the request itself is the honest part
-      // and is already recorded.
-      return snapshots;
-    },
-
-    rateLimit(): RateLimitSnapshots {
-      return tracker.snapshot(host);
     },
   };
 

@@ -1,5 +1,5 @@
 import { AdapterError } from '@chat-adapter/shared';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   createBacklogAdapter,
@@ -22,13 +22,13 @@ import type { BacklogSubjectRef } from '../types';
  *   BACKLOG_LIVE_PULL_REQUEST=700:12 \
  *   pnpm test
  *
- * The budget is deliberate. Backlog's update bucket allows on the order of
- * 150 requests per user per minute and the four buckets are independent
+ * The budget is deliberate. Backlog allows writes on the order of 150
+ * requests per user per minute
  * (https://developer.nulab.com/docs/backlog/rate-limit/), so a chatty live
  * suite earns an HTTP 429 that looks like a product bug. The issue section
- * spends at most ten update-bucket calls, the pull-request section at most
- * eight, both run strictly sequentially, and neither creates an issue or
- * touches notifications.
+ * spends at most eight write calls, the pull-request section at most six,
+ * both run strictly sequentially, and neither creates an issue or touches
+ * notifications.
  *
  * The two sections differ in what they leave behind. The issue section deletes
  * everything it creates. The pull-request section deletes nothing, because
@@ -162,31 +162,6 @@ describe.skipIf(!configured).sequential('a real Backlog space', () => {
 
     await api.deleteComment(issueId, comment.id);
   });
-
-  it('records the rate-limit headers Backlog returns for each bucket used', async () => {
-    const adapter = createLiveAdapter();
-
-    expect(adapter.rateLimit(spaceHost)).toEqual({});
-
-    const api = adapter.api(spaceHost);
-    await api.getIssue(issueId);
-    const afterRead = adapter.rateLimit(spaceHost);
-    expect(afterRead.read).toBeDefined();
-    expect(afterRead.read?.limit).toBeGreaterThan(0);
-    expect(afterRead.read?.reset).toBeInstanceOf(Date);
-
-    const comment = await api.addComment(issueId, {
-      content:
-        'chat-adapter-backlog live suite: rate-limit probe, deleted below.',
-    });
-    await api.deleteComment(issueId, comment.id);
-
-    const afterUpdate = adapter.rateLimit(spaceHost);
-    expect(afterUpdate.update).toBeDefined();
-    // The buckets are independent, so an update must not have overwritten the
-    // read snapshot (docs/specs/adapter.md §8.4).
-    expect(afterUpdate.read).toBeDefined();
-  });
 });
 
 describe
@@ -306,53 +281,19 @@ describe
         commentId: 1,
       });
 
-      const failure: unknown = await adapter
-        .deleteMessage(threadId, messageId)
-        .then(() => undefined)
-        .catch((cause: unknown) => cause);
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
-      expect(failure).toBeInstanceOf(AdapterError);
-      expect((failure as AdapterError).code).toBe('UNSUPPORTED_OPERATION');
-      // An untouched adapter records a bucket per response it has seen, so an
-      // empty snapshot is proof that nothing was sent.
-      expect(adapter.rateLimit(spaceHost)).toEqual({});
-    });
+      try {
+        const failure: unknown = await adapter
+          .deleteMessage(threadId, messageId)
+          .then(() => undefined)
+          .catch((cause: unknown) => cause);
 
-    it('spends the read bucket on a pull request list and leaves the search bucket alone', async () => {
-      const adapter = createLiveAdapter();
-      const api = adapter.api(spaceHost);
-
-      await api.getPullRequest(ref);
-      const afterPullRequest = adapter.rateLimit(spaceHost);
-      expect(afterPullRequest.read).toBeDefined();
-      expect(afterPullRequest.read?.limit).toBeGreaterThan(0);
-      expect(afterPullRequest.read?.reset).toBeInstanceOf(Date);
-      expect(afterPullRequest.search).toBeUndefined();
-
-      await api.listIssues(ref.projectId, { count: 1 });
-      const afterIssues = adapter.rateLimit(spaceHost);
-      expect(afterIssues.search).toBeDefined();
-
-      await api.listPullRequests(ref.projectId, ref.repositoryId, {
-        count: 1,
-      });
-      const afterPullRequests = adapter.rateLimit(spaceHost);
-      // Not `remaining` arithmetic: the per-minute window can reset between
-      // two calls, which would raise `remaining` rather than lower it.
-      expect(afterPullRequests.read).not.toEqual(afterIssues.read);
-      expect(afterPullRequests.search).toEqual(afterIssues.search);
-
-      const comment = await api.addPullRequestComment(ref, {
-        content:
-          'chat-adapter-backlog live suite: rate-limit probe, left behind.',
-      });
-      expect(comment.id).toBeGreaterThan(0);
-
-      const afterUpdate = adapter.rateLimit(spaceHost);
-      expect(afterUpdate.update).toBeDefined();
-      // The buckets are independent, so an update must not have overwritten
-      // the read or search snapshot (docs/specs/adapter.md §8.4).
-      expect(afterUpdate.read).toBeDefined();
-      expect(afterUpdate.search).toEqual(afterIssues.search);
+        expect(failure).toBeInstanceOf(AdapterError);
+        expect((failure as AdapterError).code).toBe('UNSUPPORTED_OPERATION');
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        fetchSpy.mockRestore();
+      }
     });
   });

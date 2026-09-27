@@ -109,10 +109,8 @@ not a request to fall back.
 | `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check entirely — for a reverse-proxy assertion, mTLS or an IP allowlist. |
 | `userName` | `string` | first installation's bot name | Exposed to the core as `adapter.userName`. One string for the whole adapter; per space, read `adapter.botUserName(host)`. |
 | `logger` | `Logger` | `ConsoleLogger("info")` | Replaced by `chat.getLogger("backlog")` in `initialize`. |
-| `rateLimit.maxWaitMs` | `number` | `60_000` | Longest wait before a 429 retry. Non-negative integer. |
-| `rateLimit.maxRetries` | `number` | `1` | Non-negative integer; `0` disables retries. |
 | `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | Positive integer. Larger bodies get a 413. Description edits carry two full bodies. |
-| `createApi` | `(installation: ResolvedInstallation) => BacklogApi` | the `backlog-js`-backed port | Test seam: replaces the port every Backlog call goes through, so a consumer's suite needs no network — see **Testing**. Replacing it also takes the rate-limit accounting, the 429 retry and `client()` with it. |
+| `createApi` | `(installation: ResolvedInstallation) => BacklogApi` | the `backlog-js`-backed port | Test seam: replaces the port every Backlog call goes through, so a consumer's suite needs no network — see **Testing**. Replacing it also takes the 429 retry and `client()` with it. |
 
 ### Bot identity
 
@@ -217,7 +215,7 @@ core's `@<id>` pattern would be wrong for every space but one.
    unpacks that delivery into one message per issue, each in its own thread. A
    batch of fifty issues is fifty handler runs from one request, and if your
    handler calls the Backlog API each time, fifty calls against a per-minute
-   bucket. If that is more than your deployment can absorb, leave 14
+   limit. If that is more than your deployment can absorb, leave 14
    unregistered — that is the switch, and it is better than one in the adapter
    because nothing is delivered in the first place.
 
@@ -421,7 +419,7 @@ Limitations worth knowing before you build on this:
   notification's `resourceAlreadyRead` and never touches `alreadyRead` (the
   unread-count badge, cleared only by resetting the whole feed).
 - **`thread.messages` is not free.** Each page is one comment-list call for
-  either kind; `listThreads` draws on the **search** bucket (a lower limit than
+  either kind; `listThreads` draws on Backlog's **search** limit (lower than
   `read`).
 - **Delivery is at-least-once.** The core dedupes on `message.id` for ten
   minutes by default; a redelivery after that is processed again. `message.id`
@@ -587,28 +585,12 @@ error ever escapes the package.
 
 ## Rate limits and the raw API
 
-Limits are **per user, per minute**, in four independent buckets, and the
-numbers differ by plan — so read them from the API rather than assuming. Two
-members do that, and they answer different questions:
-
-```ts
-// What the space applies to your credential right now: every bucket, whatever
-// this process has or has not spent. Costs one request, in the `read` bucket.
-await adapter.api('example.backlog.com').getRateLimit();
-// { read: { limit, remaining, reset }, update: {…}, search: {…}, icon: {…} }
-
-// What this adapter instance last saw in `X-RateLimit-*` response headers.
-// Free, and only ever as complete and as current as its own traffic.
-adapter.rateLimit('example.backlog.com');
-// { read: {…} } — a bucket nothing here has spent is simply absent
-```
-
-`rateLimit()` is a record of observation, so two things follow. A `reset`
-already in the past means that window has rolled over and `remaining` no longer
-describes the budget. And where an instance handles one request and exits — a
-serverless function, most obviously — it can only ever report that one
-invocation's calls, which is why anything that needs to *decide* against a
-budget should ask `getRateLimit()` instead.
+Backlog limits requests **per user, per minute**, and the numbers differ by
+plan. The adapter does not track them: it spends what it needs, and a request
+Backlog refuses with a 429 is retried or surfaced as `AdapterRateLimitError`
+(below). To see the figures yourself, call Backlog's
+[Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/)
+through `client(host)`.
 
 ```ts
 // Anything outside the Chat SDK contract — including the pull-request list
@@ -618,24 +600,23 @@ const issue = await api.getIssue(8001);
 const pullRequests = await api.listPullRequests(500, 700, { count: 20 }); // projectId, repositoryId
 ```
 
-Issue listing and counting spend the **search** bucket, not `read` — the trap
-any polling loop falls into. Listing or counting **pull requests** spends `read`
-instead, so the two lists draw on different budgets and one being exhausted says
-nothing about the other.
+Issue listing and counting draw on Backlog's **search** limit, not `read` — the
+trap any polling loop falls into. Listing or counting **pull requests** draws on
+`read` instead, so the two lists have different budgets and one being exhausted
+says nothing about the other.
 
 `api(host)` names only the endpoints this adapter itself needs. For anything
 else — custom fields, project settings, attachments — `client(host)` hands back
 the very [`backlog-js`](https://github.com/nulab/backlog-js) client the port
-speaks through, so those calls land in the same buckets, share the same 429
-retry and raise the same errors:
+speaks through, so those calls share the same 429 retry and raise the same
+errors:
 
 ```ts
 const client = adapter.client('example.backlog.com');
 const fields = await client.getCustomFields(500); // projectId
 ```
 
-Build a Backlog client of your own instead and none of that holds: it spends
-the same per-user limit without counting it. `client()` is unavailable in
+Build a Backlog client of your own instead and none of that holds. `client()` is unavailable in
 exactly one configuration — a custom `createApi` replaces the
 `backlog-js`-backed port, so there is no client to hand out and `client()`
 throws an `AdapterError` with code `NO_CLIENT`.
@@ -643,8 +624,9 @@ throws an `AdapterError` with code `NO_CLIENT`.
 ### A 429 blocks the call for up to a minute
 
 Backlog sends no `Retry-After`, so a 429 is retried once by waiting until
-`X-RateLimit-Reset` — **up to `rateLimit.maxWaitMs`, 60 seconds by default,
-during which the call simply does not return**. On a paid space the wait is
+`X-RateLimit-Reset` — **up to 60 seconds, during which the call simply does
+not return**. A reset further off than that, or a second 429, rejects with
+`AdapterRateLimitError` at once; neither bound is configurable. On a paid space the wait is
 rare; on a free plan (15 updates per minute) a burst of comments reaches it
 easily, and a wait of ~55 seconds was measured on 2026-09-06.
 
@@ -652,28 +634,21 @@ That matters wherever execution time is capped. Serverless runtimes commonly
 stop a request at 60 seconds by default — no longer than the wait itself — and
 kill the call in the middle of it. The comment then disappears without an
 error, because the webhook already answered 200 and the work was running in the
-background. Either raise the runtime's ceiling above `maxWaitMs`, or lower
-`maxWaitMs` and catch `AdapterRateLimitError` yourself:
-
-```ts
-createBacklogAdapter({ rateLimit: { maxWaitMs: 5_000 } });
-// beyond 5 s the call rejects with AdapterRateLimitError instead of blocking
-```
+background. Give the runtime a ceiling comfortably above 60 seconds — on
+Vercel, `export const maxDuration = 90` in the function's module.
 
 Both outcomes are logged, at `warn`, through the Chat SDK logger — one line
 when the adapter starts waiting, one when it refuses to:
 
 ```
-rate limited; waiting for the bucket to reset
-  { bucket: 'update', remaining: 0, resetAt: '2026-09-06T12:34:00.000Z', waitMs: 55_500, attempt: 1 }
+rate limited; waiting for the limit to reset
+  { remaining: 0, resetAt: '2026-09-06T12:34:00.000Z', waitMs: 55_500, attempt: 1 }
 rate limited; not retrying
-  { bucket: 'update', remaining: 0, resetAt: '2026-09-06T12:39:00.000Z', waitMs: 300_000, attempt: 1 }
+  { remaining: 0, resetAt: '2026-09-06T12:39:00.000Z', waitMs: 300_000, attempt: 1 }
 ```
 
 Nothing else about rate limiting is logged; a line per request would be one
-entry per API call against a per-minute bucket. For the running counts, call
-`adapter.rateLimit(host)` for what this instance has seen, or
-`adapter.api(host).getRateLimit()` for what the space applies right now.
+entry per API call against a per-minute limit.
 
 ## Testing
 

@@ -32,9 +32,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
  *
  * `backlog-js` is here on purpose and is the one exception §3.1 records:
  * `BacklogAdapter.client(host)` returns its `Backlog` client, so that a
- * consumer needing an endpoint the port does not name spends the adapter's
- * own rate-limit accounting, retries and error mapping instead of standing up
- * a second client beside it. The price is exactly what this script otherwise
+ * consumer needing an endpoint the port does not name gets the adapter's own
+ * 429 retry and error mapping instead of standing up a second client beside
+ * it. The price is exactly what this script otherwise
  * prevents — a `backlog-js` major becomes a semver-major here — and it is
  * accepted because it is the library this adapter is built on and the same
  * vendor ships both.

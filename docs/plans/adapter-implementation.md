@@ -401,7 +401,7 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
 | PR | Title | Label | Content |
 | --- | --- | --- | --- |
 | P7a | `docs(docs): document setup, configuration and limitations` | `documentation` | README per §13 (publishing-checklist order), `sample-messages.md`, DEVELOPMENT.md credentials table, `.env.example`, CLAUDE.md "State of the repo" final form, feature matrix values recorded for a future catalog PR. |
-| P7b | `test(adapter): add opt-in live suite against a real space` | none | §12.3 suite, self-skipping; run once locally and paste the `rateLimit(host)` snapshot into the PR. |
+| P7b | `test(adapter): add opt-in live suite against a real space` | none | §12.3 suite, self-skipping; run once locally and paste the result into the PR. |
 | P7c | `ci(ci): run the live suite on manual dispatch only` (optional) | none | A `workflow_dispatch` input that provides `BACKLOG_*` from repository secrets; never on PRs from forks. Skip if the maintainer prefers local-only. |
 | P7d | `chore(release): publish the first release` | none | Follow DEVELOPMENT.md "The first release, step by step": dry-run `release.yml` with `minor`, publish `0.1.0` with a temporary token, then configure Trusted Publishing and delete the token (§7). |
 
@@ -414,8 +414,8 @@ Split into small PRs off `main` once P6 has merged; none of them stacks.
   except the release itself.
 - **P7b — written, never run.** `src/test/live.test.ts` exists and
   self-skips (#15, extended for pull requests by #24), so criterion 3 of §1
-  holds in its first half only. The run against a real space, and the
-  `rateLimit(host)` snapshot that goes in the release PR, are issue **#52**;
+  holds in its first half only. The run against a real space, whose result
+  goes in the release PR, is issue **#52**;
   the remaining item of **#51** (a schema fixture recorded from a real body)
   and the two unmeasured pull-request questions (M9, M12) belong to the same
   session.

@@ -1,33 +1,19 @@
 import { AdapterRateLimitError } from '@chat-adapter/shared';
 
-import type {
-  RateLimitBucket,
-  RateLimitSnapshot,
-  RateLimitSnapshots,
-  RetryOptions,
-} from './port.js';
-
-/** The four buckets, in the order the rate-limit page lists them. */
-export const RATE_LIMIT_BUCKETS = [
-  'read',
-  'update',
-  'search',
-  'icon',
-] as const satisfies readonly RateLimitBucket[];
-
-const DEFAULT_MAX_RETRIES = 1;
-const DEFAULT_MAX_WAIT_MS = 60_000;
+/**
+ * Fixed rather than configurable (docs/specs/adapter.md D5): neither
+ * first-party Chat SDK adapter exposes retry tuning. A runtime that stops a
+ * call sooner than `MAX_WAIT_MS` is the deployment's ceiling to raise.
+ */
+const MAX_RETRIES = 1;
+const MAX_WAIT_MS = 60_000;
 const MIN_RETRY_WAIT_MS = 1_000;
 const MAX_RETRY_JITTER_MS = 250;
 
 /**
- * An `X-RateLimit-*` header as a number, or `undefined` when there is no
- * number in it.
- *
  * The emptiness check is not redundant with `Number.isFinite`: `Number('')`
- * and `Number('  ')` are `0`, so a header present but blank used to read as
- * epoch zero — a reset in 1970, which is `waitMs` clamped to its floor
- * forever rather than the missing header it is.
+ * and `Number('  ')` are `0`, which would read a blank header as a reset in
+ * 1970 rather than as the missing header it is.
  */
 function finiteHeaderNumber(header: string | null): number | undefined {
   if (header === null || header.trim().length === 0) {
@@ -35,102 +21,6 @@ function finiteHeaderNumber(header: string | null): number | undefined {
   }
   const value = Number(header);
   return Number.isFinite(value) ? value : undefined;
-}
-
-/**
- * Classifies a request into one of the four buckets from
- * https://developer.nulab.com/docs/backlog/rate-limit/, as a function of
- * method and path so an endpoint added later needs no table update
- * (docs/specs/adapter.md §8.1): GET /issues and GET /issues/count spend
- * `search`; the five icon endpoints spend `icon`; every other GET spends
- * `read`; POST/PATCH/DELETE spend `update`.
- */
-export function classifyBucket(method: string, path: string): RateLimitBucket {
-  const normalizedMethod = method.toUpperCase();
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-
-  if (normalizedMethod !== 'GET') {
-    return 'update';
-  }
-
-  if (
-    /^\/issues\/?(?:\?|$)/.test(normalizedPath) ||
-    /^\/issues\/count(?:\?|$)/.test(normalizedPath)
-  ) {
-    return 'search';
-  }
-
-  if (isIconPath(normalizedPath)) {
-    return 'icon';
-  }
-
-  return 'read';
-}
-
-/**
- * The five icon endpoints named in
- * https://developer.nulab.com/docs/backlog/rate-limit/: Space Logo, User
- * Icon, Project Icon, Group Icon, Team Icon.
- */
-function isIconPath(path: string): boolean {
-  return (
-    /^\/space\/image(?:\?|$)/.test(path) ||
-    /^\/users\/[^/]+\/icon(?:\?|$)/.test(path) ||
-    /^\/projects\/[^/]+\/image(?:\?|$)/.test(path) ||
-    /^\/groups\/[^/]+\/icon(?:\?|$)/.test(path) ||
-    /^\/teams\/[^/]+\/icon(?:\?|$)/.test(path)
-  );
-}
-
-/**
- * Tracks the last-observed `X-RateLimit-*` headers per `(host, bucket)`.
- * Limits are per user per minute and differ by plan
- * (https://developer.nulab.com/docs/backlog/rate-limit/), so nothing here is
- * ever hard-coded — a bucket stays undefined until a response reports it.
- */
-export class RateLimitTracker {
-  private readonly snapshots = new Map<string, RateLimitSnapshots>();
-
-  /**
-   * Records the `X-RateLimit-*` headers from a response. Headers are read at
-   * the HTTP layer (not from a parsed body) because they arrive on every
-   * response, success or error, while a parsed body only exists on success
-   * (docs/specs/adapter.md §8.2).
-   */
-  record(host: string, bucket: RateLimitBucket, headers: Headers): void {
-    const limitHeader = headers.get('X-RateLimit-Limit');
-    const remainingHeader = headers.get('X-RateLimit-Remaining');
-    const resetHeader = headers.get('X-RateLimit-Reset');
-    if (
-      limitHeader === null ||
-      remainingHeader === null ||
-      resetHeader === null
-    ) {
-      return;
-    }
-    const limit = finiteHeaderNumber(limitHeader);
-    const remaining = finiteHeaderNumber(remainingHeader);
-    const resetSeconds = finiteHeaderNumber(resetHeader);
-    if (
-      limit === undefined ||
-      remaining === undefined ||
-      resetSeconds === undefined
-    ) {
-      return;
-    }
-    const snapshot: RateLimitSnapshot = {
-      limit,
-      remaining,
-      reset: new Date(resetSeconds * 1000),
-    };
-    const forHost = this.snapshots.get(host) ?? {};
-    forHost[bucket] = snapshot;
-    this.snapshots.set(host, forHost);
-  }
-
-  snapshot(host: string): RateLimitSnapshots {
-    return { ...(this.snapshots.get(host) ?? {}) };
-  }
 }
 
 export interface RetryDecision {
@@ -149,44 +39,33 @@ export interface RetryDecision {
 }
 
 /**
- * Decides whether a 429 (or error code 13) should be retried.
- * docs/specs/adapter.md §8.4: wait `max(reset*1000 - now, 1000)` plus jitter,
- * or the full `maxWaitMs` when `X-RateLimit-Reset` is missing; give up without
- * waiting once `waitMs` exceeds `maxWaitMs` or retries are exhausted, because
- * Backlog sends no `Retry-After` and a repeated POST could duplicate a
- * comment — retrying past one attempt risks that duplication for no benefit.
+ * docs/specs/adapter.md §8.4. One retry and a ceiling on the wait, because
+ * the wait blocks the caller's promise: past that the caller gets
+ * `AdapterRateLimitError` promptly rather than an unbounded stall.
  *
- * The one-second floor is not a rounding convenience: a reset already in the
- * past is what a clock skewed against Backlog's, or a window that has not
- * become observable yet, looks like from here, and the unfloored
- * `max(…, 0)` turned both into an immediate retry into the same full bucket
- * and an `AdapterRateLimitError` telling the caller to wait zero seconds.
- * Jitter, drawn per call from `random`, spreads the callers a single
- * epoch-second header released in lockstep; a missing header takes exactly
- * `maxWaitMs` without it, since adding jitter there would exceed the ceiling
- * the caller declared by construction.
+ * The one-second floor stops a past reset — a clock skewed against Backlog's
+ * — from becoming an immediate retry into the same exhausted limit, or an
+ * error telling the caller to wait zero seconds. A missing header waits
+ * exactly `MAX_WAIT_MS` without jitter, because jitter would push it past the
+ * ceiling it is compared against.
  */
 export function decideRetry(
   attempt: number,
   resetHeader: string | null,
   now: number,
-  options: RetryOptions | undefined,
   random: () => number = Math.random
 ): RetryDecision {
-  const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
-  const maxWaitMs = options?.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
-
   const resetSeconds = finiteHeaderNumber(resetHeader);
   const resetAt =
     resetSeconds === undefined ? undefined : new Date(resetSeconds * 1000);
   const waitMs =
     resetSeconds === undefined
-      ? maxWaitMs
+      ? MAX_WAIT_MS
       : Math.max(resetSeconds * 1000 - now, MIN_RETRY_WAIT_MS) +
         retryJitterMs(random());
   const retryAfterSeconds = Math.ceil(waitMs / 1000);
 
-  if (attempt >= maxRetries || waitMs > maxWaitMs) {
+  if (attempt >= MAX_RETRIES || waitMs > MAX_WAIT_MS) {
     return { shouldRetry: false, waitMs, retryAfterSeconds, resetAt };
   }
 
