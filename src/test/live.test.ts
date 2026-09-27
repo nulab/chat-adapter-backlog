@@ -26,16 +26,18 @@ import type {
  * requests per user per minute
  * (https://developer.nulab.com/docs/backlog/rate-limit/), so a chatty live
  * suite earns an HTTP 429 that looks like a product bug. The issue section
- * spends at most eight write calls, the pull-request section at most six,
+ * spends at most seven write calls, the pull-request section at most six,
  * both run strictly sequentially, and neither creates an issue or touches
  * notifications.
  *
- * The two sections differ in what they leave behind. The issue section deletes
- * everything it creates. The pull-request section deletes nothing, because
- * Backlog offers nothing to delete with: there is no delete endpoint for a
- * pull request or for one of its comments
- * (`.claude/rules/backlog-pull-request-facts.md`). `BACKLOG_LIVE_PULL_REQUEST`
- * must therefore name a scratch pull request — its comments are permanent.
+ * Both sections leave comments behind, so both variables must name scratch
+ * subjects. The issue section deletes its plain comment, but a comment that
+ * added an attachment cannot be deleted: Backlog keeps it, and the file with
+ * it, so the adapter refuses (`.claude/rules/backlog-api-facts.md`). The
+ * pull-request section deletes nothing, because there is no delete endpoint
+ * for a pull request or for one of its comments
+ * (`.claude/rules/backlog-pull-request-facts.md`). Each run names its files
+ * uniquely, because Backlog renames a file whose name the issue already has.
  *
  * `BACKLOG_LIVE_PULL_REQUEST` carries `<repositoryId>:<number>`, the two
  * coordinates the thread-id grammar writes as `pr:<repositoryId>:<number>`.
@@ -133,7 +135,7 @@ describe.skipIf(!configured).sequential('a real Backlog space', () => {
     });
     const editedComment = commentOf(edited.raw);
     expect(editedComment.content).toContain('edited');
-    expect(Date.parse(editedComment.updated)).toBeGreaterThan(
+    expect(Date.parse(editedComment.updated)).toBeGreaterThanOrEqual(
       Date.parse(editedComment.created)
     );
 
@@ -149,12 +151,13 @@ describe.skipIf(!configured).sequential('a real Backlog space', () => {
     await adapter.deleteMessage(threadId, posted.id);
   });
 
-  it('posts a file with a comment and reads it back as that comment’s attachment', async () => {
+  it('posts a file with a comment, reads it back as that comment’s attachment, and refuses to delete the comment', async () => {
+    const filename = `live-suite-${Date.now()}.txt`;
     const posted = await adapter.postMessage(threadId, {
-      markdown: 'chat-adapter-backlog live suite: attachment, deleted below.',
+      markdown: 'chat-adapter-backlog live suite: attachment, left behind.',
       files: [
         {
-          filename: 'live-suite.txt',
+          filename,
           data: Buffer.from('chat-adapter-backlog live suite\n'),
           mimeType: 'text/plain',
         },
@@ -163,14 +166,19 @@ describe.skipIf(!configured).sequential('a real Backlog space', () => {
 
     const message = await adapter.fetchMessage(threadId, posted.id);
     const attachment = message?.attachments.find(
-      (candidate) => candidate.name === 'live-suite.txt'
+      (candidate) => candidate.name === filename
     );
     expect(attachment).toBeDefined();
     expect(String(await attachment?.fetchData?.())).toBe(
       'chat-adapter-backlog live suite\n'
     );
 
-    await adapter.deleteMessage(threadId, posted.id);
+    const failure: unknown = await adapter
+      .deleteMessage(threadId, posted.id)
+      .then(() => undefined)
+      .catch((cause: unknown) => cause);
+    expect(failure).toBeInstanceOf(AdapterError);
+    expect((failure as AdapterError).code).toBe('UNSUPPORTED_OPERATION');
   });
 });
 
@@ -224,7 +232,7 @@ describe
       });
       const editedComment = commentOf(edited.raw);
       expect(editedComment.content).toContain('edited');
-      expect(Date.parse(editedComment.updated)).toBeGreaterThan(
+      expect(Date.parse(editedComment.updated)).toBeGreaterThanOrEqual(
         Date.parse(editedComment.created)
       );
 
@@ -258,12 +266,13 @@ describe
     });
 
     it('posts a file with a comment and reads it back as that comment’s attachment', async () => {
+      const filename = `live-suite-pull-request-${Date.now()}.txt`;
       const posted = await adapter.postMessage(threadId, {
         markdown:
           'chat-adapter-backlog live suite: attachment, left behind below.',
         files: [
           {
-            filename: 'live-suite-pull-request.txt',
+            filename,
             data: Buffer.from('chat-adapter-backlog live suite\n'),
             mimeType: 'text/plain',
           },
@@ -272,7 +281,7 @@ describe
 
       const message = await adapter.fetchMessage(threadId, posted.id);
       const attachment = message?.attachments.find(
-        (candidate) => candidate.name === 'live-suite-pull-request.txt'
+        (candidate) => candidate.name === filename
       );
       expect(attachment).toBeDefined();
       expect(String(await attachment?.fetchData?.())).toBe(

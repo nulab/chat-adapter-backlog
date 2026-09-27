@@ -81,7 +81,8 @@ its variables are set; what it calls and the write budget it keeps are in that
 file's header. Two things to know before setting them:
 
 - `BACKLOG_LIVE_ISSUE_ID` names an issue the suite comments on. Use a scratch
-  issue.
+  issue: each run leaves a comment with a file on it, which Backlog does not
+  let anyone delete.
 - `BACKLOG_LIVE_PULL_REQUEST` (`<repositoryId>:<number>`) adds the
   pull-request section. **Nothing it creates can be cleaned up** — Backlog has
   no endpoint that deletes a pull request or one of its comments — so point it

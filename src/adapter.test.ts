@@ -887,6 +887,9 @@ describe('BacklogAdapter.editMessage / deleteMessage', () => {
 
   it('a delete removes the comment from the issue', async () => {
     const { adapter, backlog } = egressAdapter();
+    vi.spyOn(backlog.client, 'getIssueComment').mockResolvedValue(
+      issueComment() as never
+    );
     const deleteIssueComment = vi
       .spyOn(backlog.client, 'deleteIssueComment')
       .mockResolvedValue(issueComment() as never);

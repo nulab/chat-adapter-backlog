@@ -68,6 +68,20 @@ export function createIssueSubjectClient(
     return download(client.getIssueAttachment(issueId, attachmentId));
   }
 
+  /**
+   * Get Comment answers for a comment id under any issue id, so a comment of
+   * another issue is refused here rather than read into this thread.
+   */
+  async function getComment(commentId: number): Promise<BacklogRawComment> {
+    const comment = await readIssueComment(
+      client.getIssueComment(issueId, commentId)
+    );
+    if (comment.issueId !== issueId) {
+      throw new ResourceNotFoundError('backlog', 'comment', String(commentId));
+    }
+    return comment;
+  }
+
   function rootOf(issue: BacklogRawIssue): SubjectRoot {
     return {
       ref,
@@ -96,23 +110,7 @@ export function createIssueSubjectClient(
       return readIssueComments(client.getIssueComments(issueId, options));
     },
 
-    /**
-     * Get Comment answers for a comment id under any issue id, so a comment
-     * of another issue is refused here rather than read into this thread.
-     */
-    async getComment(commentId: number): Promise<BacklogRawComment> {
-      const comment = await readIssueComment(
-        client.getIssueComment(issueId, commentId)
-      );
-      if (comment.issueId !== issueId) {
-        throw new ResourceNotFoundError(
-          'backlog',
-          'comment',
-          String(commentId)
-        );
-      }
-      return comment;
-    },
+    getComment,
 
     addComment(input: AddCommentInput): Promise<BacklogRawComment> {
       return readIssueComment(client.postIssueComments(issueId, input));
@@ -127,7 +125,20 @@ export function createIssueSubjectClient(
       );
     },
 
+    /**
+     * Refuses a comment that records a change: Backlog answers 200 but keeps
+     * it, with its content emptied and its attachment still on the issue
+     * (measured), so resolving would fabricate a deletion (D31).
+     */
     async deleteComment(commentId: number): Promise<void> {
+      const comment = await getComment(commentId);
+      if (comment.changeLog.length > 0) {
+        throw new AdapterError(
+          'Backlog keeps an issue comment that records a change or an attachment',
+          'backlog',
+          'UNSUPPORTED_OPERATION'
+        );
+      }
       await send(client.deleteIssueComment(issueId, commentId));
     },
 

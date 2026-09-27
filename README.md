@@ -260,7 +260,8 @@ Mock `adapter.client()` where a handler calls Backlog directly.
 ## Limitations
 
 - Editing a comment fires no webhook, so `onMessageUpdated` never fires.
-- A pull-request comment cannot be deleted. `listThreads` lists issues only.
+- A pull-request comment cannot be deleted, nor can an issue comment that
+  attached a file or changed a field. `listThreads` lists issues only.
 - `channel.post()` is rejected. Create an issue with `client().postIssue()`.
 - Creating, merging or closing a pull request has no Backlog API.
 - A reaction is a single Backlog star. The emoji is ignored.

@@ -125,13 +125,47 @@ describe('the issue subject client', () => {
     );
   });
 
-  it('deletes an issue comment, which Backlog supports', async () => {
+  it('deletes an issue comment that records no change', async () => {
     const deleteIssueComment = vi.fn().mockResolvedValue(issueComment());
-    const subject = subjectOn(stubClient({ deleteIssueComment }));
+    const subject = subjectOn(
+      stubClient({
+        getIssueComment: vi.fn().mockResolvedValue(issueComment()),
+        deleteIssueComment,
+      })
+    );
 
     await expect(subject.deleteComment(COMMENT_ID)).resolves.toBeUndefined();
 
     expect(deleteIssueComment).toHaveBeenCalledWith(REST.issueId, COMMENT_ID);
+  });
+
+  it('refuses to delete an issue comment that records a change, which Backlog would keep', async () => {
+    const deleteIssueComment = vi.fn();
+    const subject = subjectOn(
+      stubClient({
+        getIssueComment: vi.fn().mockResolvedValue(
+          issueComment({
+            changeLog: [
+              {
+                field: 'attachment',
+                newValue: 'trace.log',
+                originalValue: null,
+                attachmentInfo: { id: ATTACHMENT_ID },
+              },
+            ],
+          })
+        ),
+        deleteIssueComment,
+      })
+    );
+
+    const failure: unknown = await subject
+      .deleteComment(COMMENT_ID)
+      .catch((cause: unknown) => cause);
+
+    expect(failure).toBeInstanceOf(AdapterError);
+    expect((failure as AdapterError).code).toBe('UNSUPPORTED_OPERATION');
+    expect(deleteIssueComment).not.toHaveBeenCalled();
   });
 
   it('stars an issue comment as an issue comment', () => {
