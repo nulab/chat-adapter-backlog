@@ -865,6 +865,15 @@ export function createFakeBacklogServer(
       return respond(200, priorities);
     }
 
+    if (
+      segments[0] === 'users' &&
+      segments[1] === 'myself' &&
+      segments.length === 2 &&
+      method === 'GET'
+    ) {
+      return respond(200, toWireUser(bot));
+    }
+
     if (segments[0] === 'users' && segments.length === 2 && method === 'GET') {
       const userId = Number(segments[1]);
       const user = users.find((u) => u.id === userId);

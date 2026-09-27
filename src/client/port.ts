@@ -330,6 +330,8 @@ export interface BacklogApi {
   getIssue(issueId: number): Promise<BacklogIssue>;
   getProject(projectId: number): Promise<BacklogProject>;
   getUser(userId: number): Promise<BacklogUserRef>;
+  /** The user the credential acts as (`GET /users/myself`). */
+  getMyself(): Promise<BacklogUserRef>;
   listIssues(
     projectId: number,
     options: ListIssuesOptions

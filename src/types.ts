@@ -546,13 +546,18 @@ export type Resolvable = string | (() => string | Promise<string>);
  * meets while building the object rather than where the value came from. The
  * strictness belongs on the way out, which is what {@link
  * ResolvedInstallation} is for.
+ *
+ * `botUserId` and `botUserName` may be left out: whichever is missing is read
+ * from `GET /users/myself` for this installation, and a configured value wins
+ * over the fetched one (docs/specs/adapter.md §3.2, D23). Configuring both is
+ * the only way to make the adapter spend no request on who it is.
  */
 export interface BacklogInstallation {
   host: string;
   apiKey?: Resolvable;
   accessToken?: Resolvable;
-  botUserId: number;
-  botUserName: string;
+  botUserId?: number;
+  botUserName?: string;
   webhookSecret?: string;
 }
 
@@ -583,12 +588,15 @@ export type ResolvedCredential =
  *   constructor, every fixture, every `createApi` double a consumer writes —
  *   cast into it, and the one producer of the value is `validateHost` in
  *   `src/ids.ts`, which lowercases through the same grammar the id codec
- *   uses. The cost outweighs what the brand buys (issue #62).
+ *   uses. The cost outweighs what the brand buys (issue #62);
+ * - `botUserId`/`botUserName` are what was **configured**, validated, and
+ *   absent when the adapter is to ask `GET /users/myself` instead. `createApi`
+ *   runs before that answer exists, so it is never folded in here.
  */
 export type ResolvedInstallation = {
   host: string;
-  botUserId: number;
-  botUserName: string;
+  botUserId?: number;
+  botUserName?: string;
   webhookSecret?: string;
 } & ResolvedCredential;
 

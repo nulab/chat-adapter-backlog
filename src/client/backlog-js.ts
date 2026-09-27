@@ -567,6 +567,13 @@ export function createBacklogJsTransport(
       });
     },
 
+    async getMyself() {
+      return requestJson<BacklogUserRef>('getMyself', userResponseSchema, {
+        method: 'GET',
+        path: 'users/myself',
+      });
+    },
+
     async listIssues(projectId, options: ListIssuesOptions) {
       const params: Record<string, unknown> = {
         projectId: [projectId],

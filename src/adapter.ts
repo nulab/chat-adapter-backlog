@@ -146,6 +146,12 @@ interface AdapterTransport {
   client?: Backlog;
 }
 
+/** Who the bot is on one installation, once configuration and `GET /users/myself` have both had their say. */
+interface BotIdentity {
+  id: number;
+  name: string;
+}
+
 /**
  * There is no "neither credential" branch, and none is reachable: an
  * installation is a `ResolvedCredential`, so the compiler narrows the second
@@ -277,8 +283,8 @@ function validateInstallation(
     host: string;
     apiKey?: Resolvable;
     accessToken?: Resolvable;
-    botUserId: number;
-    botUserName: string;
+    botUserId?: number;
+    botUserName?: string;
     webhookSecret?: string;
   },
   requireSecret: boolean
@@ -287,8 +293,12 @@ function validateInstallation(
 
   const credential = resolveCredential(candidate);
 
-  const botUserId = validateBotUserId(candidate.botUserId, 'botUserId');
-  const botUserName = validateBotUserName(candidate.botUserName, 'botUserName');
+  if (candidate.botUserId !== undefined) {
+    validateBotUserId(candidate.botUserId, 'botUserId');
+  }
+  if (candidate.botUserName !== undefined) {
+    validateBotUserName(candidate.botUserName, 'botUserName');
+  }
 
   if (requireSecret) {
     if (candidate.webhookSecret === undefined) {
@@ -301,12 +311,13 @@ function validateInstallation(
     validateWebhookSecret(candidate.webhookSecret, 'webhookSecret');
   }
 
-  const resolved: ResolvedInstallation = {
-    host,
-    botUserId,
-    botUserName,
-    ...credential,
-  };
+  const resolved: ResolvedInstallation = { host, ...credential };
+  if (candidate.botUserId !== undefined) {
+    resolved.botUserId = candidate.botUserId;
+  }
+  if (candidate.botUserName !== undefined) {
+    resolved.botUserName = candidate.botUserName;
+  }
   if (candidate.webhookSecret !== undefined) {
     resolved.webhookSecret = candidate.webhookSecret;
   }
@@ -380,23 +391,13 @@ function resolveShapeA(
     );
   }
 
-  const botUserIdSource = config.botUserId;
-  let botUserId: number;
-  if (botUserIdSource !== undefined) {
-    botUserId = botUserIdSource;
-  } else {
-    const envValue = process.env[ENV_BOT_USER_ID];
-    if (envValue === undefined) {
-      fail(`botUserId is required: set config.botUserId or ${ENV_BOT_USER_ID}`);
-    }
-    botUserId = parseBotUserIdFromEnv(envValue, ENV_BOT_USER_ID);
-  }
-
-  const botUserName = requireWithEnvFallback(
-    config.botUserName,
-    ENV_BOT_USER_NAME,
-    'botUserName'
-  );
+  const botUserIdFromEnv = process.env[ENV_BOT_USER_ID];
+  const botUserId =
+    config.botUserId ??
+    (botUserIdFromEnv === undefined
+      ? undefined
+      : parseBotUserIdFromEnv(botUserIdFromEnv, ENV_BOT_USER_ID));
+  const botUserName = config.botUserName ?? process.env[ENV_BOT_USER_NAME];
 
   const webhookSecret =
     config.webhookSecret !== undefined
@@ -407,10 +408,16 @@ function resolveShapeA(
     host: string;
     apiKey?: Resolvable;
     accessToken?: Resolvable;
-    botUserId: number;
-    botUserName: string;
+    botUserId?: number;
+    botUserName?: string;
     webhookSecret?: string;
-  } = { host, botUserId, botUserName };
+  } = { host };
+  if (botUserId !== undefined) {
+    candidate.botUserId = botUserId;
+  }
+  if (botUserName !== undefined) {
+    candidate.botUserName = botUserName;
+  }
   if (apiKey !== undefined) {
     candidate.apiKey = apiKey;
   }
@@ -522,7 +529,7 @@ type BacklogRestRawMessage = Extract<
  * consumer's function rejecting — a 500 the ladder has no entry for — over
  * one field of one log line. The id of the message *itself* is built inside
  * the lazy factory, where the `.catch` on `processMessage` already turns a
- * throw into an error log after the 200 (§5.1 step 12), so nothing is
+ * throw into an error log after the 200 (§5.1 step 13), so nothing is
  * loosened where a failure can be reported.
  *
  * No payload can reach the failing branch today: the root and comment forms
@@ -612,9 +619,25 @@ export class BacklogAdapter implements Adapter<
   BacklogRawMessage
 > {
   readonly name = 'backlog';
-  readonly userName: string;
 
   private readonly installations: Map<string, ResolvedInstallation>;
+  private readonly configuredUserName: string | undefined;
+  private readonly firstHost: string;
+  /**
+   * `host -> BotIdentity`, filled at construction for an installation that
+   * configured both halves and by `GET /users/myself` for the rest
+   * (docs/specs/adapter.md §3.2, D23). A failed lookup leaves no entry, so
+   * the next caller that needs the identity asks again.
+   */
+  private readonly botIdentities = new Map<string, BotIdentity>();
+  /**
+   * The lookup in flight per host, so the webhooks that arrive together on a
+   * cold instance share one `GET /users/myself` instead of spending one each.
+   */
+  private readonly pendingBotIdentities = new Map<
+    string,
+    Promise<BotIdentity>
+  >();
   private readonly createTransport: (
     installation: ResolvedInstallation
   ) => AdapterTransport;
@@ -710,10 +733,22 @@ export class BacklogAdapter implements Adapter<
       fail('at least one installation is required');
     }
 
-    this.userName =
+    this.firstHost = firstInstallation.host;
+    this.configuredUserName =
       config.userName !== undefined
         ? validateBotUserName(config.userName, 'userName')
-        : firstInstallation.botUserName;
+        : undefined;
+    for (const installation of resolvedInstallations) {
+      if (
+        installation.botUserId !== undefined &&
+        installation.botUserName !== undefined
+      ) {
+        this.botIdentities.set(installation.host, {
+          id: installation.botUserId,
+          name: installation.botUserName,
+        });
+      }
+    }
 
     this.ingressConfig = {
       rateLimit: validateRateLimitConfig(config.rateLimit),
@@ -734,24 +769,111 @@ export class BacklogAdapter implements Adapter<
   }
 
   /**
-   * Stores the `ChatInstance` and swaps to its logger (docs/specs/adapter.md
-   * §4.1); makes no API call. Storing `chat` ahead of any member that reads
-   * it is deliberate: `initialize` runs once, long before the webhook (P3)
-   * dispatch that needs it, and the core tolerates construction happening
-   * long before `initialize` (`.claude/rules/chat-sdk-core-facts.md`). The
-   * summary line gives an operator one log entry confirming which host(s)
-   * and ingress limits this instance came up with, without requiring the
-   * reader to have a debugger attached to inspect construction.
+   * `config.userName`, else the first installation's bot name — configured,
+   * or fetched by `initialize`. Empty until that fetch has answered: the core
+   * reads `adapter.userName || chat.userName` (`.claude/rules/
+   * chat-sdk-core-facts.md`), so an empty string hands mention matching to
+   * the `Chat`'s own name rather than to a guess.
+   */
+  get userName(): string {
+    return (
+      this.configuredUserName ??
+      this.botIdentities.get(this.firstHost)?.name ??
+      ''
+    );
+  }
+
+  /**
+   * Stores the `ChatInstance`, swaps to its logger (docs/specs/adapter.md
+   * §4.1) and resolves every bot identity configuration left incomplete —
+   * one `GET /users/myself` per such installation, none at all when every
+   * installation configured both `botUserId` and `botUserName` (D23).
+   * Storing `chat` ahead of any member that reads it is deliberate:
+   * `initialize` runs once, long before the webhook (P3) dispatch that needs
+   * it, and the core tolerates construction happening long before
+   * `initialize` (`.claude/rules/chat-sdk-core-facts.md`). The summary line
+   * gives an operator one log entry confirming which host(s) and ingress
+   * limits this instance came up with, without requiring the reader to have a
+   * debugger attached to inspect construction.
+   *
+   * A failed lookup is a `warn`, not a rejection. The core memoises the
+   * promise of its adapters' `initialize` calls and never retries a rejected
+   * one, so throwing here would refuse every later webhook for every adapter
+   * of the `Chat` until the process restarts. The host whose lookup failed is
+   * asked again by the first webhook or call that needs its identity, and a
+   * webhook that still cannot learn it is answered 503 rather than dispatched
+   * without a self-message check (§5.1 row 11).
    */
   async initialize(chat: ChatInstance): Promise<void> {
     this.chat = chat;
     this.logger = chat.getLogger('backlog');
+    await Promise.all(
+      [...this.installations.keys()]
+        .filter((host) => !this.botIdentities.has(host))
+        .map((host) =>
+          this.botIdentity(host).catch((cause: unknown) => {
+            this.logger.warn('bot identity lookup failed; retried on demand', {
+              host,
+              error: cause instanceof Error ? cause.message : String(cause),
+            });
+          })
+        )
+    );
     this.logger.debug(
       `initialized for host(s) ${[...this.installations.keys()].join(', ')}` +
         ` (chat=${this.chat !== undefined},` +
         ` maxWebhookBodyBytes=${this.ingressConfig.maxWebhookBodyBytes},` +
         ` webhookVerifier=${this.ingressConfig.webhookVerifier !== undefined})`
     );
+  }
+
+  /**
+   * The bot's identity on `host`, from configuration or one shared
+   * `GET /users/myself` (D23). A configured half wins over the fetched one,
+   * so a deployment can pin the display name its users type while leaving the
+   * id to the API. A failed lookup rejects and is not cached.
+   */
+  private async botIdentity(host: string): Promise<BotIdentity> {
+    const installation = this.resolveInstallation(host);
+    const known = this.botIdentities.get(host);
+    if (known !== undefined) {
+      return known;
+    }
+    let pending = this.pendingBotIdentities.get(host);
+    if (pending === undefined) {
+      pending = this.api(host)
+        .getMyself()
+        .then((myself) => {
+          const identity: BotIdentity = {
+            id: installation.botUserId ?? myself.id,
+            name: installation.botUserName ?? myself.name,
+          };
+          this.botIdentities.set(host, identity);
+          return identity;
+        })
+        .finally(() => this.pendingBotIdentities.delete(host));
+      this.pendingBotIdentities.set(host, pending);
+    }
+    return pending;
+  }
+
+  /**
+   * `botIdentity` for the synchronous members, which cannot await a lookup:
+   * `parseMessage` and `botUserName(host)`. Every path the adapter drives
+   * itself has awaited `botIdentity` first, so this throws only for a host
+   * whose identity neither configuration nor `initialize` could supply.
+   */
+  private knownBotIdentity(host: string): BotIdentity {
+    this.resolveInstallation(host);
+    const identity = this.botIdentities.get(host);
+    if (identity === undefined) {
+      throw new AdapterError(
+        `the bot identity for "${host}" is not known yet: configure botUserId and botUserName, or let initialize() read them from GET /users/myself`,
+        'backlog',
+        'BOT_IDENTITY_UNRESOLVED'
+      );
+    }
+    return identity;
   }
 
   encodeThreadId(platformData: BacklogThreadId): string {
@@ -852,9 +974,14 @@ export class BacklogAdapter implements Adapter<
    * cannot build or match its own mention string from it. Only the name is
    * exposed, not the installation: `botUserId` stays private (§3.3) and a
    * credential must never leave through a getter.
+   *
+   * Synchronous, so a name left to `GET /users/myself` is readable only once
+   * `initialize` has fetched it; before that it throws
+   * `AdapterError(…, "BOT_IDENTITY_UNRESOLVED")` rather than answer a name
+   * the bot does not have (D23).
    */
   botUserName(host: string): string {
-    return this.resolveInstallation(host).botUserName;
+    return this.knownBotIdentity(host).name;
   }
 
   /**
@@ -1003,11 +1130,12 @@ export class BacklogAdapter implements Adapter<
    */
   private messageBuilders(
     host: string,
-    converter: FallbackFormatConverter
+    converter: FallbackFormatConverter,
+    identity: BotIdentity
   ): Omit<MessageBuilders, 'projectId' | 'subject'> {
     return {
       host,
-      botUserId: this.resolveInstallation(host).botUserId,
+      botUserId: identity.id,
       format: (text) => converter.toAst(text),
       MessageCtor,
     };
@@ -1142,7 +1270,7 @@ export class BacklogAdapter implements Adapter<
       return new Response(verification.body, { status: verification.status });
     }
 
-    const { host, installation, rawBody } = verification;
+    const { host, rawBody } = verification;
 
     let parsedBody: unknown;
     try {
@@ -1190,6 +1318,17 @@ export class BacklogAdapter implements Adapter<
     }
     const chat = this.chat;
 
+    let botUserId: number;
+    try {
+      botUserId = (await this.botIdentity(host)).id;
+    } catch (cause) {
+      this.logger.error('webhook rejected: bot identity unavailable', {
+        host,
+        error: cause instanceof Error ? cause.message : String(cause),
+      });
+      return new Response('Bot identity unavailable', { status: 503 });
+    }
+
     if (activity.type === 14) {
       // Answered before `subjectOfActivity` rather than inside it: a bulk
       // update names one issue per `content.link[]` entry, so there is no
@@ -1199,7 +1338,7 @@ export class BacklogAdapter implements Adapter<
         activity,
         payload: parsedBody as BacklogBulkUpdatePayload,
         host,
-        botUserId: installation.botUserId,
+        botUserId,
         chat,
         options,
       });
@@ -1212,7 +1351,7 @@ export class BacklogAdapter implements Adapter<
       subject,
     });
 
-    if (activity.createdUser.id === installation.botUserId) {
+    if (activity.createdUser.id === botUserId) {
       this.logger.debug('self message skipped', { host, threadId });
       return new Response('OK', { status: 200 });
     }
@@ -1295,7 +1434,7 @@ export class BacklogAdapter implements Adapter<
     );
 
     // Dispatched, not awaited: the response below must return before
-    // processing completes (docs/specs/adapter.md §5.1 step 12). A factory
+    // processing completes (docs/specs/adapter.md §5.1 step 13). A factory
     // that throws is logged here rather than left to reject unhandled,
     // because the core swallows the rejection for `waitUntil` but this is
     // the only place that knows which host/issue/message it was for.
@@ -1328,7 +1467,7 @@ export class BacklogAdapter implements Adapter<
    * the documented way out (D-PR4).
    *
    * The self-message check is repeated here rather than being hoisted above
-   * this branch: §5.1 step 11 logs the thread id it skipped, and this branch
+   * this branch: §5.1 step 12 logs the thread id it skipped, and this branch
    * has no single thread id to log.
    */
   private dispatchBulkUpdate(input: {
@@ -1424,7 +1563,7 @@ export class BacklogAdapter implements Adapter<
     }
 
     const { host, payload } = raw;
-    const installation = this.resolveInstallation(host);
+    const identity = this.knownBotIdentity(host);
 
     // Re-validated rather than read through its declared type, for the reason
     // `parseBulkUpdatePayload` re-parses a bulk delivery: `raw.payload` is the
@@ -1460,8 +1599,8 @@ export class BacklogAdapter implements Adapter<
       activity,
       {
         host,
-        botUserId: installation.botUserId,
-        botUserName: installation.botUserName,
+        botUserId: identity.id,
+        botUserName: identity.name,
         subject: this.subjectClient(
           host,
           activity.project.id,
@@ -1508,7 +1647,11 @@ export class BacklogAdapter implements Adapter<
     // to throw.
     const subjectClient = this.subjectClient(host, projectId, subject);
     const builders: MessageBuilders = {
-      ...this.messageBuilders(host, this.cachedConverter(host, projectId)),
+      ...this.messageBuilders(
+        host,
+        this.cachedConverter(host, projectId),
+        this.knownBotIdentity(host)
+      ),
       projectId,
       subject: subjectClient,
     };
@@ -1584,7 +1727,7 @@ export class BacklogAdapter implements Adapter<
     host: string,
     payload: BacklogBulkUpdatePayload
   ): Message<BacklogRawMessage> {
-    const installation = this.resolveInstallation(host);
+    const identity = this.knownBotIdentity(host);
     const converter = this.cachedConverter(host, activity.project.id);
 
     return buildBulkUpdateMessage(
@@ -1592,8 +1735,8 @@ export class BacklogAdapter implements Adapter<
       target,
       {
         host,
-        botUserId: installation.botUserId,
-        botUserName: installation.botUserName,
+        botUserId: identity.id,
+        botUserName: identity.name,
         payload,
         format: (text) => converter.toAst(text),
       },
@@ -1710,7 +1853,7 @@ export class BacklogAdapter implements Adapter<
       api: this.api(host),
       subject: this.subjectClient(host, projectId, subject),
       commentId,
-      botUserId: this.resolveInstallation(host).botUserId,
+      botUserId: (await this.botIdentity(host)).id,
     });
   }
 
@@ -1728,7 +1871,7 @@ export class BacklogAdapter implements Adapter<
       api: this.api(host),
       subject: this.subjectClient(host, projectId, subject),
       commentId,
-      botUserId: this.resolveInstallation(host).botUserId,
+      botUserId: (await this.botIdentity(host)).id,
     });
   }
 
@@ -1742,7 +1885,11 @@ export class BacklogAdapter implements Adapter<
       threadId,
       options,
       subject,
-      builders: this.messageBuilders(host, converter),
+      builders: this.messageBuilders(
+        host,
+        converter,
+        await this.botIdentity(host)
+      ),
     });
   }
 
@@ -1759,7 +1906,11 @@ export class BacklogAdapter implements Adapter<
       // resolves the project's formatting rule, and `fetchMessageRead` only
       // calls it once it is going to build a message.
       builders: async () =>
-        this.messageBuilders(host, await this.getConverter(host, projectId)),
+        this.messageBuilders(
+          host,
+          await this.getConverter(host, projectId),
+          await this.botIdentity(host)
+        ),
     });
   }
 
@@ -1824,7 +1975,11 @@ export class BacklogAdapter implements Adapter<
       channelId,
       options,
       api: this.api(host),
-      builders: this.messageBuilders(host, converter),
+      builders: this.messageBuilders(
+        host,
+        converter,
+        await this.botIdentity(host)
+      ),
       // Every thread this lists is an issue: a pull-request list is per
       // repository, a coordinate a channel id does not carry (D-PR7), so the
       // subject of each row is known before the row is read.
@@ -1844,7 +1999,7 @@ export class BacklogAdapter implements Adapter<
     return getUserRead({
       userId,
       api: this.api(host),
-      botUserId: this.resolveInstallation(host).botUserId,
+      botUserId: (await this.botIdentity(host)).id,
     });
   }
 
