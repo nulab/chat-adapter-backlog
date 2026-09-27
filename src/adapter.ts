@@ -11,7 +11,6 @@ import type { Backlog } from 'backlog-js';
 import type {
   BacklogApi,
   BacklogCredentials,
-  RateLimitSnapshots,
   RetryOptions,
   TextFormattingRule,
 } from './client/port';
@@ -887,8 +886,7 @@ export class BacklogAdapter implements Adapter<
    * not.
    *
    * It is handed out rather than left to the caller to construct because a
-   * second client would spend the same per-user rate limit without counting
-   * it: this one carries the adapter's bucket accounting, its bounded 429
+   * second client would have none of what this one carries: its bounded 429
    * retry, its `@chat-adapter/shared` error mapping and its per-call
    * credential resolution (docs/specs/adapter.md §3.1, §8.2). It holds no
    * credential of its own, so it is safe to keep past the call that asked for
@@ -914,17 +912,6 @@ export class BacklogAdapter implements Adapter<
       this.apiCache.set(host, transport);
     }
     return transport;
-  }
-
-  /**
-   * The `X-RateLimit-*` headers **this adapter instance** observed for that
-   * host, per bucket (`BacklogApi.rateLimit`). It is empty until this instance
-   * has made a request and never learns about traffic from another one, so
-   * where instances are short-lived — one per serverless invocation, say —
-   * ask the space instead: `adapter.api(host).getRateLimit()`.
-   */
-  rateLimit(host: string): RateLimitSnapshots {
-    return this.api(host).rateLimit();
   }
 
   /**

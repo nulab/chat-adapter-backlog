@@ -18,19 +18,11 @@ import type {
  * wire format (numeric ids, ISO date strings, the `{errors:[...]}` envelope)
  * over the same `restBaseURL` shape `backlog-js` requests
  * (`https://<host>/api/v2/<path>`), and stamps `X-RateLimit-*` on every
- * response so header capture (docs/specs/adapter.md §8.2) has something real
- * to read. It is not exported from `src/client/`; it exists only to drive
+ * response as Backlog does. It is not exported from `src/client/`; it exists only to drive
  * the conformance suite and `backlog-js.ts`'s own unit tests against a
  * predictable server.
  */
 export interface FakeBacklogServerOptions {
-  /** Overrides the `X-RateLimit-*` triple written on every response for a bucket. */
-  rateLimitOverrides?: Partial<
-    Record<
-      'read' | 'update' | 'search' | 'icon',
-      { limit: number; remaining: number; reset: number }
-    >
-  >;
   /** API key(s) accepted on `Backlog-API-Key`; a mismatch is a 401 with code 11. */
   validApiKeys?: string[];
   /** Called with every request before it is served, to make assertions on how it travelled. */
@@ -91,45 +83,11 @@ const {
   baseNotifications,
 } = conformanceFixture;
 
-function rateLimitFigures(
-  bucket: 'read' | 'update' | 'search' | 'icon',
-  overrides: FakeBacklogServerOptions['rateLimitOverrides']
-): { limit: number; remaining: number; reset: number } {
-  const defaults = { read: 600, update: 150, search: 150, icon: 60 } as const;
-  const override = overrides?.[bucket];
-  const limit = override?.limit ?? defaults[bucket];
-  const remaining = override?.remaining ?? limit - 1;
-  const reset = override?.reset ?? Math.floor(Date.now() / 1000) + 60;
-  return { limit, remaining, reset };
-}
-
-function defaultRateLimitHeaders(
-  bucket: 'read' | 'update' | 'search' | 'icon',
-  overrides: FakeBacklogServerOptions['rateLimitOverrides']
-): Record<string, string> {
-  const { limit, remaining, reset } = rateLimitFigures(bucket, overrides);
+function defaultRateLimitHeaders(): Record<string, string> {
   return {
-    'X-RateLimit-Limit': String(limit),
-    'X-RateLimit-Remaining': String(remaining),
-    'X-RateLimit-Reset': String(reset),
-  };
-}
-
-/**
- * `GET /rateLimit`'s body. It reports every bucket from the same figures the
- * headers carry, so a test can tell a body-sourced answer from a
- * header-sourced one by which buckets are present rather than by their values.
- */
-function rateLimitBody(
-  overrides: FakeBacklogServerOptions['rateLimitOverrides']
-): { rateLimit: Record<string, unknown> } {
-  return {
-    rateLimit: {
-      read: rateLimitFigures('read', overrides),
-      update: rateLimitFigures('update', overrides),
-      search: rateLimitFigures('search', overrides),
-      icon: rateLimitFigures('icon', overrides),
-    },
+    'X-RateLimit-Limit': '600',
+    'X-RateLimit-Remaining': '599',
+    'X-RateLimit-Reset': String(Math.floor(Date.now() / 1000) + 60),
   };
 }
 
@@ -347,29 +305,14 @@ export function createFakeBacklogServer(
           url.toString(),
           401,
           errorBody(11, 'Authentication failure'),
-          {
-            ...defaultRateLimitHeaders('read', options.rateLimitOverrides),
-          }
+          defaultRateLimitHeaders()
         );
       }
     }
 
     const path = url.pathname.replace(/^\/api\/v2\//, '');
     const segments = path.split('/');
-    const bucket = classify(method, path);
-    const rateLimitHeaders = defaultRateLimitHeaders(
-      bucket,
-      options.rateLimitOverrides
-    );
-    const rateLimited = isRateLimited(bucket, options.rateLimitOverrides);
-    if (rateLimited) {
-      return jsonResponse(
-        url.toString(),
-        429,
-        errorBody(13, 'Too many requests'),
-        rateLimitHeaders
-      );
-    }
+    const rateLimitHeaders = defaultRateLimitHeaders();
 
     try {
       return await route({
@@ -392,28 +335,6 @@ export function createFakeBacklogServer(
       throw error;
     }
   };
-
-  function classify(
-    method: string,
-    path: string
-  ): 'read' | 'update' | 'search' | 'icon' {
-    if (method !== 'GET') return 'update';
-    // The Rate limit page puts only the issue and wiki list/count endpoints
-    // in `search`, and `GET …/pullRequests` was measured decrementing `read`
-    // (`.claude/rules/backlog-pull-request-facts.md` "Rate limit"), so no
-    // branch for a listing endpoint belongs here beyond the two below —
-    // however much a pull-request *list* reads like a search.
-    if (/^issues\/?(?:$)/.test(path) || path === 'issues/count')
-      return 'search';
-    return 'read';
-  }
-
-  function isRateLimited(
-    bucket: 'read' | 'update' | 'search' | 'icon',
-    overrides: FakeBacklogServerOptions['rateLimitOverrides']
-  ): boolean {
-    return overrides?.[bucket]?.remaining === 0;
-  }
 
   class RouteError extends Error {
     constructor(
@@ -496,7 +417,7 @@ export function createFakeBacklogServer(
     const respond = (status: number, body: unknown): Response =>
       jsonResponse(url.toString(), status, body, rateLimitHeaders);
 
-    // GET /issues (search bucket) and GET /issues/count
+    // GET /issues and GET /issues/count
     if (method === 'GET' && segments[0] === 'issues' && segments.length === 1) {
       const count = Number(url.searchParams.get('count') ?? '20');
       const offset = Number(url.searchParams.get('offset') ?? '0');
@@ -851,14 +772,6 @@ export function createFakeBacklogServer(
           }
         }
       }
-    }
-
-    if (
-      segments[0] === 'rateLimit' &&
-      segments.length === 1 &&
-      method === 'GET'
-    ) {
-      return respond(200, rateLimitBody(options.rateLimitOverrides));
     }
 
     if (segments[0] === 'priorities' && method === 'GET') {

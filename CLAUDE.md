@@ -182,7 +182,7 @@ would be `build:` elsewhere is `chore(build)` or `fix(build)`.
 | Scope       | Covers                                                                                                                    |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `adapter`   | the `Adapter` surface: the class, `createBacklogAdapter`, thread-ID codec, egress, reads, reactions, presence, `stream()` |
-| `client`    | the Backlog API port: the `backlog-js` wrapper, auth, rate-limit buckets, typed errors, retries                           |
+| `client`    | the Backlog API port: the `backlog-js` wrapper, auth, the 429 retry, typed errors                                         |
 | `webhook`   | webhook ingress: verification, body parsing, the `processMessage` dispatch                                                |
 | `format`    | markup conversion — the `BaseFormatConverter` subclass and its AST both ways                                              |
 | `build`     | tsdown, `exports`/`files`, `tsconfig.json`, publint/attw                                                                  |
@@ -438,7 +438,10 @@ all-or-nothing.
 
 **Rate limits.** ([Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/),
 [Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/))
-Limits are **per user, per minute**, in four independent buckets:
+Limits are **per user, per minute**, in four independent buckets. These are
+Backlog's facts, for reasoning about what a member costs — the adapter does
+not classify requests into them or track them (docs/specs/adapter.md D5,
+§8.4):
 
 | Bucket | Covers                                                     | Documented example |
 | ------ | ---------------------------------------------------------- | ------------------ |
@@ -453,12 +456,12 @@ Traps, in order of how easily they are missed:
    any polling loop consumes is the 150 one, not the 600 one.
 2. **The numbers above are the documented example values.** The rate-limit page
    states limits differ between Free and Paid plans and tells you to call
-   `GET /api/v2/rateLimit`. Read the real figures from that endpoint or from the
-   response headers; do not hard-code 600/150/150/60 as invariants.
-3. **Backlog sends no `Retry-After`.** Over limit is HTTP 429 with error code 13. Compute the backoff from `X-RateLimit-Reset`, which is **UTC epoch
-   seconds**, alongside `X-RateLimit-Limit` and `X-RateLimit-Remaining`. Track
-   the headers per bucket — one bucket's remaining count says nothing about
-   another's.
+   `GET /api/v2/rateLimit`. Do not hard-code 600/150/150/60 as invariants —
+   nothing in the adapter needs a number at all: a 429 carries its own reset.
+3. **Backlog sends no `Retry-After`.** Over limit is HTTP 429 with error
+   code 13. Compute the backoff from the failing response's
+   `X-RateLimit-Reset`, which is **UTC epoch seconds** — that one header is
+   all the retry reads.
 
 **Errors.** ([Error response](https://developer.nulab.com/docs/backlog/error-response/))
 The body is `{"errors":[{"message":"...","code":N,"moreInfo":"..."}]}` with
@@ -534,16 +537,20 @@ Build on [`backlog-js`](https://github.com/nulab/backlog-js) (v0.20.1, MIT,
 Nulab's own, tsdown-built, single runtime dependency `qs`), wrapped behind a
 narrow internal port. It does not provide, and this repo must add:
 
-1. Rate-limit bucket awareness (classify each request into read/update/search/
-   icon and track the headers per bucket).
-2. Typed errors derived from `errors[].code`.
-3. 429 retry with backoff computed from `X-RateLimit-Reset`.
+1. Typed errors derived from `errors[].code`.
+2. 429 retry with backoff computed from `X-RateLimit-Reset`, bounded by
+   `config.rateLimit.{maxRetries,maxWaitMs}`.
 
-All three live in the **`fetch` injected into the client**, not around the
+Per-bucket rate-limit tracking is deliberately **not** on this list. It was
+built and removed: its only consumer was a public snapshot nothing in the
+adapter read, and the retry needs only the failing response's own header
+(docs/specs/adapter.md D5).
+
+Both live in the **`fetch` injected into the client**, not around the
 port's call sites, because that is the only seam every `backlog-js` method
 funnels through. That is what lets `adapter.client(host)` hand a consumer the
 very client the port speaks through — for the endpoints the port does not name
-— without any of the three being bypassed. The consequence, taken knowingly:
+— without either being bypassed. The consequence, taken knowingly:
 `backlog-js` appears in the published types, so dropping it for plain `fetch`
 is no longer a change invisible to consumers (docs/specs/adapter.md §3.1,
 §8.2).

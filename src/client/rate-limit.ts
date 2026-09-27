@@ -1,19 +1,6 @@
 import { AdapterRateLimitError } from '@chat-adapter/shared';
 
-import type {
-  RateLimitBucket,
-  RateLimitSnapshot,
-  RateLimitSnapshots,
-  RetryOptions,
-} from './port.js';
-
-/** The four buckets, in the order the rate-limit page lists them. */
-export const RATE_LIMIT_BUCKETS = [
-  'read',
-  'update',
-  'search',
-  'icon',
-] as const satisfies readonly RateLimitBucket[];
+import type { RetryOptions } from './port.js';
 
 const DEFAULT_MAX_RETRIES = 1;
 const DEFAULT_MAX_WAIT_MS = 60_000;
@@ -35,102 +22,6 @@ function finiteHeaderNumber(header: string | null): number | undefined {
   }
   const value = Number(header);
   return Number.isFinite(value) ? value : undefined;
-}
-
-/**
- * Classifies a request into one of the four buckets from
- * https://developer.nulab.com/docs/backlog/rate-limit/, as a function of
- * method and path so an endpoint added later needs no table update
- * (docs/specs/adapter.md §8.1): GET /issues and GET /issues/count spend
- * `search`; the five icon endpoints spend `icon`; every other GET spends
- * `read`; POST/PATCH/DELETE spend `update`.
- */
-export function classifyBucket(method: string, path: string): RateLimitBucket {
-  const normalizedMethod = method.toUpperCase();
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-
-  if (normalizedMethod !== 'GET') {
-    return 'update';
-  }
-
-  if (
-    /^\/issues\/?(?:\?|$)/.test(normalizedPath) ||
-    /^\/issues\/count(?:\?|$)/.test(normalizedPath)
-  ) {
-    return 'search';
-  }
-
-  if (isIconPath(normalizedPath)) {
-    return 'icon';
-  }
-
-  return 'read';
-}
-
-/**
- * The five icon endpoints named in
- * https://developer.nulab.com/docs/backlog/rate-limit/: Space Logo, User
- * Icon, Project Icon, Group Icon, Team Icon.
- */
-function isIconPath(path: string): boolean {
-  return (
-    /^\/space\/image(?:\?|$)/.test(path) ||
-    /^\/users\/[^/]+\/icon(?:\?|$)/.test(path) ||
-    /^\/projects\/[^/]+\/image(?:\?|$)/.test(path) ||
-    /^\/groups\/[^/]+\/icon(?:\?|$)/.test(path) ||
-    /^\/teams\/[^/]+\/icon(?:\?|$)/.test(path)
-  );
-}
-
-/**
- * Tracks the last-observed `X-RateLimit-*` headers per `(host, bucket)`.
- * Limits are per user per minute and differ by plan
- * (https://developer.nulab.com/docs/backlog/rate-limit/), so nothing here is
- * ever hard-coded — a bucket stays undefined until a response reports it.
- */
-export class RateLimitTracker {
-  private readonly snapshots = new Map<string, RateLimitSnapshots>();
-
-  /**
-   * Records the `X-RateLimit-*` headers from a response. Headers are read at
-   * the HTTP layer (not from a parsed body) because they arrive on every
-   * response, success or error, while a parsed body only exists on success
-   * (docs/specs/adapter.md §8.2).
-   */
-  record(host: string, bucket: RateLimitBucket, headers: Headers): void {
-    const limitHeader = headers.get('X-RateLimit-Limit');
-    const remainingHeader = headers.get('X-RateLimit-Remaining');
-    const resetHeader = headers.get('X-RateLimit-Reset');
-    if (
-      limitHeader === null ||
-      remainingHeader === null ||
-      resetHeader === null
-    ) {
-      return;
-    }
-    const limit = finiteHeaderNumber(limitHeader);
-    const remaining = finiteHeaderNumber(remainingHeader);
-    const resetSeconds = finiteHeaderNumber(resetHeader);
-    if (
-      limit === undefined ||
-      remaining === undefined ||
-      resetSeconds === undefined
-    ) {
-      return;
-    }
-    const snapshot: RateLimitSnapshot = {
-      limit,
-      remaining,
-      reset: new Date(resetSeconds * 1000),
-    };
-    const forHost = this.snapshots.get(host) ?? {};
-    forHost[bucket] = snapshot;
-    this.snapshots.set(host, forHost);
-  }
-
-  snapshot(host: string): RateLimitSnapshots {
-    return { ...(this.snapshots.get(host) ?? {}) };
-  }
 }
 
 export interface RetryDecision {
@@ -159,7 +50,7 @@ export interface RetryDecision {
  * The one-second floor is not a rounding convenience: a reset already in the
  * past is what a clock skewed against Backlog's, or a window that has not
  * become observable yet, looks like from here, and the unfloored
- * `max(…, 0)` turned both into an immediate retry into the same full bucket
+ * `max(…, 0)` turned both into an immediate retry into the same exhausted limit
  * and an `AdapterRateLimitError` telling the caller to wait zero seconds.
  * Jitter, drawn per call from `random`, spreads the callers a single
  * epoch-second header released in lockstep; a missing header takes exactly

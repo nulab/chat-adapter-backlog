@@ -622,40 +622,6 @@ export function describeBacklogApiConformance(
       expect(uploaded).toMatchObject({ name: 'notes.txt', size: 5 });
     });
 
-    it('an issue-list call spends the search bucket, not read', async () => {
-      const api = await factory();
-      await api.listIssues(PROJECT_ID, { count: 10 });
-      const snapshot = api.rateLimit();
-      expect(snapshot.search).toBeDefined();
-    });
-
-    it("rateLimit reflects the last response's headers per bucket", async () => {
-      const api = await factory();
-      await api.getIssue(ISSUE_ID);
-      await api.addComment(ISSUE_ID, { content: 'For rate-limit tracking' });
-      const snapshot = api.rateLimit();
-      expect(snapshot.read).toBeDefined();
-      expect(snapshot.update).toBeDefined();
-    });
-
-    it('the rate-limit endpoint reports buckets this client has never spent', async () => {
-      const api = await factory();
-      const snapshot = await api.getRateLimit();
-      expect(snapshot.update).toBeDefined();
-      expect(snapshot.search).toBeDefined();
-    });
-
-    it('a reported reset is a date, read from epoch seconds rather than milliseconds', async () => {
-      const api = await factory();
-      const snapshot = await api.getRateLimit();
-      const reset = snapshot.read?.reset;
-      expect(reset).toBeInstanceOf(Date);
-      // Epoch seconds passed to `new Date` unmultiplied land in 1970, and the
-      // resulting snapshot still type-checks and still looks like a Date, so
-      // only a bound on the value catches it.
-      expect(reset?.getTime()).toBeGreaterThan(Date.parse('2020-01-01Z'));
-    });
-
     it('a repository and a pull request are fetched by their ids, and a missing one is a ResourceNotFoundError', async () => {
       const api = await factory();
       await expect(api.listGitRepositories(PROJECT_ID)).resolves.toEqual(
@@ -878,22 +844,6 @@ export function describeBacklogApiConformance(
       // otherwise satisfy every assertion above.
       const listedSize = basePullRequestAttachment().size;
       expect(downloaded.data.byteLength).toBe(listedSize);
-    });
-
-    it('a pull request list call spends the read bucket, not search', async () => {
-      const api = await factory();
-      await api.listPullRequests(PROJECT_ID, REPOSITORY_ID, { count: 10 });
-      const snapshot = api.rateLimit();
-      // The mirror image of the `GET /issues` row above: the pull-request
-      // list endpoint is documented under no Search entry and was measured
-      // decrementing `read` with `search` untouched
-      // (`.claude/rules/backlog-pull-request-facts.md` "Rate limit"), so an
-      // endpoint-name-shaped "fix" to the classifier must fail here.
-      // `search` is deliberately not asserted absent: the in-memory
-      // implementation reports every bucket unconditionally
-      // (docs/specs/adapter.md §8.3), so that assertion would say something
-      // about the seed rather than about the classification.
-      expect(snapshot.read).toBeDefined();
     });
   });
 }

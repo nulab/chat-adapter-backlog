@@ -225,30 +225,26 @@ describe.skipIf(!liveCredentialsPresent)('live Backlog space', () => {
 });
 ```
 
-Keep such suites small and sequential. Backlog's Update bucket allows on the
-order of 150 requests per user per minute, and a chatty live suite will hit
+Keep such suites small and sequential. Backlog allows writes on the order of
+150 requests per user per minute, and a chatty live suite will hit
 HTTP 429 — see [Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/).
 
 The adapter's own live suite has two sections, and each one skips itself.
 
 The **issue section** runs when `BACKLOG_HOST`, `BACKLOG_API_KEY` and
-`BACKLOG_LIVE_ISSUE_ID` are all set, and stays within roughly ten update-bucket
-calls: Get Project, Get Issue, then add, edit, star, unstar and delete one
-comment, and upload one small attachment and attach it before deleting that
-comment too. It creates no issues and touches no notifications, and it asserts
-that `adapter.rateLimit(host)` reports populated `read` and `update` buckets
-afterwards. Point `BACKLOG_LIVE_ISSUE_ID` at a scratch issue: the suite
+`BACKLOG_LIVE_ISSUE_ID` are all set, and stays within eight write calls: Get
+Project, Get Issue, then add, edit, star, unstar and delete one comment, and
+upload one small attachment and attach it before deleting that comment too. It
+creates no issues and touches no notifications. Point `BACKLOG_LIVE_ISSUE_ID` at a scratch issue: the suite
 comments on it.
 
 The **pull-request section** runs when `BACKLOG_LIVE_PULL_REQUEST` is set on
-top of those three, and stays within eight update-bucket calls: Get Git
-Repository, Get Pull Request, then add, edit, star and unstar one comment, then
-upload one small attachment and attach it to a second comment, and one comment
-as a rate-limit probe. It also asserts what the adapter refuses —
-`deleteMessage` on a pull-request thread throws `AdapterError` with code
-`UNSUPPORTED_OPERATION` without sending anything, which an empty
-`adapter.rateLimit(host)` proves — and that listing pull requests spends the
-`read` bucket and leaves `search` untouched, the opposite of `GET /issues`.
+top of those three, and stays within six write calls: Get Git Repository, Get
+Pull Request, then add, edit, star and unstar one comment, then upload one
+small attachment and attach it to a second comment. It also asserts what the
+adapter refuses — `deleteMessage` on a pull-request thread throws
+`AdapterError` with code `UNSUPPORTED_OPERATION` without calling `fetch` at
+all.
 
 **Nothing that section creates is cleaned up**, because there is nothing to
 clean it up with: Backlog has no endpoint that deletes a pull request or one of
@@ -446,7 +442,7 @@ documents compile. `scripts/consumer-smoke/documented-usage.ts` writes those
 calls out — the `Chat` construction, `chat.webhooks.backlog`, the
 `BacklogPostableExtras` and `BacklogChannelPostableExtras` postables, the
 mention helpers, `installations` with a resolver-function `apiKey`,
-`rateLimit.maxWaitMs`, `adapter.api`/`client`/`rateLimit`/`botUserName` and
+`rateLimit.maxWaitMs`, `adapter.api`/`client`/`botUserName` and
 `createInMemoryBacklogApi` — and the job compiles it strict, under `NodeNext`,
 with `tsc --noEmit`. It reads `message.subject` too, but proves nothing about
 the `'pull_request'` it compares against: `chat` types `subject.type` as

@@ -293,58 +293,6 @@ describe('createBacklogJsApi', () => {
     expect(body).not.toContain('[][]');
   });
 
-  it('an issue-list call spends the search bucket, not read', async () => {
-    const server = createFakeBacklogServer();
-    const api = createBacklogJsApi({
-      host,
-      credentials: { apiKey: () => 'test-api-key' },
-      fetch: server.fetch,
-    });
-
-    await api.listIssues(projectId, { count: 10 });
-
-    const snapshot = api.rateLimit();
-    expect(snapshot.search).toBeDefined();
-    expect(snapshot.read).toBeUndefined();
-  });
-
-  it("the rate-limit endpoint's reset is the epoch second it names, not that many milliseconds", async () => {
-    const server = createFakeBacklogServer({
-      rateLimitOverrides: {
-        read: { limit: 600, remaining: 42, reset: 1_603_881_873 },
-      },
-    });
-    const api = createBacklogJsApi({
-      host,
-      credentials: { apiKey: () => 'test-api-key' },
-      fetch: server.fetch,
-    });
-
-    const snapshot = await api.getRateLimit();
-
-    expect(snapshot.read).toEqual({
-      limit: 600,
-      remaining: 42,
-      reset: new Date('2020-10-28T10:44:33.000Z'),
-    });
-  });
-
-  it('reading the rate-limit endpoint leaves the observed-header snapshot reporting only the bucket it spent', async () => {
-    const server = createFakeBacklogServer();
-    const api = createBacklogJsApi({
-      host,
-      credentials: { apiKey: () => 'test-api-key' },
-      fetch: server.fetch,
-    });
-
-    const reported = await api.getRateLimit();
-    const observed = api.rateLimit();
-
-    expect(reported.update).toBeDefined();
-    expect(observed.read).toBeDefined();
-    expect(observed.update).toBeUndefined();
-  });
-
   it('error code 6 maps to ResourceNotFoundError even on a 400 status', async () => {
     const fetchStub: typeof globalThis.fetch = async () =>
       new Response(
@@ -512,7 +460,7 @@ describe('createBacklogJsApi', () => {
     expect(filename).toBe('55');
   });
 
-  it('an error body without errors[] still maps by status and records its headers', async () => {
+  it('an error body without errors[] still maps by status', async () => {
     const response = new Response(
       JSON.stringify({ message: 'upstream timeout' }),
       {
@@ -537,11 +485,6 @@ describe('createBacklogJsApi', () => {
         status: 502,
         url: `https://${host}/api/v2/issues/${issueId}`,
       },
-    });
-    expect(api.rateLimit().read).toEqual({
-      limit: 600,
-      remaining: 599,
-      reset: new Date(Number(rateLimitHeaders['X-RateLimit-Reset']) * 1000),
     });
   });
 
@@ -843,16 +786,45 @@ describe('createBacklogJsApi', () => {
         host,
         credentials: { apiKey: () => 'test-api-key' },
         fetch: fetchStub,
+        random: () => 0,
       });
 
       const rejection = api.getIssue(issueId);
       await expect(rejection).rejects.toBeInstanceOf(AdapterRateLimitError);
-      await rejection.catch((error: unknown) => {
-        expect(
-          (error as AdapterRateLimitError).retryAfter
-        ).toBeGreaterThanOrEqual(299);
-      });
+      await expect(rejection).rejects.toMatchObject({ retryAfter: 300 });
       expect(attempt).toBe(1);
+    });
+
+    it('retries up to maxRetries, then surfaces the last 429 as a rate-limit error', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      let attempt = 0;
+      const fetchStub: typeof globalThis.fetch = async () => {
+        attempt += 1;
+        return new Response(
+          JSON.stringify({
+            errors: [{ message: 'Too many requests', code: 13, moreInfo: '' }],
+          }),
+          {
+            status: 429,
+            headers: { 'X-RateLimit-Reset': String(now + 2) },
+          }
+        );
+      };
+      const api = createBacklogJsApi({
+        host,
+        credentials: { apiKey: () => 'test-api-key' },
+        fetch: fetchStub,
+        retry: { maxRetries: 2 },
+        random: () => 0,
+      });
+
+      const rejection = api.getIssue(issueId);
+      const settled = expect(rejection).rejects.toBeInstanceOf(
+        AdapterRateLimitError
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await settled;
+      expect(attempt).toBe(3);
     });
 
     it('maxRetries: 0 never retries', async () => {
@@ -920,7 +892,7 @@ describe('createBacklogJsApi', () => {
       );
     }
 
-    it('a wait is announced once, with the bucket, remaining, reset and wait it is about to block for', async () => {
+    it('a wait is announced once, with the remaining, reset and wait it is about to block for', async () => {
       const logger = createMockLogger();
       let attempt = 0;
       const fetchStub: typeof globalThis.fetch = async () => {
@@ -946,9 +918,8 @@ describe('createBacklogJsApi', () => {
 
       expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(logger.warn).toHaveBeenCalledWith(
-        'rate limited; waiting for the bucket to reset',
+        'rate limited; waiting for the limit to reset',
         {
-          bucket: 'read',
           remaining: 0,
           resetAt: new Date((now + 2) * 1000).toISOString(),
           waitMs: 2_000,
@@ -957,7 +928,7 @@ describe('createBacklogJsApi', () => {
       );
     });
 
-    it('a refusal to wait is announced once, and names the update bucket a comment spends', async () => {
+    it('a refusal to wait is announced once', async () => {
       const logger = createMockLogger();
       const fetchStub: typeof globalThis.fetch = async () =>
         tooManyRequests(now + 300);
@@ -975,7 +946,6 @@ describe('createBacklogJsApi', () => {
 
       expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(logger.warn).toHaveBeenCalledWith('rate limited; not retrying', {
-        bucket: 'update',
         remaining: 0,
         resetAt: new Date((now + 300) * 1000).toISOString(),
         waitMs: 300_000,
@@ -1005,7 +975,6 @@ describe('createBacklogJsApi', () => {
       );
 
       expect(logger.warn).toHaveBeenCalledWith('rate limited; not retrying', {
-        bucket: 'read',
         waitMs: 60_000,
         attempt: 1,
       });
@@ -1058,37 +1027,10 @@ describe('createBacklogJsApi', () => {
 /**
  * The client the port speaks through is handed out as `transport.client`, so
  * these state what a caller reaching past the port still gets: the same
- * accounting, the same retry, the same errors and a credential resolved as
+ * retry, the same errors and a credential resolved as
  * late as the port's own.
  */
 describe('createBacklogJsTransport', () => {
-  it('a call made through the client is counted in the port’s rate-limit snapshot', async () => {
-    const server = createFakeBacklogServer();
-    const { api, client } = createBacklogJsTransport({
-      host,
-      credentials: { apiKey: () => 'test-api-key' },
-      fetch: server.fetch,
-    });
-
-    await client.getIssue(issueId);
-
-    expect(api.rateLimit().read).toBeDefined();
-  });
-
-  it('an issue-list call through the client spends the search bucket, as it does through the port', async () => {
-    const server = createFakeBacklogServer();
-    const { api, client } = createBacklogJsTransport({
-      host,
-      credentials: { apiKey: () => 'test-api-key' },
-      fetch: server.fetch,
-    });
-
-    await client.getIssues({ projectId: [projectId], count: 10 });
-
-    expect(api.rateLimit().search).toBeDefined();
-    expect(api.rateLimit().read).toBeUndefined();
-  });
-
   it('the client carries the credential the resolver returns, resolved again on every call', async () => {
     const keys = ['first-key', 'second-key'];
     const sent: string[] = [];

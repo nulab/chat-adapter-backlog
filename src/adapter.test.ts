@@ -1,5 +1,6 @@
 import {
   AdapterError,
+  AdapterRateLimitError,
   ResourceNotFoundError,
   ValidationError,
 } from '@chat-adapter/shared';
@@ -16,7 +17,6 @@ import { Chat } from 'chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BacklogAdapter, createBacklogAdapter } from './adapter';
-import { createFakeBacklogServer } from './client/backlog-js.fake-fetch';
 import { createInMemoryBacklogApi } from './client/in-memory';
 import { conformanceFixture } from './client/conformance';
 import { encodeMessageId } from './ids';
@@ -711,14 +711,6 @@ describe('BacklogAdapter port wiring', () => {
     expect(() => adapter.api('other.backlog.com')).toThrow(
       ResourceNotFoundError
     );
-    expect(() => adapter.rateLimit('other.backlog.com')).toThrow(
-      ResourceNotFoundError
-    );
-  });
-
-  it('reports no rate-limit buckets before any request', () => {
-    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-    expect(adapter.rateLimit('example.backlog.com')).toEqual({});
   });
 
   it('hands out one client per host, and it is the one the port speaks through', async () => {
@@ -728,19 +720,28 @@ describe('BacklogAdapter port wiring', () => {
     expect(client).toBe(adapter.client('example.backlog.com'));
   });
 
-  it('a call through the handed-out client is counted in the adapter’s own rate-limit snapshot', async () => {
+  it('a 429 through the handed-out client surfaces as a rate-limit error, like one through the port', async () => {
     // The point of handing the client out rather than letting a consumer
-    // construct one: a second client would spend the same per-user budget
-    // without the adapter ever seeing it.
+    // construct one: a second client would reach Backlog without the
+    // adapter's 429 handling and error mapping.
     const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-    const server = createFakeBacklogServer();
-    vi.spyOn(globalThis, 'fetch').mockImplementation(server.fetch);
+    const resetSeconds = Math.floor(Date.now() / 1000) + 3_600;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            errors: [{ message: 'Too many requests', code: 13 }],
+          }),
+          {
+            status: 429,
+            headers: { 'X-RateLimit-Reset': String(resetSeconds) },
+          }
+        )
+    );
 
-    await adapter
-      .client('example.backlog.com')
-      .getIssue(conformanceFixture.issueId);
-
-    expect(adapter.rateLimit('example.backlog.com').read).toBeDefined();
+    await expect(
+      adapter.client('example.backlog.com').getIssue(conformanceFixture.issueId)
+    ).rejects.toBeInstanceOf(AdapterRateLimitError);
   });
 
   it('reports an unknown host as a missing installation when asked for a client', () => {
