@@ -321,8 +321,11 @@ export type Resolvable = string | (() => string | Promise<string>);
  * - `webhookSecret` is required unless `webhookVerifier` is set.
  * - `botUserId` left out is read once from `GET /users/myself`, which also
  *   fills a missing `botUserName`. With `botUserId` set and `botUserName`
- *   left out, no request is made and a hand-typed `@name` in comment text is
- *   not a mention; notifications and assignment still are.
+ *   left out, no request is made, and the adapter recognises neither a
+ *   hand-typed `@name` nor an assignment that only a replayed activity's
+ *   `changes` (display names) report; notifications and the assignee id still
+ *   count, and the Chat SDK core still matches `@<chat.userName>`, so give
+ *   `new Chat({ userName })` a non-empty value.
  */
 export interface BacklogAdapterConfig {
   host?: string;

@@ -177,7 +177,7 @@ describe('parseConfig', () => {
     ).not.toThrow();
   });
 
-  it('rejects a webhookSecret shorter than 16 bytes, even beside a webhookVerifier', () => {
+  it('rejects a configured webhookSecret shorter than 16 bytes, even beside a webhookVerifier', () => {
     expect(rejection({ ...valid, webhookSecret: 'short' })).toMatch(/16 bytes/);
     expect(
       rejection({
@@ -186,6 +186,15 @@ describe('parseConfig', () => {
         webhookVerifier: () => true,
       })
     ).toMatch(/16 bytes/);
+  });
+
+  it('ignores BACKLOG_WEBHOOK_SECRET beside a webhookVerifier, however short', () => {
+    setEnv({ BACKLOG_WEBHOOK_SECRET: 'short' });
+    const parsed = parseConfig({
+      ...without('webhookSecret'),
+      webhookVerifier: () => true,
+    });
+    expect(parsed.webhookSecret).toBeUndefined();
   });
 
   it('accepts a 16-byte webhookSecret', () => {

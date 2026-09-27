@@ -31,7 +31,10 @@ const env = z
 const backlog = createBacklogAdapter();
 
 export const chat = new Chat({
-  userName: backlog.userName,
+  // Fixed rather than `backlog.userName`, which is "" without
+  // BACKLOG_BOT_USER_NAME: the core then matches `@` followed by nothing, so
+  // every stray "@" would read as a mention. This bot handles none.
+  userName: 'bug-intake',
   adapters: { backlog },
   state: createMemoryState(),
 });

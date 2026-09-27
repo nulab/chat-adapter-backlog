@@ -92,7 +92,7 @@ explicit empty string is a validation error, not a request to fall back.
 | `BACKLOG_API_KEY` | one of the two | Personal API key, sent in the `Backlog-API-Key` header. |
 | `BACKLOG_ACCESS_TOKEN` | one of the two | OAuth 2.0 bearer token instead of a key. |
 | `BACKLOG_BOT_USER_ID` | recommended | Numeric id of the bot user. Read from `GET /api/v2/users/myself` when unset or blank — see **Bot identity**. |
-| `BACKLOG_BOT_USER_NAME` | no | The bot's display name, as Backlog renders it in a comment. Only a typed `@name` needs it. |
+| `BACKLOG_BOT_USER_NAME` | for mentions | The bot's display name, as Backlog renders it in a comment. Needed for a typed `@name` to count — see **Bot identity**. |
 | `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter. At least 16 bytes. |
 
 ## Configuration
@@ -103,7 +103,7 @@ explicit empty string is a validation error, not a request to fall back.
 | `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | — | Exactly one. The function form is resolved on **every** call and never cached, so an expiring token can be refreshed without reconstructing the adapter. |
 | `botUserId` | `number` | `GET /users/myself` | Positive integer, at most `Number.MAX_SAFE_INTEGER` — it is encoded into user ids. Recognises the adapter's own messages and assignment to the bot. |
 | `botUserName` | `string` | `GET /users/myself` when `botUserId` is also unset | Non-empty. Mentions arrive as resolved text, so this is what a typed `@name` is matched against. Also `adapter.userName`. |
-| `webhookSecret` | `string` | — | Required unless `webhookVerifier` is set. **At least 16 bytes**, checked when the adapter is constructed — it is the only thing standing between the URL and your projects, so a short one is refused rather than warned about. |
+| `webhookSecret` | `string` | — | Required unless `webhookVerifier` is set, and `BACKLOG_WEBHOOK_SECRET` is not read beside one. **At least 16 bytes**, checked when the adapter is constructed — it is the only thing standing between the URL and your projects, so a short one is refused rather than warned about. |
 | `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check entirely — for a reverse-proxy assertion, mTLS or an IP allowlist. |
 | `logger` | `Logger` | `ConsoleLogger("info")` | Replaced by `chat.getLogger("backlog")` in `initialize`. |
 
@@ -121,11 +121,21 @@ token acts as — for it once, when `initialize` runs (on the first webhook, or
 missing `botUserName`. Set `BACKLOG_BOT_USER_ID` and no request is ever made,
 which matters where every cold start runs `initialize` again.
 
-`botUserName` is needed only to recognise a hand-typed `@name` in comment
-text. Leave it out beside a configured id and `initialize` logs one warning:
-a typed `@name` is then not a mention, while notifications and assignment
-still are, and `adapter.userName` is `""`, so the Chat SDK core matches
-`@<chat.userName>` instead — give `new Chat({ userName })` a non-empty value.
+`botUserName` is what the adapter matches a hand-typed `@name` in comment text
+against, and what it compares an assignment reported only in a replayed
+activity's `changes[]` with (Backlog names the assignee there by display
+name). Leave it out beside a configured id and `initialize` logs one warning:
+those two rules are off, while notifications and the assignee id still count.
+
+The Chat SDK core runs its own `@<name>` match on top, with the adapter's
+`userName` or, when that is `""`, `new Chat({ userName })`. The `Adapter`
+interface types `userName` as a string, so `""` is how the adapter says it has
+no name, and the core falls back on it exactly as it would on `undefined`.
+**Always give `new Chat({ userName })` a non-empty value**: with both empty the
+core's pattern is `@` followed by nothing, and every stray `@` in a comment
+becomes a mention. A bot that answers mentions should set
+`BACKLOG_BOT_USER_NAME` and pass it there; one that answers none can pass any
+fixed name.
 
 - **A failed lookup does not fail `initialize`.** It is logged as a warning
   and retried by the next webhook or call that needs it. A webhook whose bot

@@ -131,6 +131,10 @@ function resolve(value: Resolvable): string | Promise<string> {
  * moved from OAuth to an API key without unsetting the old variable, and
  * reading both would refuse the config the caller had just written.
  *
+ * `BACKLOG_WEBHOOK_SECRET` is not read beside a `webhookVerifier`: a verifier
+ * replaces the secret, so a short one left in the environment would otherwise
+ * fail a deployment that never uses it.
+ *
  * A blank `BACKLOG_BOT_*` counts as unset because a copied `.env.example`
  * leaves those lines blank; a blank required variable stays an error.
  */
@@ -147,7 +151,11 @@ function withEnvironment(config: BacklogAdapterConfig): unknown {
       : env.BACKLOG_ACCESS_TOKEN,
     botUserId: config.botUserId ?? (env.BACKLOG_BOT_USER_ID || undefined),
     botUserName: config.botUserName ?? (env.BACKLOG_BOT_USER_NAME || undefined),
-    webhookSecret: config.webhookSecret ?? env.BACKLOG_WEBHOOK_SECRET,
+    webhookSecret:
+      config.webhookSecret ??
+      (config.webhookVerifier === undefined
+        ? env.BACKLOG_WEBHOOK_SECRET
+        : undefined),
   };
 }
 

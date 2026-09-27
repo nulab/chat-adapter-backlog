@@ -99,13 +99,13 @@ fine — each ignores the events it has nothing to say about.
 These five are read by `createBacklogAdapter()` and are the same in every
 example:
 
-| Variable                 | Meaning                                                            |
-| ------------------------ | ------------------------------------------------------------------ |
-| `BACKLOG_HOST`           | Space host, no scheme or path — for example `example.backlog.com`. |
-| `BACKLOG_API_KEY`        | The bot user's API key.                                            |
-| `BACKLOG_BOT_USER_ID`    | The bot user's numeric id.                                         |
-| `BACKLOG_BOT_USER_NAME`  | Optional: the bot user's display name, for a typed `@name`.        |
-| `BACKLOG_WEBHOOK_SECRET` | The secret from step 2, also present in the hook URL you register. |
+| Variable                 | Meaning                                                                    |
+| ------------------------ | -------------------------------------------------------------------------- |
+| `BACKLOG_HOST`           | Space host, no scheme or path — for example `example.backlog.com`.         |
+| `BACKLOG_API_KEY`        | The bot user's API key.                                                    |
+| `BACKLOG_BOT_USER_ID`    | The bot user's numeric id.                                                 |
+| `BACKLOG_BOT_USER_NAME`  | The bot user's display name; required by an example that answers mentions. |
+| `BACKLOG_WEBHOOK_SECRET` | The secret from step 2, also present in the hook URL you register.         |
 
 Each example adds a few of its own on top, documented in its README and listed
 in its `.env.example`:

@@ -234,7 +234,7 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 | `accessToken` | `Resolvable` | — | `BACKLOG_ACCESS_TOKEN` | As above. Refresh is the caller's job (resolver form). |
 | `botUserId` | `number` | `GET /users/myself` → `id` | `BACKLOG_BOT_USER_ID` | Optional. When given: positive integer ≤ 2^53-1 (the §2.1 `posint` range); the env value must be one in decimal. |
 | `botUserName` | `string` | `GET /users/myself` → `name`, only when `botUserId` is also unset | `BACKLOG_BOT_USER_NAME` | Optional. When given: not blank (an empty name would make every `@` a mention). |
-| `webhookSecret` | `string` | — | `BACKLOG_WEBHOOK_SECRET` | At least **16 bytes** (UTF-8), validated whether or not a verifier is configured. Required unless `webhookVerifier` is set (D2). |
+| `webhookSecret` | `string` | — | `BACKLOG_WEBHOOK_SECRET`, not read when `webhookVerifier` is set | At least **16 bytes** (UTF-8); a configured one is validated even beside a verifier. Required unless `webhookVerifier` is set (D2). |
 | `webhookVerifier` | function | — | none | When set, replaces the secret check (D2). |
 | `logger` | `Logger` (from `chat`) | `new ConsoleLogger("info").child("backlog")` | none | Replaced by `chat.getLogger("backlog")` in `initialize`. |
 
@@ -257,10 +257,14 @@ an assignment to it; the name only recognises a hand-typed `@name` (§5.4).
 
 - **`botUserId` configured → no request at all**, ever, whether or not the
   name is. This is what the `consumer` smoke job asserts (§13).
-- **Id configured, name missing → one `warn` from `initialize`**: the textual
-  `@name` rule is off, notifications and assignment still count, and
-  `userName` is `""`, which the core reads as "use `chat.userName`"
-  (`adapter.userName || chat.userName`).
+- **Id configured, name missing → one `warn` from `initialize`**: the two
+  rules that compare the name are off — the typed `@name` in text and the
+  assignment reported by display name in `changes[]` (§5.4) — while
+  notifications and the assignee id still count. `userName` is `""`, which
+  the core reads as "use `chat.userName`" (`adapter.userName ||
+  chat.userName`); the `Adapter` type makes `userName` a string, so `""` is
+  the only way to say "no name", and a consumer must give `Chat` a non-empty
+  `userName` or the core's pattern matches every bare `@`.
 - **Id missing → one `GET /users/myself`**, made by `initialize`, on the
   `read` bucket. It fills the id and, when unset, the name.
 - **A blank `BACKLOG_BOT_USER_ID=` or `BACKLOG_BOT_USER_NAME=` counts as
@@ -1746,7 +1750,8 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   fallback; host with scheme/port/path/whitespace; both or neither
   credential, the pair fallback both ways; resolver functions invoked per call
   and never at parse time; secret required without a verifier and at least
-  16 bytes with one; `botUserId` range, in config and in env; blank
+  16 bytes with one, `BACKLOG_WEBHOOK_SECRET` not read beside a verifier;
+  `botUserId` range, in config and in env; blank
   `BACKLOG_BOT_*` variables are unset; an unknown option is rejected.
 - **bot identity** (D23), at the adapter: `botUserId` configured → no
   `GET /users/myself`, with or without the name, and one `warn` without it;

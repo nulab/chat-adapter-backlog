@@ -261,7 +261,7 @@ export class BacklogAdapter implements Adapter<
       });
     } else if (this.identity.name === undefined) {
       this.logger.warn(
-        'botUserName is not set: a typed @name in comment text is not detected as a mention; notifications and assignment still are. Set BACKLOG_BOT_USER_NAME to enable it.'
+        'botUserName is not set: the adapter does not detect a typed @name in comment text, nor an assignment in a body replayed from the activity API (its changes name the assignee by display name); notifications and the assignee id still count. The Chat SDK core still matches @<chat.userName>. Set BACKLOG_BOT_USER_NAME to enable both rules.'
       );
     }
   }
@@ -1004,8 +1004,8 @@ export class BacklogAdapter implements Adapter<
   rehydrateAttachment(attachment: Attachment): Attachment {
     return rehydrateAttachmentRead({
       attachment,
-      configuredHosts: new Set([this.space.host]),
-      apiFor: (host) => this.api(host),
+      host: this.space.host,
+      api: () => this.api(this.space.host),
     });
   }
 }

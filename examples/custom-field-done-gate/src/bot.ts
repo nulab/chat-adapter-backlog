@@ -20,6 +20,7 @@ import {
  */
 const env = z
   .object({
+    BACKLOG_BOT_USER_NAME: z.string().min(1),
     DONE_STATUS_ID: z.coerce.number().int().positive().default(4),
     REQUIRED_CUSTOM_FIELD_ID: z.coerce.number().int().positive(),
   })
@@ -38,7 +39,7 @@ const backlog = createBacklogAdapter();
 export const chat = new Chat({
   adapters: { backlog },
   state: createMemoryState(),
-  userName: backlog.userName,
+  userName: env.BACKLOG_BOT_USER_NAME,
 });
 
 const log = chat.getLogger('done-gate');
