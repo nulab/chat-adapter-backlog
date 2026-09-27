@@ -16,19 +16,19 @@ import type {
 import {
   addReaction as addReactionToComment,
   bufferStream,
-  createChannelIssue,
   editComment,
   postComment,
   removeReaction as removeReactionFromComment,
   requireCommentInThread,
 } from './egress';
-import { converterFor } from './format/fallback';
-import type { FallbackFormatConverter } from './format/fallback';
+import { BacklogMarkdownConverter } from './format/markdown';
+import { BacklogNotationConverter } from './format/notation';
 import {
   channelIdFromThreadId as decodeChannelIdFromThreadId,
   decodeChannelId,
   decodeThreadId as decodeThreadIdString,
   decodeUserId as decodeUserIdString,
+  encodeChannelId,
   encodeMessageId,
   encodeThreadId as encodeThreadIdStruct,
   validateHost,
@@ -43,18 +43,16 @@ import {
   fetchThread as fetchThreadRead,
   getUser as getUserRead,
   listThreads as listThreadsRead,
-  markAsRead as markAsReadRead,
   rehydrateAttachment as rehydrateAttachmentRead,
 } from './reads';
 import type { MessageBuilders } from './reads';
 import { subjectClientFor } from './subject/client';
 import type { SubjectClient, SubjectNames } from './subject/client';
 import { fromRawComment } from './subject/raw';
-import { downloadAttachmentAt } from './subject/url';
-import type { AttachmentLocation } from './subject/url';
 import type {
   BacklogAdapterConfig,
   BacklogBulkUpdatePayload,
+  BacklogChannelId,
   BacklogInstallation,
   BacklogRawMessage,
   BacklogSubjectRef,
@@ -85,6 +83,7 @@ import type {
   Adapter,
   AdapterPostableMessage,
   Attachment,
+  BaseFormatConverter,
   ChannelInfo,
   ChatInstance,
   FetchOptions,
@@ -168,6 +167,11 @@ function toCredentials(installation: ResolvedInstallation): BacklogCredentials {
 function resolve(resolvable: Resolvable): string | Promise<string> {
   return typeof resolvable === 'function' ? resolvable() : resolvable;
 }
+
+const CONVERTERS: Record<TextFormattingRule, BaseFormatConverter> = {
+  markdown: new BacklogMarkdownConverter(),
+  backlog: new BacklogNotationConverter(),
+};
 
 const ENV_HOST = 'BACKLOG_HOST';
 const ENV_API_KEY = 'BACKLOG_API_KEY';
@@ -556,12 +560,20 @@ function subjectOfRaw(raw: BacklogRawMessage): {
   }
 }
 
-/**
- * Key of the repository-name cache (docs/specs/adapter.md §7.3). The host
- * comes first so `fetchChannelInfo` can drop a host's names by prefix, and a
- * repository id is all a pull request carries — one function so the three
- * places that build or scan the key cannot drift apart.
- */
+/** `renderFormatted` accepts a thread id or a channel id; anything else has no cached rule. */
+function channelOfTarget(target: string): BacklogChannelId | undefined {
+  try {
+    return decodeThreadIdString(target);
+  } catch {
+    // Not a thread id; a channel id is equally valid.
+  }
+  try {
+    return decodeChannelId(target);
+  } catch {
+    return undefined;
+  }
+}
+
 function repositoryNameKey(host: string, repositoryId: number): string {
   return `${host}:${repositoryId}`;
 }
@@ -624,43 +636,16 @@ export class BacklogAdapter implements Adapter<
   };
   private readonly apiCache = new Map<string, AdapterTransport>();
   /**
-   * `channelId -> { projectKey, textFormattingRule }` (docs/specs/adapter.md
-   * §9.1, §7.3, D14): populated by one Get Project per channel and cached
-   * forever; `fetchChannelInfo` is the documented way to replace an entry.
-   * Keyed on the channel id string rather than `{host, projectId}` so the same
-   * map serves `ensureProject`, `renderFormatted` and `parseMessage` without
-   * re-deriving the key shape in three places.
-   *
-   * `projectKey` rides along because Get Project returns it in the same
-   * response the formatting rule comes from, and a pull request's web URL
-   * needs it (`.claude/rules/backlog-pull-request-facts.md` "Addressing" — the
-   * pull-request object carries neither name its URL is built from), so
-   * keeping it costs nothing and saves a second lookup.
+   * Keyed by channel id and cached for the process's lifetime (D14). The
+   * project key rides along because a pull request's web URL needs it and
+   * the pull-request object does not carry it.
    */
   private readonly projectCache = new Map<
     string,
     { projectKey: string; textFormattingRule: TextFormattingRule }
   >();
-  /**
-   * `` `${host}:${repositoryId}` -> repository name `` (docs/specs/adapter.md
-   * §7.3): the other half of a pull request's web URL. Filled on a miss by one
-   * Get Git Repository (read bucket) and, from P3, for free from every
-   * pull-request webhook's `content.repository.name`. A failed lookup is not
-   * cached — the next read gets to try again rather than being pinned to a
-   * URL-less answer for the process's lifetime.
-   */
+  /** The other half of a pull request's web URL; also filled for free by every pull-request webhook. */
   private readonly repositoryNameCache = new Map<string, string>();
-  /**
-   * `channelId -> { issueTypeId, priorityId }` (docs/specs/adapter.md §6.7):
-   * `postChannelMessage`'s defaults, cached forever like the formatting-rule
-   * cache above and refreshed the same two ways — a `ValidationError` on a
-   * create that used the cached values (the narrow one-shot retry), or
-   * `fetchChannelInfo` replacing it outright alongside the formatting rule.
-   */
-  private readonly channelDefaultsCache = new Map<
-    string,
-    { issueTypeId: number; priorityId: number }
-  >();
 
   private logger: Logger;
   private chat: ChatInstance | undefined;
@@ -888,73 +873,39 @@ export class BacklogAdapter implements Adapter<
   }
 
   /**
-   * Synchronous and cache-only (docs/specs/adapter.md §9.1, D14): `target`,
-   * when given, is a thread **or channel** id (§4.1) whose formatting rule
-   * `ensureProject` (webhook ingress) or `getConverter` (egress) may already
-   * have cached. An absent `target`, a channel this instance has never talked
-   * to, and a `target` in neither grammar all fall back to Markdown with one
-   * `warn` rather than blocking this synchronous interface method on a network
-   * call the caller cannot await.
+   * Cache-only because the member is synchronous: a target with no cached
+   * rule renders Markdown rather than blocking on a Get Project (D14).
    */
   renderFormatted(content: FormattedContent, target?: string): string {
-    const channelId =
-      target === undefined ? undefined : this.channelIdOfTarget(target);
+    const channel = target === undefined ? undefined : channelOfTarget(target);
     const rule =
-      channelId === undefined
-        ? undefined
-        : this.projectCache.get(channelId)?.textFormattingRule;
+      channel === undefined
+        ? 'markdown'
+        : this.ruleFor(channel.host, channel.projectId);
+    return CONVERTERS[rule].fromAst(content);
+  }
 
+  /** A cold cache is a `warn` and Markdown, never a failure. */
+  private ruleFor(host: string, projectId: number): TextFormattingRule {
+    const rule = this.projectCache.get(
+      encodeChannelId({ host, projectId })
+    )?.textFormattingRule;
     if (rule === undefined) {
       this.logger.warn('textFormattingRule uncached; assuming markdown', {
-        target,
+        host,
+        projectId,
       });
+      return 'markdown';
     }
-
-    const context =
-      channelId === undefined
-        ? { host: '', projectId: 0 }
-        : decodeChannelId(channelId);
-    return converterFor(rule ?? 'markdown', this.logger, context).fromAst(
-      content
-    );
+    return rule;
   }
 
   /**
-   * The channel a `renderFormatted` target names, from either grammar §4.1
-   * allows, or `undefined` when it is neither.
-   *
-   * An unrecognised `target` returns rather than throws: this member's whole
-   * contract is "render with the cached rule if there is one, Markdown
-   * otherwise", so an id that resolves to no cache entry and an id that
-   * resolves to no channel at all are the same answer to the caller. Throwing
-   * a `ValidationError` out of a synchronous render would be a harder failure
-   * than the missing-cache case it is indistinguishable from.
-   */
-  private channelIdOfTarget(target: string): string | undefined {
-    try {
-      return decodeChannelIdFromThreadId(target);
-    } catch {
-      // Not a thread id; a channel id is equally legal here.
-    }
-    try {
-      decodeChannelId(target);
-      return target;
-    } catch {
-      return undefined;
-    }
-  }
-
-  /**
-   * Populates the §9.1/§7.3 project cache for `channelId` with one Get
-   * Project call, unless an entry already exists — the cache is forever
-   * until `fetchChannelInfo` replaces it, so a second webhook for the
-   * same project must not spend a `read`-bucket call repeating a lookup this
-   * method already made. A lookup failure is not cached (`PermissionError`,
-   * `NetworkError`, …): the next call gets to try again rather than being
-   * pinned to a guess for the process's lifetime.
+   * A failed lookup is not cached, so the next caller tries again rather than
+   * being pinned to Markdown for the process's lifetime.
    */
   private async ensureProject(host: string, projectId: number): Promise<void> {
-    const channelId = `backlog:${host}:${projectId}`;
+    const channelId = encodeChannelId({ host, projectId });
     if (this.projectCache.has(channelId)) {
       return;
     }
@@ -965,7 +916,7 @@ export class BacklogAdapter implements Adapter<
         textFormattingRule: project.textFormattingRule,
       });
     } catch (cause) {
-      this.logger.warn('textFormattingRule lookup failed; assuming markdown', {
+      this.logger.warn('project lookup failed', {
         host,
         projectId,
         error: cause instanceof Error ? cause.message : String(cause),
@@ -973,44 +924,13 @@ export class BacklogAdapter implements Adapter<
     }
   }
 
-  /**
-   * Resolves the converter an egress call renders through: awaits
-   * `ensureProject` (a single cached Get Project per channel, §9.1)
-   * and wraps the result in the §9.2 fallback. Every egress member reaches
-   * Backlog through this so a notation project renders `''bold''` instead of
-   * `**bold**` on the very first post to a channel, not just once the cache
-   * happens to be warm.
-   */
-  private async getConverter(
+  /** For the members that can await: the first post to a notation project must not render Markdown. */
+  private async converterFor(
     host: string,
     projectId: number
-  ): Promise<FallbackFormatConverter> {
+  ): Promise<BaseFormatConverter> {
     await this.ensureProject(host, projectId);
-    const channelId = `backlog:${host}:${projectId}`;
-    const rule =
-      this.projectCache.get(channelId)?.textFormattingRule ?? 'markdown';
-    return converterFor(rule, this.logger, { host, projectId });
-  }
-
-  /**
-   * Synchronous converter selection, for the one caller that cannot await:
-   * `parseMessage` is a synchronous member of the `Adapter` interface, so a
-   * cold cache is a warning and the §9.2 markdown default rather than the Get
-   * Project a read would spend. Every read resolves through `getConverter`.
-   */
-  private cachedConverter(
-    host: string,
-    projectId: number
-  ): FallbackFormatConverter {
-    const channelId = `backlog:${host}:${projectId}`;
-    const rule = this.projectCache.get(channelId)?.textFormattingRule;
-    if (rule === undefined) {
-      this.logger.warn('textFormattingRule uncached; assuming markdown', {
-        host,
-        projectId,
-      });
-    }
-    return converterFor(rule ?? 'markdown', this.logger, { host, projectId });
+    return CONVERTERS[this.ruleFor(host, projectId)];
   }
 
   /**
@@ -1033,7 +953,7 @@ export class BacklogAdapter implements Adapter<
    */
   private messageBuilders(
     host: string,
-    converter: FallbackFormatConverter,
+    converter: BaseFormatConverter,
     identity: BotIdentity
   ): Omit<MessageBuilders, 'projectId' | 'subject'> {
     return {
@@ -1074,9 +994,7 @@ export class BacklogAdapter implements Adapter<
    * exactly one Get Issue and §7.4 no call at all for a `kind: "issue"` raw,
    * and the issue client reads nothing off `SubjectNames` — it derives its own
    * project key from `issueKey`. Looking the key up regardless bought a
-   * `read`-bucket call per issue thread and reported its failure as
-   * "textFormattingRule lookup failed", from a read that has nothing to do
-   * with formatting. If a kind ever needs the project key without a
+   * `read`-bucket call per issue thread. If a kind ever needs the project key without a
    * repository, give `SubjectClient` a second member for it rather than
    * restoring the unconditional lookup.
    */
@@ -1140,8 +1058,7 @@ export class BacklogAdapter implements Adapter<
    * and never reach the error below. `throwOnUnsupported: false` turns the
    * unsupported case into `null`, which leaves `platform` selecting wording
    * that is never rendered and keeps every error this adapter throws named
-   * `"backlog"` (#48; the same trade-off on `cardToFallbackText` is in
-   * `resolveSummaryAndDescription`, `egress.ts`).
+   * `"backlog"` (#48).
    */
   private toFileBuffer = async (file: FileUpload): Promise<Buffer> => {
     const buffer = await toBuffer(file.data, {
@@ -1496,7 +1413,7 @@ export class BacklogAdapter implements Adapter<
       );
     }
 
-    const converter = this.cachedConverter(host, activity.project.id);
+    const converter = CONVERTERS[this.ruleFor(host, activity.project.id)];
 
     return buildInboundMessage(
       activity,
@@ -1520,8 +1437,8 @@ export class BacklogAdapter implements Adapter<
    * The three shapes the adapter's own reads and writes hand back: a REST
    * comment, and an issue or a pull request as its thread's root
    * (docs/specs/adapter.md §3.5). `parseMessage(m.raw)` reproduces the
-   * `Message` `fetchMessages`, `fetchMessage`, `listThreads`, `postMessage`,
-   * `editMessage` and `postChannelMessage` produced, which is the point of
+   * `Message` `fetchMessages`, `fetchMessage`, `listThreads`, `postMessage`
+   * and `editMessage` produced, which is the point of
    * accepting them at all: a consumer that persisted a `Message` and kept
    * only `raw` — the core serialises exactly that into the state adapter —
    * gets its message back without a Backlog call.
@@ -1552,7 +1469,7 @@ export class BacklogAdapter implements Adapter<
     const builders: MessageBuilders = {
       ...this.messageBuilders(
         host,
-        this.cachedConverter(host, projectId),
+        CONVERTERS[this.ruleFor(host, projectId)],
         this.knownBotIdentity(host)
       ),
       projectId,
@@ -1631,7 +1548,7 @@ export class BacklogAdapter implements Adapter<
     payload: BacklogBulkUpdatePayload
   ): Message<BacklogRawMessage> {
     const identity = this.knownBotIdentity(host);
-    const converter = this.cachedConverter(host, activity.project.id);
+    const converter = CONVERTERS[this.ruleFor(host, activity.project.id)];
 
     return buildBulkUpdateMessage(
       activity,
@@ -1647,25 +1564,12 @@ export class BacklogAdapter implements Adapter<
     );
   }
 
-  /**
-   * Downloads one attachment a serialised `Attachment` URL still points at
-   * (docs/specs/adapter.md §6.6). Only `rehydrateAttachment` needs this:
-   * every attachment built from a webhook or a REST comment already carries
-   * the `fetchData` its subject client closed over. The port maps every
-   * failure to a `@chat-adapter/shared` error, so `fetchData()` never throws a
-   * `backlog-js` type to a consumer.
-   */
-  private readonly downloadAttachment = (
-    host: string,
-    location: AttachmentLocation
-  ): Promise<Buffer> => downloadAttachmentAt(this.api(host), location);
-
   async postMessage(
     threadId: string,
     message: AdapterPostableMessage
   ): Promise<RawMessage<BacklogRawMessage>> {
     const { host, projectId, subject } = this.subjectFor(threadId);
-    const converter = await this.getConverter(host, projectId);
+    const converter = await this.converterFor(host, projectId);
     return postComment({
       host,
       projectId,
@@ -1695,7 +1599,7 @@ export class BacklogAdapter implements Adapter<
       messageId,
       'edited'
     );
-    const converter = await this.getConverter(host, projectId);
+    const converter = await this.converterFor(host, projectId);
     return editComment({
       host,
       projectId,
@@ -1721,22 +1625,17 @@ export class BacklogAdapter implements Adapter<
   }
 
   /**
-   * Buffers the whole stream into one `postMessage` call
-   * (docs/specs/adapter.md §6.4, D4; CLAUDE.md "`stream()` must be
-   * overridden"): the core's fallback would otherwise edit a message every
-   * `streamingUpdateIntervalMs` (default 500 ms), which is roughly 120
-   * `updateComment` calls a minute against a documented example 150/min
-   * update-bucket limit. An empty stream — an `options.signal` abort that
-   * buffered nothing included — still posts `" "` (D4 default, matching the
-   * core's own fallback) so a `SentMessage` always exists for the caller to
-   * reference (§15 question 7).
+   * Overridden so a stream is one comment: the core's fallback would edit the
+   * message every 500 ms and exhaust the update bucket (D4). An empty stream
+   * still posts `" "` rather than nothing, so the caller always gets a
+   * `SentMessage` to edit or delete.
    */
   async stream(
     threadId: string,
     textStream: AsyncIterable<string | StreamChunk>,
-    options?: StreamOptions
+    _options?: StreamOptions
   ): Promise<RawMessage<BacklogRawMessage>> {
-    const buffered = await bufferStream(textStream, options?.signal);
+    const buffered = await bufferStream(textStream);
     return this.postMessage(threadId, {
       markdown: buffered.length > 0 ? buffered : ' ',
     });
@@ -1783,7 +1682,7 @@ export class BacklogAdapter implements Adapter<
     options?: FetchOptions
   ): Promise<FetchResult<BacklogRawMessage>> {
     const { host, projectId, subject } = this.subjectFor(threadId);
-    const converter = await this.getConverter(host, projectId);
+    const converter = await this.converterFor(host, projectId);
     return fetchMessagesRead({
       threadId,
       options,
@@ -1811,7 +1710,7 @@ export class BacklogAdapter implements Adapter<
       builders: async () =>
         this.messageBuilders(
           host,
-          await this.getConverter(host, projectId),
+          await this.converterFor(host, projectId),
           await this.botIdentity(host)
         ),
     });
@@ -1823,34 +1722,6 @@ export class BacklogAdapter implements Adapter<
       threadId,
       subject,
       names: await this.namesFor(host, projectId, subject),
-    });
-  }
-
-  /**
-   * `postChannelMessage` (docs/specs/adapter.md §6.7): creates an issue from
-   * a channel-level post. `issueTypeId`/`priorityId` default resolution and
-   * the narrow retry-once-on-stale-cache rule live in `createChannelIssue`
-   * (`src/egress.ts`); this method's job is only to own the per-channel
-   * defaults cache the way `getConverter`/`ensureProject` own the
-   * project cache above.
-   */
-  async postChannelMessage(
-    channelId: string,
-    message: AdapterPostableMessage
-  ): Promise<RawMessage<BacklogRawMessage>> {
-    const { host, projectId } = decodeChannelId(channelId);
-    const converter = await this.getConverter(host, projectId);
-    return createChannelIssue({
-      host,
-      projectId,
-      api: this.api(host),
-      converter,
-      message,
-      toBuffer: this.toFileBuffer,
-      getCachedDefaults: () => this.channelDefaultsCache.get(channelId),
-      setCachedDefaults: (defaults) =>
-        this.channelDefaultsCache.set(channelId, defaults),
-      clearCachedDefaults: () => this.channelDefaultsCache.delete(channelId),
     });
   }
 
@@ -1873,7 +1744,7 @@ export class BacklogAdapter implements Adapter<
     options?: ListThreadsOptions
   ): Promise<ListThreadsResult<BacklogRawMessage>> {
     const { host, projectId } = decodeChannelId(channelId);
-    const converter = await this.getConverter(host, projectId);
+    const converter = await this.converterFor(host, projectId);
     return listThreadsRead({
       channelId,
       options,
@@ -1926,76 +1797,20 @@ export class BacklogAdapter implements Adapter<
     });
   }
 
-  /**
-   * `fetchChannelInfo` (docs/specs/adapter.md §7.5). Replaces this channel's
-   * project cache entry and drops both the `postChannelMessage` defaults and
-   * the repository names — the documented way to pick up a changed project
-   * setting (formatting rule, project key, issue types, priorities, a renamed
-   * repository) without restarting, since every one of those caches is
-   * otherwise permanent (D14).
-   *
-   * The repository names are dropped by **host prefix**, not by this channel's
-   * project: the key is `` `${host}:${repositoryId}` `` and carries no
-   * project, so a sibling project's cached name goes with them. Keep it that
-   * way rather than narrowing the loop. A repository id already identifies a
-   * repository within a space, so putting the project in the key would buy
-   * exact invalidation at the price of a key the same repository can occupy
-   * twice — once per `projectId` a caller's thread id happened to name — which
-   * leaves a stale name alive under whichever key this call did not clear.
-   * Over-clearing costs one `read`-bucket Get Git Repository per dropped name,
-   * once, and only after a `fetchChannelInfo` somebody asked for.
-   */
   async fetchChannelInfo(channelId: string): Promise<ChannelInfo> {
     const { host } = decodeChannelId(channelId);
-    const { info, projectKey, textFormattingRule } = await fetchChannelInfoRead(
-      { channelId, api: this.api(host) }
-    );
-    this.projectCache.set(channelId, { projectKey, textFormattingRule });
-    this.channelDefaultsCache.delete(channelId);
-    for (const key of this.repositoryNameCache.keys()) {
-      if (key.startsWith(`${host}:`)) {
-        this.repositoryNameCache.delete(key);
-      }
-    }
-    return info;
+    return fetchChannelInfoRead({ channelId, api: this.api(host) });
   }
 
   /**
-   * `markAsRead` (docs/specs/adapter.md §7.8): notifications are the bot
-   * user's own feed, so the host comes from `threadId`, not from a
-   * per-message installation lookup — `message`, when given, is only used to
-   * cross-check the comment `messageId` already names, subject included.
-   */
-  async markAsRead(
-    threadId: string,
-    messageId: string,
-    message?: Message<BacklogRawMessage>
-  ): Promise<void> {
-    const { host, subject } = this.subjectFor(threadId);
-    await markAsReadRead({
-      threadId,
-      messageId,
-      message,
-      api: this.api(host),
-      subject,
-      logger: this.logger,
-    });
-  }
-
-  /**
-   * `rehydrateAttachment` (docs/specs/adapter.md §6.6): **synchronous**
-   * (`.claude/rules/chat-sdk-core-facts.md`, VERIFIED-FACTS — the shipped
-   * `Adapter` signature is `(attachment) => Attachment`, not a `Promise`).
-   * `configuredHosts` is this instance's installation map, so an attachment
-   * URL naming a host nobody configured here is returned unchanged rather
-   * than trusted — the security boundary docs/specs/adapter.md §6.6 and §11
-   * describe.
+   * Synchronous in the `Adapter` interface. A URL naming a host this adapter
+   * was not configured for is returned unchanged, never fetched.
    */
   rehydrateAttachment(attachment: Attachment): Attachment {
     return rehydrateAttachmentRead({
       attachment,
       configuredHosts: new Set(this.installations.keys()),
-      download: this.downloadAttachment,
+      apiFor: (host) => this.api(host),
     });
   }
 }

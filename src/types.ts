@@ -419,8 +419,8 @@ export interface BacklogRawPullRequest {
  * for a known project and subject, or a REST issue or pull request fetched as
  * a thread's root message. All five are accepted, not only the two the
  * webhook path builds: the last three are what `fetchMessages`,
- * `fetchMessage`, `listThreads`, `postMessage`, `editMessage` and
- * `postChannelMessage` put on the messages they return, and
+ * `fetchMessage`, `listThreads`, `postMessage` and `editMessage` put on
+ * the messages they return, and
  * `parseMessage(message.raw)` rebuilds such a message without a Backlog call
  * — the round trip §12.2 asserts. The two root variants stay flat rather than one
  * `root` variant with a nested discriminator, so `raw.issue` is reachable
@@ -485,18 +485,6 @@ export type BacklogRawMessage =
  */
 export interface BacklogPostableExtras {
   notifiedUserId?: number[];
-}
-
-/**
- * Extras a caller intersects with a Chat SDK postable to reach Backlog-only
- * behaviour on `postChannelMessage`, which creates an issue
- * (docs/specs/adapter.md §3.4, §6.7).
- */
-export interface BacklogChannelPostableExtras {
-  notifiedUserId?: number[];
-  issueTypeId?: number;
-  priorityId?: number;
-  assigneeId?: number;
 }
 
 /**

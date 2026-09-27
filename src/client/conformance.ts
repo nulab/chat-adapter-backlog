@@ -12,9 +12,6 @@ import type {
   BacklogGitRepository,
   BacklogIssue,
   BacklogIssueComment,
-  BacklogIssueType,
-  BacklogNotification,
-  BacklogPriority,
   BacklogProject,
   BacklogPullRequest,
   BacklogPullRequestAttachment,
@@ -69,28 +66,6 @@ function baseProject(): BacklogProject {
     name: 'Project',
     textFormattingRule: 'markdown',
   };
-}
-
-/**
- * The project's issue types. Two of them, with the one a `createIssue` test
- * names second: an implementation that fabricated `{ name: 'Task' }` for an
- * id it could not resolve would answer the first entry's name by accident,
- * and the assertion would not notice.
- */
-function baseIssueTypes(): BacklogIssueType[] {
-  return [
-    { id: 1, name: 'Task' },
-    { id: 2, name: 'Bug' },
-  ];
-}
-
-/** The documented example priorities, which both implementations default to. */
-function basePriorities(): BacklogPriority[] {
-  return [
-    { id: 2, name: 'High' },
-    { id: 3, name: 'Normal' },
-    { id: 4, name: 'Low' },
-  ];
 }
 
 function baseIssue(overrides: Partial<BacklogIssue> = {}): BacklogIssue {
@@ -203,52 +178,6 @@ function pullRequestRef(
     number: PULL_REQUEST_NUMBER,
     ...overrides,
   };
-}
-
-function baseNotifications(): BacklogNotification[] {
-  const project = { id: PROJECT_ID, projectKey: 'PROJECT', name: 'Project' };
-  return [
-    {
-      id: 1,
-      alreadyRead: false,
-      resourceAlreadyRead: false,
-      project,
-      issue: null,
-      comment: { id: 1 },
-      pullRequest: null,
-      pullRequestComment: null,
-      sender: ALICE,
-      created: new Date('2026-01-01T00:00:00Z'),
-    },
-    {
-      id: 2,
-      alreadyRead: false,
-      resourceAlreadyRead: false,
-      project,
-      issue: null,
-      comment: { id: 2 },
-      pullRequest: null,
-      pullRequestComment: null,
-      sender: BOB,
-      created: new Date('2026-01-01T00:01:00Z'),
-    },
-    {
-      id: 3,
-      alreadyRead: false,
-      resourceAlreadyRead: false,
-      project,
-      issue: null,
-      comment: null,
-      pullRequest: {
-        id: PULL_REQUEST_ID,
-        number: PULL_REQUEST_NUMBER,
-        repositoryId: REPOSITORY_ID,
-      },
-      pullRequestComment: { id: PULL_REQUEST_COMMENT_IDS[0] },
-      sender: BOB,
-      created: new Date('2026-01-01T00:02:00Z'),
-    },
-  ];
 }
 
 /**
@@ -407,52 +336,6 @@ export function describeBacklogApiConformance(
       expect(firstPage[0]?.id).not.toBe(secondPage[0]?.id);
     });
 
-    it('a created issue appears with the bot as creator', async () => {
-      const api = await factory();
-      const issue = await api.createIssue({
-        projectId: PROJECT_ID,
-        summary: 'Created from a test',
-        issueTypeId: 1,
-        priorityId: 3,
-      });
-      expect(issue.createdUser).toMatchObject({ name: BOT.name });
-      await expect(api.getIssue(issue.id)).resolves.toMatchObject({
-        id: issue.id,
-      });
-    });
-
-    it('a created issue carries the issue type and priority it named, resolved to their names', async () => {
-      const api = await factory();
-      const issue = await api.createIssue({
-        projectId: PROJECT_ID,
-        summary: 'Filed as a bug at high priority',
-        issueTypeId: 2,
-        priorityId: 2,
-      });
-      expect(issue.issueType).toMatchObject({ id: 2, name: 'Bug' });
-      expect(issue.priority).toMatchObject({ id: 2, name: 'High' });
-    });
-
-    it('creating an issue with an issue type or a priority the space does not have is a ValidationError', async () => {
-      const api = await factory();
-      await expect(
-        api.createIssue({
-          projectId: PROJECT_ID,
-          summary: 'Unknown issue type',
-          issueTypeId: 999_999,
-          priorityId: 3,
-        })
-      ).rejects.toBeInstanceOf(ValidationError);
-      await expect(
-        api.createIssue({
-          projectId: PROJECT_ID,
-          summary: 'Unknown priority',
-          issueTypeId: 1,
-          priorityId: 999_999,
-        })
-      ).rejects.toBeInstanceOf(ValidationError);
-    });
-
     it('a comment with no content is a ValidationError, on an issue and on a pull request', async () => {
       const api = await factory();
       await expect(
@@ -557,18 +440,6 @@ export function describeBacklogApiConformance(
       );
     });
 
-    it('issue types and priorities are readable', async () => {
-      const api = await factory();
-      await expect(api.listIssueTypes(PROJECT_ID)).resolves.toEqual(
-        expect.arrayContaining([expect.objectContaining({ id: 1 })])
-      );
-      await expect(api.listPriorities()).resolves.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: 2, name: 'High' }),
-        ])
-      );
-    });
-
     it('stars carry the presenter as a numeric id, matching the credential owner, and are removable by star id', async () => {
       const api = await factory();
       await api.addStar({ commentId: 1 });
@@ -590,23 +461,6 @@ export function describeBacklogApiConformance(
       await expect(api.deleteStar(999_999)).rejects.toBeInstanceOf(
         ResourceNotFoundError
       );
-    });
-
-    it('notifications list newest-first with an exclusive maxId and are markable as read', async () => {
-      const api = await factory();
-      const all = await api.listNotifications({ count: 100 });
-      expect(all.length).toBeGreaterThanOrEqual(2);
-      const ids = all.map((n) => n.id);
-      expect(ids).toEqual([...ids].sort((a, b) => b - a));
-      const maxId = ids[0];
-      if (maxId !== undefined) {
-        const bounded = await api.listNotifications({ count: 100, maxId });
-        expect(bounded.map((n) => n.id)).not.toContain(maxId);
-      }
-      const first = all[0];
-      if (first !== undefined) {
-        await api.markNotificationAsRead(first.id);
-      }
     });
 
     it('an upload reports the name and the byte length of the file it was given', async () => {
@@ -806,21 +660,6 @@ export function describeBacklogApiConformance(
       });
     });
 
-    it('a notification can name a pull request comment instead of an issue comment', async () => {
-      const api = await factory();
-      const all = await api.listNotifications({ count: 100 });
-      const fromPullRequest = all.find((n) => n.pullRequestComment !== null);
-      expect(fromPullRequest).toMatchObject({
-        comment: null,
-        pullRequest: {
-          id: PULL_REQUEST_ID,
-          number: PULL_REQUEST_NUMBER,
-          repositoryId: REPOSITORY_ID,
-        },
-        pullRequestComment: { id: PULL_REQUEST_COMMENT_IDS[0] },
-      });
-    });
-
     it('a pull request attachment downloads', async () => {
       const api = await factory();
       await expect(
@@ -877,14 +716,11 @@ export const conformanceFixture = {
   pullRequestAttachmentId: PULL_REQUEST_ATTACHMENT_ID,
   baseProject,
   baseIssue,
-  baseIssueTypes,
-  basePriorities,
   baseComment,
   statusChangeLog: STATUS_CHANGE_LOG,
   baseGitRepository,
   basePullRequest,
   basePullRequestComment,
   basePullRequestAttachment,
-  baseNotifications,
   pullRequestRef,
 };

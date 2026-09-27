@@ -13,19 +13,14 @@ import type {
   BacklogGitRepository,
   BacklogIssue,
   BacklogIssueComment,
-  BacklogIssueType,
-  BacklogNotification,
-  BacklogPriority,
   BacklogProject,
   BacklogPullRequest,
   BacklogPullRequestAttachment,
   BacklogStar,
   BacklogUploadedFile,
   BacklogUserRef,
-  CreateIssueInput,
   ListCommentsOptions,
   ListIssuesOptions,
-  ListNotificationsOptions,
   ListPullRequestsOptions,
   PullRequestRef,
   StarTarget,
@@ -41,11 +36,6 @@ export interface InMemoryBacklogSeed {
   issues?: BacklogIssue[];
   comments?: BacklogIssueComment[];
   users?: BacklogUserRef[];
-  /** Issue types available per project, keyed by `projectId`. */
-  issueTypes?: Record<number, BacklogIssueType[]>;
-  /** Defaults to High(2)/Normal(3)/Low(4), the documented example. */
-  priorities?: BacklogPriority[];
-  notifications?: BacklogNotification[];
   repositories?: BacklogGitRepository[];
   pullRequests?: BacklogPullRequest[];
   /**
@@ -70,25 +60,15 @@ export interface InMemoryBacklogState {
   users: BacklogUserRef[];
   repositories: BacklogGitRepository[];
   pullRequests: BacklogPullRequest[];
-  /**
-   * The project's issue types, keyed as the seed is, and the space's
-   * priorities. Both are live: a `createIssue` refuses an id they do not
-   * hold, so removing an entry is how a test models a project whose settings
-   * changed under a cached default (`src/egress.ts`).
-   */
-  issueTypes: Record<number, BacklogIssueType[]>;
-  priorities: BacklogPriority[];
   /** Keyed as the seed is, and holding added comments alongside the seeded ones. */
   pullRequestComments: Record<string, BacklogComment[]>;
   stars: BacklogStar[];
   uploads: BacklogUploadedFile[];
-  notifications: BacklogNotification[];
   /** Every call the API received, in order, for assertions on inputs. */
   recordedInputs: RecordedInput[];
 }
 
 export type RecordedInput =
-  | { method: 'createIssue'; input: CreateIssueInput }
   | { method: 'addComment'; issueId: number; input: AddCommentInput }
   | {
       method: 'updateComment';
@@ -110,7 +90,6 @@ export type RecordedInput =
     }
   | { method: 'addStar'; target: StarTarget }
   | { method: 'deleteStar'; starId: number }
-  | { method: 'markNotificationAsRead'; id: number }
   | {
       method: 'uploadAttachment';
       filename: string;
@@ -125,12 +104,6 @@ export type RecordedInput =
 export interface InMemoryBacklogApi extends BacklogApi {
   state: InMemoryBacklogState;
 }
-
-const DEFAULT_PRIORITIES: BacklogPriority[] = [
-  { id: 2, name: 'High' },
-  { id: 3, name: 'Normal' },
-  { id: 4, name: 'Low' },
-];
 
 const DEFAULT_ME: BacklogUserRef = {
   id: 999,
@@ -169,11 +142,6 @@ export function createInMemoryBacklogApi(
   const issues = [...(seed.issues ?? [])];
   const comments = [...(seed.comments ?? [])];
   const users = [...(seed.users ?? [])];
-  const issueTypes: Record<number, BacklogIssueType[]> = copyKeyedLists(
-    seed.issueTypes
-  );
-  const priorities = [...(seed.priorities ?? DEFAULT_PRIORITIES)];
-  const notifications = [...(seed.notifications ?? [])];
   const repositories = [...(seed.repositories ?? [])];
   const pullRequests = [...(seed.pullRequests ?? [])];
   const pullRequestComments = copyKeyedLists(seed.pullRequestComments);
@@ -197,7 +165,6 @@ export function createInMemoryBacklogApi(
   const seededIds = [
     ...issues.map((i) => i.id),
     ...comments.map((c) => c.id),
-    ...notifications.map((n) => n.id),
     ...uploads.map((u) => u.id),
     ...repositories.map((r) => r.id),
     ...pullRequests.map((p) => p.id),
@@ -385,55 +352,6 @@ export function createInMemoryBacklogApi(
       return issues
         .filter((issue) => issue.projectId === projectId)
         .slice(offset, offset + options.count);
-    },
-
-    async createIssue(input: CreateIssueInput) {
-      recordedInputs.push({ method: 'createIssue', input });
-      findProject(input.projectId);
-      const issueType = (issueTypes[input.projectId] ?? []).find(
-        (t) => t.id === input.issueTypeId
-      );
-      if (issueType === undefined) {
-        throw new ValidationError(
-          'backlog',
-          `issueTypeId ${input.issueTypeId} is not an issue type of project ${input.projectId}`
-        );
-      }
-      const priority = priorities.find((p) => p.id === input.priorityId);
-      if (priority === undefined) {
-        throw new ValidationError(
-          'backlog',
-          `priorityId ${input.priorityId} is not a priority of this space`
-        );
-      }
-      const assignee =
-        input.assigneeId === undefined ? null : findUser(input.assigneeId);
-      const createdAt = now();
-      const issue: BacklogIssue = {
-        id: allocateId(),
-        projectId: input.projectId,
-        issueKey: `PROJECT-${issues.length + 1}`,
-        summary: input.summary,
-        description: input.description ?? '',
-        issueType,
-        priority,
-        status: { id: 1, name: 'Open' },
-        assignee,
-        createdUser: me,
-        created: createdAt,
-        updated: createdAt,
-      };
-      issues.push(issue);
-      return issue;
-    },
-
-    async listIssueTypes(projectId) {
-      findProject(projectId);
-      return [...(issueTypes[projectId] ?? [])];
-    },
-
-    async listPriorities() {
-      return [...priorities];
     },
 
     async listComments(issueId, options: ListCommentsOptions) {
@@ -643,24 +561,6 @@ export function createInMemoryBacklogApi(
       }
     },
 
-    async listNotifications(options: ListNotificationsOptions) {
-      const withinBounds = notifications.filter(
-        (n) => options.maxId === undefined || n.id < options.maxId
-      );
-      return [...withinBounds]
-        .sort((a, b) => b.id - a.id)
-        .slice(0, options.count);
-    },
-
-    async markNotificationAsRead(id) {
-      recordedInputs.push({ method: 'markNotificationAsRead', id });
-      const notification = notifications.find((n) => n.id === id);
-      if (notification === undefined) {
-        throw new ResourceNotFoundError('backlog', 'notification', String(id));
-      }
-      notification.resourceAlreadyRead = true;
-    },
-
     async uploadAttachment(filename, data, mimeType) {
       const bytes = Buffer.from(data);
       recordedInputs.push({
@@ -709,12 +609,9 @@ export function createInMemoryBacklogApi(
       users,
       repositories,
       pullRequests,
-      issueTypes,
-      priorities,
       pullRequestComments,
       stars,
       uploads,
-      notifications,
       recordedInputs,
     },
   };

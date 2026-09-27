@@ -26,7 +26,6 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
 | --- | --- | --- |
 | `GET /issues/:issueIdOrKey` | read | `getIssue(idOrKey, params?)` |
 | `GET /issues` | **search** | `getIssues(params)` |
-| `POST /issues` | update | `postIssue(params)` |
 | `PATCH /issues/:issueIdOrKey` | update | `patchIssue(idOrKey, params)` |
 | `GET /issues/:issueIdOrKey/comments` | read | `getIssueComments(idOrKey, {minId,maxId,count,order})` |
 | `GET /issues/:issueIdOrKey/comments/count` | read | `getIssueCommentsCount(idOrKey)` |
@@ -41,14 +40,9 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
 | `POST /space/attachment` | update | `postSpaceAttachment(formData)` |
 | `POST /stars` | update | `postStar({commentId})` → `void` |
 | `DELETE /stars/:starId` | update | `removeStar(starId)` → `void` |
-| `GET /notifications` | read | `getNotifications({minId,maxId,count,order})`; `senderId` absent from the typing |
-| `GET /notifications/count` | read | `getNotificationsCount({alreadyRead,resourceAlreadyRead})` (typed required, doc says optional) |
-| `POST /notifications/:id/markAsRead` | update | `markAsReadNotification(id)` → 204 |
 | `GET /projects/:projectIdOrKey` | read | `getProject(idOrKey)` |
 | `GET /projects/:projectIdOrKey/users` | read | `getProjectUsers(idOrKey)`; no `excludeGroupMembers` param |
-| `GET /projects/:projectIdOrKey/issueTypes` | read | `getIssueTypes(idOrKey)` |
 | `GET /projects/:projectIdOrKey/statuses` | read | `getProjectStatuses(idOrKey)` |
-| `GET /priorities` | read | `getPriorities()` (space-wide, not per project) |
 | `GET /users/:userId` | read | `getUser(userId)` |
 | `GET /users/myself` | read | `getMyself()` |
 | `GET /users/:userId/icon` | **icon** | `getUserIcon(userId)` → `FileData` |
@@ -144,6 +138,13 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
 
 ## Notifications (per authenticated user)
 
+The adapter reads no notification feed; these are facts for a consumer that
+does, through `client(host)`.
+
+- `backlog-js` 0.20.1: `getNotifications({minId,maxId,count,order})` has no
+  `senderId`; `getNotificationsCount({alreadyRead,resourceAlreadyRead})` types
+  both as required where the docs say optional; `markAsReadNotification(id)`
+  resolves on the 204.
 - `GET /notifications`: `minId`, `maxId`, `count` (1–100, default 20), `order`,
   `senderId`; item `{ id, alreadyRead, reason, resourceAlreadyRead, project,
   issue | null, comment | null, sender, created }`. Page newest-first with

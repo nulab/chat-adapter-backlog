@@ -12,6 +12,7 @@ import type { Content, List, ListItem, Root as RootNode } from 'chat';
 import { describe, expect, it } from 'vitest';
 
 import { BacklogNotationConverter } from './notation';
+import { CARD_IMAGE_URL, EVERY_CHILD_CARD } from '../test/fixtures/card';
 
 function heading1(children: Content[]): Content {
   // `chat` does not export a `heading` builder, so tests construct the node
@@ -256,6 +257,26 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
     expect(ast.children).toEqual([
       blockquote([paragraph([text('quoted text')])]),
     ]);
+  });
+
+  it.each([
+    ['> prefixed lines', `${'> '.repeat(3000)}x`],
+    ['quote macros', '{quote}\n'.repeat(5000)],
+  ])('deeply nested %s parse without failing', (_form, notation) => {
+    expect(() => converter.toAst(notation)).not.toThrow();
+  });
+
+  it('quotes nested past the depth limit keep their text as a quoted paragraph', () => {
+    const ast = converter.toAst(`${'> '.repeat(20)}deep`);
+
+    let node: Content | undefined = ast.children[0];
+    let depth = 0;
+    while (node?.type === 'blockquote') {
+      depth += 1;
+      node = node.children[0];
+    }
+    expect(depth).toBe(16);
+    expect(node).toEqual(paragraph([text(`${'> '.repeat(4)}deep`)]));
   });
 
   it('closes an unclosed quote macro at end of input', () => {
@@ -680,4 +701,41 @@ describe('BacklogNotationConverter inbound (toAst)', () => {
       expect(ast.children).toEqual([paragraph([text(notation)])]);
     }
   );
+});
+
+describe('BacklogNotationConverter card fallback', () => {
+  it("renders every card child in notation, with '' and never an asterisk", () => {
+    expect(converter.renderPostable(EVERY_CHILD_CARD)).toBe(
+      [
+        "''Release 1.4''",
+        'ready to ship',
+        'Two blockers left.',
+        '[[Open build>https://example.test/b/1]]',
+        '----',
+        "''Owner'': the release team",
+        'Blocker',
+        '-------',
+        '#12',
+        'Failures',
+        '   | week',
+        '---|-----',
+        'w1 | 3',
+      ].join('\n')
+    );
+  });
+
+  it('drops a card image, as every chat card walk does', () => {
+    expect(converter.renderPostable(EVERY_CHILD_CARD)).not.toContain(
+      CARD_IMAGE_URL
+    );
+  });
+
+  it("posts a card's caller-supplied fallback text verbatim", () => {
+    expect(
+      converter.renderPostable({
+        card: EVERY_CHILD_CARD,
+        fallbackText: 'Release 1.4 is ready',
+      })
+    ).toBe('Release 1.4 is ready');
+  });
 });

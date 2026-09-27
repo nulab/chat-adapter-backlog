@@ -6,7 +6,6 @@ import type {
   BacklogApi,
   BacklogComment,
   BacklogIssue,
-  BacklogNotification,
   BacklogUserRef,
 } from '../client/port';
 import type { BacklogRawMessage, BacklogSubjectRef } from '../types';
@@ -277,7 +276,6 @@ describe('the issue subject client', () => {
 
     await expect(subject.deleteComment(COMMENT_ID)).resolves.toBeUndefined();
 
-    expect(subject.capabilities.deleteComment).toBe(true);
     expect(deleteComment).toHaveBeenCalledWith(ISSUE_ID, COMMENT_ID);
   });
 
@@ -455,39 +453,19 @@ describe('the issue subject client', () => {
     );
   });
 
-  it('an issue thread carries the issue fields §7.3 lists, under its own kind', () => {
+  it('an issue thread carries its ids, key, summary, status and url, under its own kind', () => {
     const { subject } = clientWith();
 
     expect(subject.threadMetadata(rootOf(), {})).toEqual({
       kind: 'issue',
       host: HOST,
+      projectId: PROJECT_ID,
       issueId: ISSUE_ID,
       issueKey: 'PROJECT-42',
-      projectId: PROJECT_ID,
       summary: 'Login fails on retry',
-      description: 'Steps to reproduce',
       status: { id: 1, name: 'Open' },
-      assignee: { id: ALICE.id, name: ALICE.name },
-      issueType: { id: 1, name: 'Bug' },
-      priority: { id: 3, name: 'Normal' },
-      createdUserId: BOB.id,
-      created: ISSUE.created.toISOString(),
-      updated: ISSUE.updated.toISOString(),
       url: 'https://example.backlog.com/view/PROJECT-42',
     });
-  });
-
-  it('writes metadata timestamps as ISO strings, so a JSON round trip is identity', () => {
-    // `Record<string, unknown>` hides a `Date` from the compiler, so a
-    // consumer serialising a `ThreadInfo` would get a string back while its
-    // code still read it as a `Date` (§7.3).
-    const { subject } = clientWith();
-
-    const metadata = subject.threadMetadata(rootOf(), {});
-
-    expect(metadata['created']).toBe(ISSUE.created.toISOString());
-    expect(metadata['updated']).toBe(ISSUE.updated.toISOString());
-    expect(JSON.parse(JSON.stringify(metadata))).toEqual(metadata);
   });
 
   it('describes an issue subject by its type and its priority', () => {
@@ -501,21 +479,5 @@ describe('the issue subject client', () => {
     const { subject } = clientWith();
 
     expect(subject.repositoryIdForName).toBeUndefined();
-  });
-
-  it('a read receipt on an issue matches the issue comment id, never a pull request comment sharing it', () => {
-    const { subject } = clientWith();
-    const notification = {
-      comment: { id: COMMENT_ID },
-      pullRequestComment: { id: 7000001 },
-    } as unknown as BacklogNotification;
-
-    expect(subject.notificationCommentId(notification)).toBe(COMMENT_ID);
-    expect(
-      subject.notificationCommentId({
-        ...notification,
-        comment: null,
-      } as unknown as BacklogNotification)
-    ).toBeUndefined();
   });
 });

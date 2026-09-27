@@ -26,7 +26,6 @@ import type {
   BacklogApi,
   BacklogComment,
   BacklogIssue,
-  BacklogNotification,
   BacklogPullRequest,
   BacklogUserRef,
   ListCommentsOptions,
@@ -80,12 +79,6 @@ export interface SubjectContext {
 
 export interface SubjectClient {
   readonly ref: BacklogSubjectRef;
-  /**
-   * What Backlog will and will not do for this kind. `deleteComment` is
-   * `false` for a pull request because the route does not exist (D-PR3), and
-   * a caller can check it instead of provoking the error.
-   */
-  readonly capabilities: { deleteComment: boolean };
 
   fetchRoot(): Promise<SubjectRoot>;
   /**
@@ -135,16 +128,8 @@ export interface SubjectClient {
   /** `ThreadInfo.channelName` (§7.3). */
   channelName(root: SubjectRoot, names: SubjectNames): string | undefined;
   /**
-   * `ThreadInfo.metadata` (§7.3); names its own `kind` for both kinds.
-   *
-   * Every timestamp in it is an **ISO string**, not the `Date` the port hands
-   * back. The return type is `Record<string, unknown>`, so a `Date` in here is
-   * invisible to the compiler, and any consumer that puts a `ThreadInfo`
-   * through JSON — a queue, a cache, a tool result — gets a string back while
-   * its code still reads it as a `Date`. That is the same reason the
-   * raw-message shapes carry ISO strings (`src/types.ts`, `src/index.ts`), and
-   * the two halves of `message.raw` and `ThreadInfo.metadata` should not
-   * disagree about how an instant is written.
+   * The ids, the title, the status and the web URL. The whole object is not
+   * repeated here: `MessageSubject.raw` already carries it.
    */
   threadMetadata(
     root: SubjectRoot,
@@ -164,14 +149,6 @@ export interface SubjectClient {
    * `SubjectNames` without asking what kind it is holding (§7.3, §3.8).
    */
   readonly repositoryIdForName: number | undefined;
-  /**
-   * The comment id a notification is about, or `undefined` when it is about
-   * something else. Matched on `comment.id` for an issue and
-   * `pullRequestComment.id` for a pull request and never the other way round:
-   * the two id sequences are distinct and may overlap (§7.8, measured
-   * 2026-09-06).
-   */
-  notificationCommentId(notification: BacklogNotification): number | undefined;
 }
 
 /**

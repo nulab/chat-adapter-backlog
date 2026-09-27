@@ -179,50 +179,6 @@ export interface BacklogProject {
   textFormattingRule: TextFormattingRule;
 }
 
-export interface BacklogIssueType {
-  id: number;
-  name: string;
-}
-
-export interface BacklogPriority {
-  id: number;
-  name: string;
-}
-
-export interface BacklogNotification {
-  id: number;
-  /**
-   * The inbox-badge flag: flipped to `true` on **every** notification by
-   * [Reset Unread Notification Count](https://developer.nulab.com/docs/backlog/api/2/count-notification/)
-   * (`POST /notifications/markAsRead`), left untouched by
-   * `markNotificationAsRead` (measured 2026-09-06). `markAsRead` (§7.8) must
-   * not read this field — see `resourceAlreadyRead` below.
-   */
-  alreadyRead: boolean;
-  /**
-   * Set on **this one** notification by
-   * [Read Notification](https://developer.nulab.com/docs/backlog/api/2/read-notification/)
-   * (`POST /notifications/:id/markAsRead`), left untouched by the
-   * reset-count endpoint above (measured 2026-09-06). This is the flag
-   * `markAsRead` (§7.8) short-circuits on.
-   */
-  resourceAlreadyRead: boolean;
-  project: { id: number; projectKey: string; name: string };
-  issue: { id: number; issueKey: string; summary: string } | null;
-  comment: { id: number } | null;
-  /**
-   * Set on notifications a pull request caused (reasons 10–13,
-   * [Get Notification](https://developer.nulab.com/docs/backlog/api/2/get-notification/)).
-   * The fields exist on every item; a populated one needs a second user to
-   * mention or assign the bot and is UNMEASURED
-   * (`.claude/rules/backlog-pull-request-facts.md` "Unmeasured").
-   */
-  pullRequest: { id: number; number: number; repositoryId: number } | null;
-  pullRequestComment: { id: number } | null;
-  sender: BacklogUserRef;
-  created: Date;
-}
-
 export interface BacklogUploadedFile {
   id: number;
   name: string;
@@ -247,22 +203,6 @@ export interface ListCommentsOptions {
   order: ListOrder;
   minId?: number;
   maxId?: number;
-}
-
-export interface ListNotificationsOptions {
-  count: number;
-  maxId?: number;
-}
-
-export interface CreateIssueInput {
-  projectId: number;
-  summary: string;
-  issueTypeId: number;
-  priorityId: number;
-  description?: string;
-  assigneeId?: number;
-  notifiedUserId?: number[];
-  attachmentId?: number[];
 }
 
 export interface AddCommentInput {
@@ -311,9 +251,6 @@ export interface BacklogApi {
     projectId: number,
     options: ListIssuesOptions
   ): Promise<BacklogIssue[]>;
-  createIssue(input: CreateIssueInput): Promise<BacklogIssue>;
-  listIssueTypes(projectId: number): Promise<BacklogIssueType[]>;
-  listPriorities(): Promise<BacklogPriority[]>;
   listComments(
     issueId: number,
     options: ListCommentsOptions
@@ -371,10 +308,6 @@ export interface BacklogApi {
   ): Promise<BacklogDownloadedFile>;
   addStar(target: StarTarget): Promise<void>;
   deleteStar(starId: number): Promise<void>;
-  listNotifications(
-    options: ListNotificationsOptions
-  ): Promise<BacklogNotification[]>;
-  markNotificationAsRead(id: number): Promise<void>;
   uploadAttachment(
     filename: string,
     data: Buffer,

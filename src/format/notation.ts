@@ -238,7 +238,7 @@ export class BacklogNotationConverter extends BaseFormatConverter {
  * list (colour, `#rev`, `#contents`, `#attach`, `#thumbnail`, wiki links,
  * issue-key auto-links) as plain text.
  */
-function parseNotationBlocks(input: string): Content[] {
+function parseNotationBlocks(input: string, quoteDepth = 0): Content[] {
   // `\r?\n`, not `\n`: a line-based matcher anchored at `$` (a list marker,
   // a heading) never matches a line a CRLF body left a trailing `\r` on.
   const lines = input.split(/\r?\n/);
@@ -268,7 +268,7 @@ function parseNotationBlocks(input: string): Content[] {
 
     if (line.trim() === '{quote}') {
       flushParagraph();
-      const { node, nextIndex } = parseQuoteMacro(lines, i);
+      const { node, nextIndex } = parseQuoteMacro(lines, i, quoteDepth);
       blocks.push(node);
       i = nextIndex;
       continue;
@@ -276,7 +276,7 @@ function parseNotationBlocks(input: string): Content[] {
 
     if (line.startsWith('> ') || line === '>') {
       flushParagraph();
-      const { node, nextIndex } = parseQuoteLines(lines, i);
+      const { node, nextIndex } = parseQuoteLines(lines, i, quoteDepth);
       blocks.push(node);
       i = nextIndex;
       continue;
@@ -390,9 +390,27 @@ function codeNode(value: string, lang: string | undefined): Content {
   return lang !== undefined ? codeBlock(value, lang) : codeBlock(value);
 }
 
+/**
+ * Each quote level is one recursion into `parseNotationBlocks`, so an
+ * unbounded depth lets one comment of a few thousand `> ` overflow the stack
+ * and fail every read of its thread. Past this depth the rest is kept as
+ * quoted text rather than parsed further.
+ */
+const MAX_QUOTE_DEPTH = 16;
+
+function quoteOf(body: string[], quoteDepth: number): Content {
+  const text = body.join('\n');
+  return blockquote(
+    quoteDepth + 1 < MAX_QUOTE_DEPTH
+      ? parseNotationBlocks(text, quoteDepth + 1)
+      : [paragraph(inlineToNodes(text))]
+  );
+}
+
 function parseQuoteMacro(
   lines: string[],
-  startIndex: number
+  startIndex: number,
+  quoteDepth: number
 ): { node: Content; nextIndex: number } {
   const body: string[] = [];
   let i = startIndex + 1;
@@ -401,12 +419,13 @@ function parseQuoteMacro(
     i += 1;
   }
   const nextIndex = i < lines.length ? i + 1 : i;
-  return { node: blockquote(parseNotationBlocks(body.join('\n'))), nextIndex };
+  return { node: quoteOf(body, quoteDepth), nextIndex };
 }
 
 function parseQuoteLines(
   lines: string[],
-  startIndex: number
+  startIndex: number,
+  quoteDepth: number
 ): { node: Content; nextIndex: number } {
   const body: string[] = [];
   let i = startIndex;
@@ -421,10 +440,7 @@ function parseQuoteLines(
     }
     i += 1;
   }
-  return {
-    node: blockquote(parseNotationBlocks(body.join('\n'))),
-    nextIndex: i,
-  };
+  return { node: quoteOf(body, quoteDepth), nextIndex: i };
 }
 
 function matchHeading(

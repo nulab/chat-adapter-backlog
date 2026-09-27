@@ -186,33 +186,6 @@ export const projectSchema = z.object({
   textFormattingRule: z.enum(['markdown', 'backlog']),
 });
 
-export const issueTypeSchema = z.object({ id: z.number(), name: z.string() });
-
-export const prioritySchema = z.object({ id: z.number(), name: z.string() });
-
-export const notificationSchema = z.object({
-  id: z.number(),
-  alreadyRead: z.boolean(),
-  resourceAlreadyRead: z.boolean(),
-  project: z.object({
-    id: z.number(),
-    projectKey: z.string(),
-    name: z.string(),
-  }),
-  issue: z
-    .object({ id: z.number(), issueKey: z.string(), summary: z.string() })
-    .nullable()
-    .default(null),
-  comment: z.object({ id: z.number() }).nullable().default(null),
-  pullRequest: z
-    .object({ id: z.number(), number: z.number(), repositoryId: z.number() })
-    .nullable()
-    .default(null),
-  pullRequestComment: z.object({ id: z.number() }).nullable().default(null),
-  sender: userSchema,
-  created: z.coerce.date(),
-});
-
 export const uploadedFileSchema = z.object({
   id: z.number(),
   name: z.string(),
@@ -229,6 +202,3 @@ export const pullRequestListSchema = z.array(pullRequestSchema);
 export const pullRequestAttachmentListSchema = z.array(
   pullRequestAttachmentSchema
 );
-export const issueTypeListSchema = z.array(issueTypeSchema);
-export const priorityListSchema = z.array(prioritySchema);
-export const notificationListSchema = z.array(notificationSchema);

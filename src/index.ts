@@ -31,7 +31,6 @@ export type {
   BacklogAdapterConfig,
   BacklogBulkUpdatePayload,
   BacklogChange,
-  BacklogChannelPostableExtras,
   BacklogInstallation,
   BacklogIssueCreatedActivity,
   BacklogIssueDeletedActivity,

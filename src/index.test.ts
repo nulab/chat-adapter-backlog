@@ -74,8 +74,6 @@ describe('package entry point', () => {
       'mentionPattern',
       'createBacklogJsApi',
       'createBacklogJsTransport',
-      'FallbackFormatConverter',
-      'converterFor',
       'userSchema',
       'subjectClientFor',
     ]) {
