@@ -145,6 +145,8 @@ function buildCommentMessage(
   const { host, projectId, subject, botUserId, format, MessageCtor } = builders;
   const text = comment.content ?? '';
   const dateSent = new Date(comment.created);
+  // Timestamps are second-granular, so an edit in the posting second reads as
+  // unedited; nothing in the response can tell the two apart (measured).
   const metadata: MessageData['metadata'] =
     comment.updated === comment.created
       ? { dateSent, edited: false }

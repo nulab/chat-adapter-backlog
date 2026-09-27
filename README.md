@@ -260,6 +260,8 @@ Mock `adapter.client()` where a handler calls Backlog directly.
 ## Limitations
 
 - Editing a comment fires no webhook, so `onMessageUpdated` never fires.
+- A comment edited within the second it was posted reads as `edited: false`,
+  because Backlog's timestamps are second-granular.
 - A pull-request comment cannot be deleted, nor can an issue comment that
   attached a file or changed a field. `listThreads` lists issues only.
 - `channel.post()` is rejected. Create an issue with `client().postIssue()`.

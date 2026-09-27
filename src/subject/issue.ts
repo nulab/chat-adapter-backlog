@@ -126,15 +126,15 @@ export function createIssueSubjectClient(
     },
 
     /**
-     * Refuses a comment that records a change: Backlog answers 200 but keeps
-     * it, with its content emptied and its attachment still on the issue
-     * (measured), so resolving would fabricate a deletion (D31).
+     * Refuses a comment that records a change or an attachment: Backlog
+     * answers 200 but keeps it, with its content emptied (measured), so
+     * resolving would fabricate a deletion (D31).
      */
     async deleteComment(commentId: number): Promise<void> {
       const comment = await getComment(commentId);
       if (comment.changeLog.length > 0) {
         throw new AdapterError(
-          'Backlog keeps an issue comment that records a change or an attachment',
+          'Backlog keeps an issue comment that records a change or an attachment; edit the comment instead',
           'backlog',
           'UNSUPPORTED_OPERATION'
         );

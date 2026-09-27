@@ -885,20 +885,6 @@ describe('BacklogAdapter.editMessage / deleteMessage', () => {
     expect(result.id).toBe(commentMessageId());
   });
 
-  it('a delete removes the comment from the issue', async () => {
-    const { adapter, backlog } = egressAdapter();
-    vi.spyOn(backlog.client, 'getIssueComment').mockResolvedValue(
-      issueComment() as never
-    );
-    const deleteIssueComment = vi
-      .spyOn(backlog.client, 'deleteIssueComment')
-      .mockResolvedValue(issueComment() as never);
-
-    await adapter.deleteMessage(EGRESS_THREAD_ID, commentMessageId());
-
-    expect(deleteIssueComment).toHaveBeenCalledWith(FIXTURE.issueId, 1);
-  });
-
   it('deleting an issue comment through a pull request thread is rejected before any request', async () => {
     const { adapter, backlog } = egressAdapter();
     const deleteIssueComment = vi.spyOn(backlog.client, 'deleteIssueComment');

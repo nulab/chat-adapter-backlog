@@ -545,7 +545,7 @@ Get Comment, then
 resolves `void`, and a 404 is `ResourceNotFoundError`. An issue comment whose
 `changeLog` is not empty — one that added an attachment or changed a field —
 is refused with
-`AdapterError("Backlog keeps an issue comment that records a change or an attachment", "backlog", "UNSUPPORTED_OPERATION")`
+`AdapterError("Backlog keeps an issue comment that records a change or an attachment; edit the comment instead", "backlog", "UNSUPPORTED_OPERATION")`
 before Delete Comment is sent, because Backlog answers 200 but keeps such a
 comment and its attachment (D31). On a pull-request thread it throws
 `AdapterError("Backlog has no endpoint to delete a pull request comment", "backlog", "UNSUPPORTED_OPERATION")`
@@ -637,7 +637,9 @@ oldest; the union of all pages in either direction is the root plus every
 comment exactly once; a page never exceeds `limit`. `formatted` comes from the
 project's converter (§9.1), `text` stays Backlog's text. A comment message has
 `edited = comment.updated !== comment.created` and `editedAt`; the root has
-`edited: false`, because `updated` moves on any field change. The list includes
+`edited: false`, because `updated` moves on any field change. Backlog's
+timestamps are second-granular, so an edit made within the second the comment
+was posted reports `edited: false` with no `editedAt`. The list includes
 changelog comments and, on a pull request, the system comment of §5.3.
 
 ### 7.2 `fetchMessage(threadId, messageId)`
