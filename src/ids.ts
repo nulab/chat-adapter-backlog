@@ -134,6 +134,20 @@ export function decodeMessageId(id: string): BacklogMessageId {
   return { ...base, part: 'root' };
 }
 
+export function isMessageInThread(
+  message: BacklogMessageId,
+  thread: BacklogThreadId
+): boolean {
+  return (
+    message.host === thread.host &&
+    encodeSubject(message.subject) === encodeSubject(thread.subject)
+  );
+}
+
+export function encodeUserId(id: BacklogUserId): string {
+  return `${id.host}:${id.userId}`;
+}
+
 export function decodeUserId(id: string): BacklogUserId {
   const { groups, posint } = parseUserId(id);
   return { host: groups.host, userId: posint(groups.userId) };

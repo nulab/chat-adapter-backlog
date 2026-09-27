@@ -23,6 +23,7 @@ import type {
   SubjectContext,
   SubjectNames,
   SubjectRoot,
+  WebhookAttachment,
 } from './client';
 import type { Backlog, Option } from 'backlog-js';
 import type { Attachment } from 'chat';
@@ -80,10 +81,6 @@ export function createIssueSubjectClient(
     };
   }
 
-  function readComment(request: Promise<unknown>): Promise<BacklogRawComment> {
-    return readIssueComment(request);
-  }
-
   return {
     ref,
 
@@ -118,14 +115,14 @@ export function createIssueSubjectClient(
     },
 
     addComment(input: AddCommentInput): Promise<BacklogRawComment> {
-      return readComment(client.postIssueComments(issueId, input));
+      return readIssueComment(client.postIssueComments(issueId, input));
     },
 
     updateComment(
       commentId: number,
       content: string
     ): Promise<BacklogRawComment> {
-      return readComment(
+      return readIssueComment(
         client.patchIssueComment(issueId, commentId, { content })
       );
     },
@@ -165,11 +162,7 @@ export function createIssueSubjectClient(
       return attachments;
     },
 
-    webhookAttachment(attachment: {
-      id: number;
-      name: string;
-      size?: number | undefined;
-    }): Attachment {
+    webhookAttachment(attachment: WebhookAttachment): Attachment {
       return {
         type: 'file',
         name: attachment.name,

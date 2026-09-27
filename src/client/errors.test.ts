@@ -14,7 +14,7 @@ import {
   mapCredentialResolverError,
   mapTransportError,
   stripQueryString,
-} from './errors.js';
+} from './errors';
 
 describe('mapBacklogError', () => {
   it.each([

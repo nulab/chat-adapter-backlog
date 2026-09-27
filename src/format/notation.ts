@@ -34,14 +34,9 @@ type PhrasingNode = Extract<
 >;
 
 /**
- * Converts between mdast and Backlog notation (Backlog記法) — the markup
- * syntax `textFormattingRule: "backlog"` projects use. Notation is a
- * different syntax from Markdown, not a superset: `''bold''` and `'''italic'''`
- * for example share Markdown's `'` only by coincidence (docs/specs/adapter.md
- * §9.1).
- *
- * Reference: https://support.nulab.com/hc/en-us/articles/360035641594 and
- * docs/specs/adapter.md §9.4 (outbound) / §9.5 (inbound).
+ * Converts between mdast and Backlog notation (Backlog記法), the markup
+ * `textFormattingRule: "backlog"` projects use:
+ * https://support.nulab.com/hc/en-us/articles/360035641594
  */
 export class BacklogNotationConverter extends BaseFormatConverter {
   fromAst(ast: Root): string {
@@ -65,8 +60,8 @@ export class BacklogNotationConverter extends BaseFormatConverter {
         // characters it covers, what it does before an ordinary one, and
         // whether the guide's `¥` gloss means a literal yen sign escapes too
         // are all unmeasured, so escaping here would be a guess that eats a
-        // caller's backslashes — or every `¥100` in a Japanese comment
-        // (docs/specs/adapter.md §9.7). Measure against a real space first.
+        // caller's backslashes — or every `¥100` in a Japanese comment.
+        // Measure against a real space first.
         return getNodeValue(node);
       case 'strong':
         return this.bold(this.inlineChildren(node));
@@ -75,8 +70,7 @@ export class BacklogNotationConverter extends BaseFormatConverter {
       case 'delete':
         return `%%${this.inlineChildren(node)}%%`;
       case 'inlineCode':
-        // Backlog notation has no inline-code syntax; the value is emitted
-        // unchanged (docs/specs/adapter.md §9.4, §9.6 — deliberately lossy).
+        // Notation has no inline-code syntax; lossy on purpose.
         return getNodeValue(node);
       case 'code':
         return this.codeToNotation(node);
@@ -177,15 +171,10 @@ export class BacklogNotationConverter extends BaseFormatConverter {
 
   /**
    * `BaseFormatConverter.cardToFallbackText` hard-codes Markdown's `**`
-   * around the title, so a `backlog` project posted the asterisks literally
-   * (docs/specs/adapter.md §6.1, §9.4). The bold marker cannot be passed in:
-   * the base method takes no options, and `@chat-adapter/shared`'s
-   * `cardToFallbackText` types `boldFormat` as `"*" | "**"` — neither can
-   * express `''`. So the places a card carries markup are re-rendered here
-   * and every other child (subtitle, text, tables, charts, sections) still
-   * comes from `super`, which is why this override repeats the base method's
-   * three-part assembly rather than replacing the walk. A title or label is
-   * emitted as written; §9.7 covers what notation cannot escape.
+   * around the title, and the bold marker cannot be passed in: the base
+   * method takes no options, and `@chat-adapter/shared`'s `boldFormat` is
+   * `"*" | "**"`. So this repeats the base method's three-part assembly and
+   * leaves every other child to `super`.
    */
   protected override cardToFallbackText(card: CardElement): string {
     const parts: string[] = [];
@@ -206,13 +195,8 @@ export class BacklogNotationConverter extends BaseFormatConverter {
 
   /**
    * `link` and `divider` are here for a different reason than `fields`:
-   * `BaseFormatConverter.cardChildToFallbackText` — the walk `renderPostable`
-   * reaches — has a case for neither and returns `null`, which drops a
-   * `CardLink`'s URL out of the message entirely. That is a loss of content,
-   * not of markup, so each routes through the §9.4 row it already has rather
-   * than through `super`. `chat@4.39.0`'s other two card walks are not
-   * missing the same cases, so the gap belongs to that method, not to the
-   * package.
+   * `BaseFormatConverter.cardChildToFallbackText` has a case for neither and
+   * returns `null`, which drops a `CardLink`'s URL from the message.
    */
   protected override cardChildToFallbackText(child: CardChild): string | null {
     switch (child.type) {
@@ -231,12 +215,10 @@ export class BacklogNotationConverter extends BaseFormatConverter {
 }
 
 /**
- * Backlog notation → mdast. Line-based per docs/specs/adapter.md §9.5: the
- * upstream support article is the only syntax reference and does not specify
- * a grammar precise enough for a real parser, so this walks lines rather than
- * building a tokenizer, and deliberately leaves constructs outside §9.5's
- * list (colour, `#rev`, `#contents`, `#attach`, `#thumbnail`, wiki links,
- * issue-key auto-links) as plain text.
+ * Line-based rather than a tokenizer: the support article is the only syntax
+ * reference and specifies no grammar precise enough for one. Colour, `#rev`,
+ * `#contents`, `#attach`, `#thumbnail`, wiki links and issue-key auto-links
+ * stay plain text.
  */
 function parseNotationBlocks(input: string, quoteDepth = 0): Content[] {
   // `\r?\n`, not `\n`: a line-based matcher anchored at `$` (a list marker,
@@ -350,11 +332,8 @@ function matchCodeOpen(line: string): { lang?: string } | null {
 }
 
 /**
- * `{code}`/`{code:lang}` … `{/code}`, including a pair opened and closed on
- * one line, and an unclosed block implicitly closed at EOF
- * (docs/specs/adapter.md §9.5). Contents are carried verbatim — not
- * inline-converted — mirroring how Backlog itself treats code-macro bodies
- * as opaque text.
+ * Contents are carried verbatim, not inline-converted: Backlog treats a code
+ * macro's body as opaque text.
  */
 function parseCodeBlock(
   lines: string[],
@@ -382,7 +361,7 @@ function parseCodeBlock(
     body.push(current);
     i += 1;
   }
-  // Unclosed at EOF: close it there anyway (§9.5).
+  // Unclosed at EOF: close it there anyway.
   return { node: codeNode(body.join('\n'), lang), nextIndex: i };
 }
 
@@ -458,19 +437,13 @@ function matchHeading(
 type ListMarker = { ordered: boolean; depth: number; text: string };
 
 /**
- * A `+`/`-` run followed by text. The text must be non-empty, which is what
- * keeps a trailing space from making a line a list item: `----␣` would
- * otherwise match as marker `----` with no text, and because `parseList` asks
- * this predicate alone while `parseNotationBlocks` tests `----` first, the same
- * line became a depth-4 empty item after a list and a `thematicBreak` anywhere
- * else (docs/specs/adapter.md §9.5). Rejecting an empty text sends both
- * `----␣` and `-␣` back to `parseNotationBlocks`, which classifies them
- * like any other line that is no list item.
+ * The text must be non-empty: `----␣` would otherwise match as marker `----`
+ * with no text, and because `parseList` asks this predicate alone while
+ * `parseNotationBlocks` tests `----` first, the same line became a depth-4
+ * empty item after a list and a `thematicBreak` anywhere else.
  *
  * `matchHeading` carries no such guard, so `*␣` is a `heading` with no
- * content while `*` alone is a paragraph. Do not read this predicate as a
- * parser-wide rule about trailing whitespace: §9.5 leaves the heading side to
- * a separate change.
+ * content; this is not a parser-wide rule about trailing whitespace.
  */
 function matchListMarker(line: string): ListMarker | null {
   const match = /^([+-]+)\s+(.*)$/.exec(line);
@@ -490,19 +463,11 @@ function matchListMarker(line: string): ListMarker | null {
 }
 
 /**
- * One list: the items sharing `marker`'s depth and kind, plus everything
- * nested under them (`+`/`-` with depth by marker repetition,
- * docs/specs/adapter.md §9.5). Each depth transition opens one nested `list`,
- * however far the marker jumps, and the list ends at the first marker it
- * cannot contain — shallower than its own, or of the other kind at its own
- * depth — or at the first line that is no list item at all (`matchListMarker`).
- * The caller resumes there: `parseNotationBlocks` for the outermost list, the
- * enclosing list for a nested one.
- *
- * Neither marker can be absorbed instead: mdast hangs a nested `list` off a
- * `listItem`, so a list shallower than this one has no item above it to hang
- * from, and reopening this list with the other kind would put its `ordered`
- * in the hands of whichever marker came last.
+ * A list ends at a shallower marker, or one of the other kind at its own
+ * depth, rather than absorbing it: mdast hangs a nested `list` off a
+ * `listItem`, so a shallower list has no item above it to hang from, and
+ * reopening this list with the other kind would put its `ordered` in the
+ * hands of whichever marker came last.
  */
 function parseList(
   lines: string[],
@@ -550,12 +515,7 @@ function matchTableRow(line: string): boolean {
   return trimmed.startsWith('|') && trimmed.length > 1;
 }
 
-/**
- * `|a|b|h` marks the header row; `|~cell` marks a header cell within any row
- * (docs/specs/adapter.md §9.5). Column alignment has no notation counterpart
- * so every table round-trips without an `align` array — the same loss as the
- * outbound direction (§9.6).
- */
+/** Column alignment has no notation counterpart, so no `align` array. */
 function parseTable(
   lines: string[],
   startIndex: number
@@ -591,12 +551,8 @@ function matchImage(trimmed: string): string | null {
 }
 
 /**
- * Inline notation within one logical line: `'''x'''` (italic) before `''x''`
- * (bold) because the longer marker would otherwise be split by the shorter
- * one's pattern; `%%x%%`; `[[label>url]]` / `[[label:url]]` / `[[url]]`;
- * `&br;`. Anything else (colour macros, `#rev`, `#contents`, `#attach`,
- * `#thumbnail`, wiki links, issue-key auto-links) is left as plain text —
- * §9.5 draws the line there rather than growing this into a wiki parser.
+ * `'''x'''` (italic) is tried before `''x''` (bold): the shorter marker's
+ * pattern would otherwise split the longer one.
  */
 function inlineToNodes(input: string): PhrasingNode[] {
   const nodes: PhrasingNode[] = [];

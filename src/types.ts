@@ -2,17 +2,11 @@ import type { Entity } from 'backlog-js';
 import type { Logger } from 'chat';
 
 /**
- * Which issue or pull request a thread, message or raw message is about
- * (docs/specs/adapter.md §2, D-PR2). The kind is an explicit, non-optional
- * coordinate on **both** kinds rather than issues being the unmarked default:
- * Backlog addresses the two through different endpoint families with
- * different coordinates, and their comment ids come from separate sequences
- * that may overlap (measured 2026-09-06,
- * `.claude/rules/backlog-pull-request-facts.md`), so nothing may infer the
- * kind from a segment count or from which field happens to be present.
- *
- * A pull request is addressed by `repositoryId` + `number`, never by its
- * space-wide `id`: that id addresses no endpoint at all.
+ * Which issue or pull request a thread, message or raw message is about.
+ * `kind` is explicit on both: issue and pull-request comment ids come from
+ * separate sequences that may overlap, so the kind is never inferred from
+ * which fields are present (D-PR2). A pull request is addressed by
+ * `repositoryId` + `number`; its space-wide `id` addresses no endpoint.
  */
 export type BacklogSubjectRef =
   | { kind: 'issue'; issueId: number }
@@ -21,15 +15,9 @@ export type BacklogSubjectRef =
 /**
  * A thread is a Backlog issue or pull request:
  * `backlog:<host>:<projectId>:issue:<issueId>` or
- * `backlog:<host>:<projectId>:pr:<repositoryId>:<number>`
- * (docs/specs/adapter.md §2). Numeric ids throughout: renaming a project's key
- * rewrites every issue key under it, and a repository can be renamed too
- * (docs/specs/adapter.md D8, `.claude/rules/backlog-webhook-facts.md`).
- *
- * `subject` is nested rather than flattened into this interface so the same
- * value travels from `decodeThreadId` into the subject layer, into
- * `raw.subject` and back out of `encodeMessageId` without being re-shaped at
- * each boundary (D-PR2).
+ * `backlog:<host>:<projectId>:pr:<repositoryId>:<number>`. Numeric ids
+ * throughout: renaming a project's key rewrites every issue key under it,
+ * and a repository can be renamed too (D8).
  */
 export interface BacklogThreadId {
   host: string;
@@ -37,18 +25,15 @@ export interface BacklogThreadId {
   subject: BacklogSubjectRef;
 }
 
-/**
- * A channel is a Backlog project: `backlog:<host>:<projectId>`
- * (docs/specs/adapter.md §2).
- */
+/** A channel is a Backlog project: `backlog:<host>:<projectId>`. */
 export interface BacklogChannelId {
   host: string;
   projectId: number;
 }
 
 /**
- * A user, host-qualified because user ids are unique only within one Backlog
- * space (docs/specs/adapter.md §2).
+ * A user, `<host>:<userId>`: user ids are unique only within one Backlog
+ * space.
  */
 export interface BacklogUserId {
   host: string;
@@ -57,9 +42,7 @@ export interface BacklogUserId {
 
 /**
  * Which part of a subject a message is: its body, one comment, or a
- * fieldchange update that carried no comment (docs/specs/adapter.md §2).
- * The root tag is `r` for both kinds rather than the earlier `i`, which meant
- * "issue" and would mislead on a pull request (D-PR9).
+ * field-change update that carried no comment.
  */
 export type BacklogMessagePart =
   | { part: 'root' }
@@ -67,13 +50,9 @@ export type BacklogMessagePart =
   | { part: 'update'; created: string };
 
 /**
- * A message id: `<host>:<subject>:<part>`. Host-qualified, and without the
- * `backlog:` prefix that thread and channel ids carry, because the core's
- * dedupe key (`dedupe:<adapter.name>:<message.id>`) already carries the
- * adapter name and has no thread component of its own
- * (docs/specs/adapter.md §2, `.claude/rules/chat-sdk-core-facts.md`) — so the
- * message id alone must disambiguate across every configured space, and the
- * subject's kind keeps two comment ids from different sequences apart.
+ * A message id: `<host>:<subject>:<part>`. The core dedupes on the message id
+ * alone, with no thread in the key, so the id names its host and its
+ * subject's kind as well as the comment.
  */
 export type BacklogMessageId = {
   host: string;
@@ -82,8 +61,8 @@ export type BacklogMessageId = {
 
 /**
  * A normalised field change, shared by webhook `content.changes[]` and REST
- * `changeLog[]` (docs/specs/adapter.md §3.5). Value systems are not unified
- * across the two sources — see `BacklogRawMessage`.
+ * `changeLog[]`. Value systems are not unified across the two sources — see
+ * `BacklogRawMessage`.
  */
 export interface BacklogChange {
   field: string;
@@ -312,7 +291,7 @@ export type BacklogRawMessage =
 
 /**
  * Extras a caller intersects with a Chat SDK postable to reach Backlog-only
- * behaviour on `postMessage` (docs/specs/adapter.md §3.4).
+ * behaviour on `postMessage`.
  */
 export interface BacklogPostableExtras {
   notifiedUserId?: number[];

@@ -1,7 +1,7 @@
 import { AdapterError } from '@chat-adapter/shared';
 import { z } from 'zod';
 
-import { mapTransportError } from './errors.js';
+import { asAdapterError } from './errors';
 
 import type {
   BacklogRawComment,
@@ -159,7 +159,7 @@ async function parse(
   try {
     body = await request;
   } catch (cause) {
-    throw cause instanceof AdapterError ? cause : mapTransportError(cause);
+    throw asAdapterError(cause);
   }
   const result = schema.safeParse(body);
   if (!result.success) {
@@ -217,7 +217,7 @@ export async function send(request: Promise<unknown>): Promise<void> {
   try {
     await request;
   } catch (cause) {
-    throw cause instanceof AdapterError ? cause : mapTransportError(cause);
+    throw asAdapterError(cause);
   }
 }
 
@@ -229,6 +229,6 @@ export async function download(
     const file = await request;
     return Buffer.from(await new Response(file.body).arrayBuffer());
   } catch (cause) {
-    throw cause instanceof AdapterError ? cause : mapTransportError(cause);
+    throw asAdapterError(cause);
   }
 }

@@ -1,5 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 
+import { errorMessage } from '../client/errors';
+
 import type { BacklogWebhookVerifier } from '../types';
 import type { Logger } from 'chat';
 
@@ -38,9 +40,7 @@ export async function verifyWebhookRequest(
   try {
     verified = await webhookVerifier(request, rawBody);
   } catch (cause) {
-    logger.error('webhook verifier threw', {
-      error: cause instanceof Error ? cause.message : String(cause),
-    });
+    logger.error('webhook verifier threw', { error: errorMessage(cause) });
     return undefined;
   }
   // Truthiness, not `=== true`: the verifier may hand back whatever its own

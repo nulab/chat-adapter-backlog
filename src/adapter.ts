@@ -7,6 +7,7 @@ import {
 import { ConsoleLogger, Message as MessageCtor } from 'chat';
 
 import { createBacklogClient } from './client/backlog';
+import { errorMessage } from './client/errors';
 import { parseConfig } from './config';
 import type { SpaceConfig } from './config';
 import { readGitRepository, readProject, readUser } from './client/responses';
@@ -151,26 +152,8 @@ function repositoryNameKey(host: string, repositoryId: number): string {
 }
 
 /**
- * Backlog adapter for Chat SDK; see docs/specs/adapter.md for the full
- * behavioural contract.
- *
- * A thread is a Backlog issue **or** a pull request, and every member reaches
- * Backlog the same way: decode the id, build the `SubjectClient` its subject
- * selects (`src/subject/client.ts`), and call the one implementation of the
- * member that serves both kinds. The class itself owns only what a
- * subject cannot: the space's configuration and port, the per-channel
- * project cache both formatting and pull-request URLs read, the repository-name
- * cache a pull request's URL needs, and the webhook response ladder.
- *
- * Every optional member the Chat SDK core degrades gracefully around
- * (`.claude/rules/chat-sdk-core-facts.md` "Degradations when optional members
- * are absent") that Backlog cannot actually support — `openDM`,
- * `postEphemeral`, `openModal`, `scheduleMessage`, `reply`,
- * `postObject`/`editObject`, `fetchChannelMessages`, `endTyping`,
- * `disconnect`, `onThreadSubscribe`, `getChannelVisibility`, `lockScope`,
- * `persistThreadHistory`, `supportsTurnCancellation`, `botUserId` — is
- * deliberately absent rather than implemented as a throwing stub, so the
- * core's own fallback behaviour runs instead of a Backlog-specific error.
+ * A Chat SDK adapter for one Backlog space, where a thread is an issue or a
+ * pull request and a channel is a project.
  */
 export class BacklogAdapter implements Adapter<
   BacklogThreadId,
@@ -180,22 +163,19 @@ export class BacklogAdapter implements Adapter<
 
   private readonly space: SpaceConfig;
   /**
-   * Configured, or learned from `GET /users/myself` when the id was left out.
-   * A failed lookup leaves it `undefined`, so the next caller that needs it
-   * asks again (D23).
+   * Left `undefined` by a failed lookup, so the next caller asks again (D23).
    */
   private identity: BotIdentity | undefined;
   private readonly backlog: Backlog;
   /**
-   * Keyed by channel id and cached for the process's lifetime (D14). The
-   * project key rides along because a pull request's web URL needs it and
-   * the pull-request object does not carry it.
+   * For the process's lifetime (D14). The project key rides along because a
+   * pull request's web URL needs it and the pull-request object lacks it.
    */
   private readonly projectCache = new Map<
     string,
     { projectKey: string; textFormattingRule: Types.TextFormattingRule }
   >();
-  /** The other half of a pull request's web URL; also filled for free by every pull-request webhook. */
+  /** The other half of a pull request's web URL, which the object lacks too. */
   private readonly repositoryNameCache = new Map<string, string>();
 
   private logger: Logger;
@@ -209,8 +189,6 @@ export class BacklogAdapter implements Adapter<
     }
     this.logger =
       this.space.logger ?? new ConsoleLogger('info').child('backlog');
-    // The logger is read per request rather than captured: `initialize`
-    // swaps in the `ChatInstance`'s after the client has been built.
     this.backlog = createBacklogClient({
       host: this.space.host,
       credential: this.space.credential,
@@ -224,12 +202,10 @@ export class BacklogAdapter implements Adapter<
   }
 
   /**
-   * A configured `botUserId` means no `GET /users/myself` at all, even with
-   * the name missing: on serverless every cold start runs `initialize`, and a
-   * bot that never relies on a typed `@name` would spend a request per start
-   * learning it. A failed lookup is logged, never thrown: the core memoises a
-   * rejected `initialize` and never retries it, which would refuse every later
-   * webhook until the process restarts (D23).
+   * Makes no request when `botUserId` is configured, even without the name.
+   * Otherwise the bot is read from `GET /users/myself`, and a failure is
+   * logged rather than thrown: the core never retries a rejected
+   * `initialize` (D23).
    */
   async initialize(chat: ChatInstance): Promise<void> {
     this.chat = chat;
@@ -238,7 +214,7 @@ export class BacklogAdapter implements Adapter<
       await this.botIdentity().catch((cause: unknown) => {
         this.logger.warn('bot identity lookup failed; retried on demand', {
           host: this.space.host,
-          error: cause instanceof Error ? cause.message : String(cause),
+          error: errorMessage(cause),
         });
       });
     } else if (this.identity.name === undefined) {
@@ -293,8 +269,7 @@ export class BacklogAdapter implements Adapter<
     _status?: string,
     _options?: TypingOptions
   ): Promise<void> {
-    // Backlog has no typing indicator; the
-    // member is required by the Adapter interface, so it resolves immediately.
+    // Required by `Adapter`; Backlog has no typing indicator.
   }
 
   /**
@@ -310,12 +285,10 @@ export class BacklogAdapter implements Adapter<
   }
 
   /**
-   * The `backlog-js` client this adapter's own traffic goes through, for the
-   * endpoints the adapter does not cover. A second client built beside it
-   * would have none of what this one carries: the bounded 429 retry, the
-   * `@chat-adapter/shared` errors and the per-call credential. It holds no
-   * credential of its own, so it is safe to keep past the call that asked for
-   * it.
+   * The `backlog-js` client the adapter's own requests go through, for the
+   * endpoints the adapter does not cover: it carries the bounded 429 retry,
+   * the `@chat-adapter/shared` errors and the per-request credential, which
+   * a client built beside it would not. It holds no credential itself.
    */
   client(): Backlog {
     return this.backlog;
@@ -334,11 +307,13 @@ export class BacklogAdapter implements Adapter<
     return CONVERTERS[rule].fromAst(content);
   }
 
+  private cachedProject(host: string, projectId: number) {
+    return this.projectCache.get(encodeChannelId({ host, projectId }));
+  }
+
   /** A cold cache is a `warn` and Markdown, never a failure. */
   private ruleFor(host: string, projectId: number): Types.TextFormattingRule {
-    const rule = this.projectCache.get(
-      encodeChannelId({ host, projectId })
-    )?.textFormattingRule;
+    const rule = this.cachedProject(host, projectId)?.textFormattingRule;
     if (rule === undefined) {
       this.logger.warn('textFormattingRule uncached; assuming markdown', {
         host,
@@ -354,15 +329,14 @@ export class BacklogAdapter implements Adapter<
    * being pinned to Markdown for the process's lifetime.
    */
   private async ensureProject(host: string, projectId: number): Promise<void> {
-    const channelId = encodeChannelId({ host, projectId });
-    if (this.projectCache.has(channelId)) {
+    if (this.cachedProject(host, projectId) !== undefined) {
       return;
     }
     try {
       const project = await readProject(
         this.clientFor(host).getProject(projectId)
       );
-      this.projectCache.set(channelId, {
+      this.projectCache.set(encodeChannelId({ host, projectId }), {
         projectKey: project.projectKey,
         textFormattingRule: project.textFormattingRule,
       });
@@ -370,7 +344,7 @@ export class BacklogAdapter implements Adapter<
       this.logger.warn('project lookup failed', {
         host,
         projectId,
-        error: cause instanceof Error ? cause.message : String(cause),
+        error: errorMessage(cause),
       });
     }
   }
@@ -384,12 +358,6 @@ export class BacklogAdapter implements Adapter<
     return CONVERTERS[this.ruleFor(host, projectId)];
   }
 
-  /**
-   * The seam every member goes through: one `SubjectClient` for the issue or
-   * pull request an id names (D-PR2). The
-   * kind is dispatched inside `subjectClientFor` and nowhere else, so nothing
-   * in this class asks what it is holding.
-   */
   private subjectClient(
     host: string,
     projectId: number,
@@ -398,10 +366,6 @@ export class BacklogAdapter implements Adapter<
     return subjectClientFor(this.clientFor(host), subject, { host, projectId });
   }
 
-  /**
-   * The half of `MessageBuilders` (`src/reads.ts`) that is per host rather
-   * than per subject; each read completes it with the coordinates it decoded.
-   */
   private messageBuilders(
     host: string,
     converter: BaseFormatConverter,
@@ -415,7 +379,6 @@ export class BacklogAdapter implements Adapter<
     };
   }
 
-  /** `subjectClient` for a thread id, with the coordinates it decoded to. */
   private subjectFor(threadId: string): {
     host: string;
     projectId: number;
@@ -430,24 +393,11 @@ export class BacklogAdapter implements Adapter<
   }
 
   /**
-   * The display names a subject's web URL needs and its REST object does not
-   * carry (docs/specs/adapter.md §7.3). Neither lookup is allowed to fail the
-   * read that asked for it: an unresolved name yields a `ThreadInfo` or
-   * `MessageSubject` without a `url`, which both types allow.
-   *
-   * The kind never appears here — `repositoryIdForName` is `undefined` for a
-   * subject whose URL needs no repository, so "which names does this subject
-   * need" is answered by the subject itself rather than by a branch that would
-   * have to be kept in step with a third kind.
-   *
-   * That one member gates the **project key** too, so a subject that needs no
-   * repository name spends no Get Project either: §7.3 budgets an issue thread
-   * exactly one Get Issue and §7.4 no call at all for a `kind: "issue"` raw,
-   * and the issue client reads nothing off `SubjectNames` — it derives its own
-   * project key from `issueKey`. Looking the key up regardless bought a
-   * `read`-bucket call per issue thread. If a kind ever needs the project key without a
-   * repository, give `SubjectClient` a second member for it rather than
-   * restoring the unconditional lookup.
+   * `repositoryIdForName` gates the project key too, so an issue thread
+   * spends no Get Project: its read budget is one Get Issue, and the issue
+   * client derives its project key from `issueKey`. A kind that needs the
+   * key without a repository gets a `SubjectClient` member of its own rather
+   * than an unconditional lookup here.
    */
   private async namesFor(
     host: string,
@@ -460,18 +410,14 @@ export class BacklogAdapter implements Adapter<
     }
     await this.ensureProject(host, projectId);
     return {
-      projectKey: this.projectCache.get(`backlog:${host}:${projectId}`)
-        ?.projectKey,
+      projectKey: this.cachedProject(host, projectId)?.projectKey,
       repositoryName: await this.repositoryName(host, projectId, repositoryId),
     };
   }
 
   /**
-   * A git repository's display name, cached per host (docs/specs/adapter.md
-   * §7.3). A failed lookup is **not** cached and is reported once as a `warn`:
-   * the caller then omits the URL rather than failing, and the next call may
-   * find the repository readable again (a permission change, a transient
-   * network failure).
+   * A failed lookup is not cached: the caller omits the URL rather than
+   * failing, and the next call may find the repository readable again.
    */
   private async repositoryName(
     host: string,
@@ -494,7 +440,7 @@ export class BacklogAdapter implements Adapter<
         host,
         projectId,
         repositoryId,
-        error: cause instanceof Error ? cause.message : String(cause),
+        error: errorMessage(cause),
       });
       return undefined;
     }
@@ -508,7 +454,7 @@ export class BacklogAdapter implements Adapter<
    * and never reach the error below. `throwOnUnsupported: false` turns the
    * unsupported case into `null`, which leaves `platform` selecting wording
    * that is never rendered and keeps every error this adapter throws named
-   * `"backlog"` (#48).
+   * `"backlog"`.
    */
   private toFileBuffer = async (file: FileUpload): Promise<Buffer> => {
     const buffer = await toBuffer(file.data, {
@@ -573,7 +519,7 @@ export class BacklogAdapter implements Adapter<
     } catch (cause) {
       this.logger.error('webhook rejected: bot identity unavailable', {
         host,
-        error: cause instanceof Error ? cause.message : String(cause),
+        error: errorMessage(cause),
       });
       return new Response('Bot identity unavailable', { status: 503 });
     }
@@ -670,7 +616,7 @@ export class BacklogAdapter implements Adapter<
     this.logger.error('inbound processing failed', {
       host,
       threadId,
-      error: cause instanceof Error ? cause.message : String(cause),
+      error: errorMessage(cause),
     });
   }
 
@@ -750,14 +696,6 @@ export class BacklogAdapter implements Adapter<
     });
   }
 
-  /**
-   * The comment `messageId` names is edited on the **thread's** subject, and
-   * a `messageId` naming another host or another subject is rejected rather
-   * than followed: a message id is self-contained (docs/specs/adapter.md §2),
-   * so an id from another subject must not be silently re-pointed at the
-   * thread's own — nor must the thread be silently re-pointed at the id's
-   * (§6 preamble; `requireCommentInThread` in `src/egress.ts`).
-   */
   async editMessage(
     threadId: string,
     messageId: string,
@@ -780,9 +718,8 @@ export class BacklogAdapter implements Adapter<
   }
 
   /**
-   * Delegates to the subject client without asking what kind it is: deleting a
-   * pull-request comment is refused there, before any request, because Backlog
-   * has no endpoint for it (docs/specs/adapter.md §6.3, D-PR3).
+   * Rejects on a pull-request thread: Backlog cannot delete its comments
+   * (D-PR3).
    */
   async deleteMessage(threadId: string, messageId: string): Promise<void> {
     const { host, projectId, subject, commentId } = requireCommentInThread(
@@ -869,9 +806,8 @@ export class BacklogAdapter implements Adapter<
       threadId,
       messageId,
       subject,
-      // Deferred so an id §7.2 answers `null` for still costs nothing: this
-      // resolves the project's formatting rule, and `fetchMessageRead` only
-      // calls it once it is going to build a message.
+      // Deferred: resolving the formatting rule can cost a Get Project, and
+      // an id answered `null` must cost nothing.
       builders: async () =>
         this.messageBuilders(
           host,
@@ -910,10 +846,8 @@ export class BacklogAdapter implements Adapter<
   }
 
   /**
-   * `getUser` (docs/specs/adapter.md §7.7). `chat.getUser()` cannot route to
-   * this adapter — the core infers an adapter from id shape and does not
-   * recognise `<host>:<id>` (`.claude/rules/chat-sdk-core-facts.md`) — so a
-   * caller reaches this only through `adapter.getUser()` directly.
+   * Call it on the adapter: `chat.getUser()` picks an adapter by the shape of
+   * the id and does not recognise `<host>:<userId>`.
    */
   async getUser(userId: string): Promise<UserInfo | null> {
     const { host } = decodeUserIdString(userId);
@@ -925,12 +859,8 @@ export class BacklogAdapter implements Adapter<
   }
 
   /**
-   * `fetchSubject` (docs/specs/adapter.md §7.4). Called lazily by
-   * `message.subject`; the core turns a thrown error into `null`
-   * (`.claude/rules/chat-sdk-core-facts.md`), so this deliberately lets a
-   * lookup failure propagate rather than pre-emptively returning `null`
-   * itself — the core's own handling is the single place that decision is
-   * made.
+   * A failed lookup propagates rather than answering `null`: the core's
+   * `message.subject` already turns a thrown error into `null`.
    */
   async fetchSubject(raw: BacklogRawMessage): Promise<MessageSubject | null> {
     const { host } = raw;
@@ -957,7 +887,7 @@ export class BacklogAdapter implements Adapter<
     return rehydrateAttachmentRead({
       attachment,
       host: this.space.host,
-      client: () => this.backlog,
+      client: this.backlog,
     });
   }
 }

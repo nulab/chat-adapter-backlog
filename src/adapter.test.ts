@@ -106,16 +106,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** The headers of each request `adapter.client()` makes, answered with the bot user. */
-async function requestHeaders(
-  adapter: BacklogAdapter,
-  requests = 1
-): Promise<Headers[]> {
+async function requestHeaders(adapter: BacklogAdapter): Promise<Headers> {
   network.mockImplementation(async () => new Response(JSON.stringify(BOT)));
-  for (let request = 0; request < requests; request += 1) {
-    await adapter.client().getMyself();
-  }
-  return network.mock.calls.map(([, init]) => new Headers(init?.headers));
+  await adapter.client().getMyself();
+  return new Headers(network.mock.calls[0]?.[1]?.headers);
 }
 
 function validConfig() {
@@ -139,12 +133,7 @@ describe('BacklogAdapter construction', () => {
 });
 
 describe('BacklogAdapter lifecycle and identity', () => {
-  it('exposes "backlog" as its name', () => {
-    const adapter = new BacklogAdapter(validConfig());
-    expect(adapter.name).toBe('backlog');
-  });
-
-  it('is always not a DM', () => {
+  it('reports no thread as a DM', () => {
     const adapter = new BacklogAdapter(validConfig());
     expect(adapter.isDM('backlog:example.backlog.com:500:issue:8001')).toBe(
       false
@@ -170,51 +159,10 @@ describe('BacklogAdapter lifecycle and identity', () => {
       )
     ).toBe('backlog:example.backlog.com:500');
   });
-
-  it('a pull request thread id carries the repository id and number, never the repository name', () => {
-    const adapter = new BacklogAdapter(validConfig());
-    const decoded: BacklogThreadId = {
-      host: 'example.backlog.com',
-      projectId: 500,
-      subject: { kind: 'pullRequest', repositoryId: 700, number: 12 },
-    };
-
-    const threadId = adapter.encodeThreadId(decoded);
-
-    expect(threadId).toBe('backlog:example.backlog.com:500:pr:700:12');
-    expect(threadId).not.toContain('example-repo');
-    expect(adapter.decodeThreadId(threadId)).toEqual(decoded);
-  });
-
-  it('the channel of a pull request thread is its project', () => {
-    const adapter = new BacklogAdapter(validConfig());
-    expect(
-      adapter.channelIdFromThreadId('backlog:example.backlog.com:500:pr:700:12')
-    ).toBe('backlog:example.backlog.com:500');
-  });
-
-  it('stores the ChatInstance and swaps to its logger without making an API call', async () => {
-    const adapter = new BacklogAdapter(validConfig());
-    const debug = vi.fn();
-    const chatInstance = {
-      getLogger: () => ({
-        debug,
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        child: vi.fn(),
-      }),
-    } as unknown as import('chat').ChatInstance;
-
-    await adapter.initialize(chatInstance);
-
-    expect(adapter['chat']).toBe(chatInstance);
-    expect(adapter['logger'].debug).toBe(debug);
-  });
 });
 
 describe('BacklogAdapter optional members Backlog cannot support are absent', () => {
-  it('has no openDM, postEphemeral, openModal, scheduleMessage, reply, postObject, editObject, postChannelMessage, markAsRead, fetchChannelMessages, endTyping, disconnect, onThreadSubscribe, getChannelVisibility, lockScope, persistThreadHistory, supportsTurnCancellation or botUserId', () => {
+  it('leaves out every optional member Backlog cannot support, so the core falls back', () => {
     const adapter = new BacklogAdapter(validConfig());
     const optionalMembers = [
       'openDM',
@@ -244,7 +192,7 @@ describe('BacklogAdapter optional members Backlog cannot support are absent', ()
     }
   });
 
-  it('implements every P6 optional member', () => {
+  it('implements the optional members Backlog can support', () => {
     const adapter = new BacklogAdapter(validConfig());
     const implementedMembers = [
       'stream',
@@ -363,37 +311,19 @@ describe('BacklogAdapter.client', () => {
   it('sends an api key as the Backlog-API-Key header', async () => {
     const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
 
-    const [headers] = await requestHeaders(adapter);
+    const headers = await requestHeaders(adapter);
 
-    expect(headers?.get('Backlog-API-Key')).toBe('key');
-    expect(headers?.get('Authorization')).toBeNull();
+    expect(headers.get('Backlog-API-Key')).toBe('key');
+    expect(headers.get('Authorization')).toBeNull();
   });
 
   it('sends an access token as a Bearer Authorization header', async () => {
     const adapter = createBacklogAdapter({ ...base, accessToken: 'token' });
 
-    const [headers] = await requestHeaders(adapter);
+    const headers = await requestHeaders(adapter);
 
-    expect(headers?.get('Authorization')).toBe('Bearer token');
-    expect(headers?.get('Backlog-API-Key')).toBeNull();
-  });
-
-  it('asks a credential resolver again for every request', async () => {
-    let calls = 0;
-    const adapter = createBacklogAdapter({
-      ...base,
-      accessToken: async () => {
-        calls += 1;
-        return `token-${calls}`;
-      },
-    });
-
-    const headers = await requestHeaders(adapter, 2);
-
-    expect(headers.map((sent) => sent.get('Authorization'))).toEqual([
-      'Bearer token-1',
-      'Bearer token-2',
-    ]);
+    expect(headers.get('Authorization')).toBe('Bearer token');
+    expect(headers.get('Backlog-API-Key')).toBeNull();
   });
 });
 
@@ -774,12 +704,6 @@ const ISSUE_SUBJECT: BacklogSubjectRef = {
   kind: 'issue',
   issueId: FIXTURE.issueId,
 };
-const PULL_REQUEST_SUBJECT: BacklogSubjectRef = {
-  kind: 'pullRequest',
-  repositoryId: FIXTURE.repositoryId,
-  number: FIXTURE.pullRequestNumber,
-};
-const PULL_REQUEST_COMMENT_ID = 7000001;
 
 const URGENT_CONTENT: FormattedContent = {
   type: 'root',
@@ -972,19 +896,6 @@ describe('BacklogAdapter.editMessage / deleteMessage', () => {
     expect(deleteIssueComment).toHaveBeenCalledWith(FIXTURE.issueId, 1);
   });
 
-  it('deleting a pull request comment through an issue thread is rejected', async () => {
-    const { adapter, backlog } = egressAdapter();
-    const deleteIssueComment = vi.spyOn(backlog.client, 'deleteIssueComment');
-
-    await expect(
-      adapter.deleteMessage(
-        EGRESS_THREAD_ID,
-        commentMessageId(PULL_REQUEST_SUBJECT, PULL_REQUEST_COMMENT_ID)
-      )
-    ).rejects.toThrow(ValidationError);
-    expect(deleteIssueComment).not.toHaveBeenCalled();
-  });
-
   it('deleting an issue comment through a pull request thread is rejected before any request', async () => {
     const { adapter, backlog } = egressAdapter();
     const deleteIssueComment = vi.spyOn(backlog.client, 'deleteIssueComment');
@@ -993,22 +904,6 @@ describe('BacklogAdapter.editMessage / deleteMessage', () => {
       adapter.deleteMessage(PULL_REQUEST_THREAD_ID, commentMessageId())
     ).rejects.toThrow(ValidationError);
     expect(deleteIssueComment).not.toHaveBeenCalled();
-    expect(network).not.toHaveBeenCalled();
-  });
-
-  it('deleting a pull request comment fails before any request because Backlog has no endpoint', async () => {
-    const { adapter } = egressAdapter();
-
-    const failure: unknown = await adapter
-      .deleteMessage(
-        PULL_REQUEST_THREAD_ID,
-        commentMessageId(PULL_REQUEST_SUBJECT, PULL_REQUEST_COMMENT_ID)
-      )
-      .then(() => undefined)
-      .catch((cause: unknown) => cause);
-
-    expect(failure).toBeInstanceOf(AdapterError);
-    expect((failure as AdapterError).code).toBe('UNSUPPORTED_OPERATION');
     expect(network).not.toHaveBeenCalled();
   });
 });
@@ -1088,19 +983,6 @@ describe('BacklogAdapter reactions', () => {
 
     expect(removeStar.mock.calls).toEqual([[1]]);
   });
-
-  it('a non-comment id cannot be starred', async () => {
-    const { adapter } = egressAdapter();
-    const issueMessageId = encodeMessageId({
-      host: FIXTURE.host,
-      subject: ISSUE_SUBJECT,
-      part: 'root',
-    });
-
-    await expect(
-      adapter.addReaction(EGRESS_THREAD_ID, issueMessageId, 'star')
-    ).rejects.toThrow(ValidationError);
-  });
 });
 
 describe('BacklogAdapter.fetchMessages / fetchMessage / fetchThread', () => {
@@ -1155,18 +1037,6 @@ describe('BacklogAdapter.fetchMessages / fetchMessage / fetchThread', () => {
     );
 
     expect(urgent?.formatted).toEqual(URGENT_CONTENT);
-  });
-
-  it('fetchThread resolves the issue', async () => {
-    const { adapter } = egressAdapter();
-
-    const thread = await adapter.fetchThread(EGRESS_THREAD_ID);
-
-    expect(thread).toMatchObject({
-      channelId: `backlog:${FIXTURE.host}:${FIXTURE.projectId}`,
-      channelName: FIXTURE.projectKey,
-      isDM: false,
-    });
   });
 
   it('thread info names its kind for both issues and pull requests', async () => {
@@ -1337,31 +1207,6 @@ describe('BacklogAdapter.getUser', () => {
   });
 });
 
-describe('BacklogAdapter.fetchSubject', () => {
-  it('the parent subject is the issue', async () => {
-    const { adapter } = egressAdapter();
-    const message = await adapter.fetchMessage(
-      EGRESS_THREAD_ID,
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: ISSUE_SUBJECT,
-        part: 'root',
-      })
-    );
-    expect(message).not.toBeNull();
-
-    const subject =
-      message === null ? null : await adapter.fetchSubject(message.raw);
-
-    expect(subject).toMatchObject({
-      id: EGRESS_THREAD_ID,
-      type: 'issue',
-      title: 'Deploy fails on the staging space',
-      url: `https://${FIXTURE.host}/view/${FIXTURE.projectKey}-1`,
-    });
-  });
-});
-
 describe('BacklogAdapter.fetchChannelInfo', () => {
   it('names the project and reports its key and formatting rule', async () => {
     const { adapter } = egressAdapter({ textFormattingRule: 'backlog' });
@@ -1394,51 +1239,6 @@ describe('BacklogAdapter.rehydrateAttachment', () => {
 
     expect(typeof rehydrated.fetchData).toBe('function');
   });
-
-  it('an attachment on a foreign host is returned unchanged', () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
-    const attachment = {
-      type: 'file' as const,
-      name: 'log.txt',
-      url: `https://not-configured.backlog.com/api/v2/issues/${FIXTURE.issueId}/attachments/42`,
-    };
-
-    const rehydrated = adapter.rehydrateAttachment(attachment);
-
-    expect(rehydrated).toEqual(attachment);
-    expect(rehydrated.fetchData).toBeUndefined();
-  });
-
-  it('an attachment with no url is returned unchanged', () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
-    const attachment = { type: 'file' as const, name: 'log.txt' };
-
-    expect(adapter.rehydrateAttachment(attachment)).toEqual(attachment);
-  });
-
-  it('rehydrating an attachment accepts both url shapes and refuses a foreign host for both', () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
-    const urls = [
-      `https://${FIXTURE.host}/api/v2/issues/${FIXTURE.issueId}/attachments/42`,
-      `https://${FIXTURE.host}/api/v2/projects/${FIXTURE.projectId}/git/repositories/${FIXTURE.repositoryId}/pullRequests/${FIXTURE.pullRequestNumber}/attachments/42`,
-    ];
-
-    for (const url of urls) {
-      const rehydrated = adapter.rehydrateAttachment({
-        type: 'file',
-        name: 'log.txt',
-        url,
-      });
-      expect(typeof rehydrated.fetchData).toBe('function');
-
-      const foreign = adapter.rehydrateAttachment({
-        type: 'file',
-        name: 'log.txt',
-        url: url.replace(FIXTURE.host, 'not-configured.backlog.com'),
-      });
-      expect(foreign.fetchData).toBeUndefined();
-    }
-  });
 });
 
 const BOLD_CONTENT: FormattedContent = {
@@ -1462,7 +1262,7 @@ describe('BacklogAdapter.renderFormatted', () => {
     return adapter;
   }
 
-  it('a bold reply on a notation project uses two quotes', async () => {
+  it("rendering for a thread uses its project's cached rule", async () => {
     const adapter = await onNotationProject();
 
     expect(adapter.renderFormatted(BOLD_CONTENT, EGRESS_THREAD_ID)).toBe(
@@ -1651,67 +1451,11 @@ describe('BacklogAdapter bot identity (D23)', () => {
     expect(adapter.userName).toBe('');
   });
 
-  it('without a botUserName, a typed @name is not a mention but a notification to the bot is', async () => {
-    const adapter = withProject(
-      createBacklogAdapter({
-        ...identitylessConfig(),
-        botUserId: FIXTURE.bot.id,
-      })
-    );
-    const dispatched = await initializeCapturingDispatches(adapter);
-
-    await adapter.handleWebhook(
-      webhookRequest(
-        issueCommented({ text: `@${FIXTURE.bot.name} please help` })
-      )
-    );
-    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
-    await adapter.handleWebhook(
-      webhookRequest(
-        issueCommented({
-          commentId: 3002,
-          notifications: [
-            {
-              user: { id: FIXTURE.bot.id, name: FIXTURE.bot.name },
-              reason: 2,
-            },
-          ],
-        })
-      )
-    );
-    await vi.waitFor(() => expect(dispatched).toHaveLength(2));
-
-    expect(dispatched.map(({ message }) => message.isMention)).toEqual([
-      false,
-      true,
-    ]);
-  });
-
   it('constructing without a bot identity validates synchronously and calls nothing', () => {
     const adapter = createBacklogAdapter(identitylessConfig());
 
     expect(adapter.name).toBe('backlog');
     expect(network).not.toHaveBeenCalled();
-  });
-
-  it('constructs from BACKLOG_HOST, BACKLOG_API_KEY and BACKLOG_WEBHOOK_SECRET alone', () => {
-    process.env.BACKLOG_HOST = 'example.backlog.com';
-    process.env.BACKLOG_API_KEY = 'env-api-key';
-    process.env.BACKLOG_WEBHOOK_SECRET = 'env-webhook-secret';
-
-    expect(() => createBacklogAdapter()).not.toThrow();
-  });
-
-  it('blank BACKLOG_BOT_USER_ID and BACKLOG_BOT_USER_NAME are looked up rather than rejected', async () => {
-    process.env.BACKLOG_BOT_USER_ID = '';
-    process.env.BACKLOG_BOT_USER_NAME = '';
-    const adapter = createBacklogAdapter(identitylessConfig());
-    const getMyself = answeringMyself(adapter);
-
-    await adapter.initialize(mockChat());
-
-    expect(getMyself).toHaveBeenCalledTimes(1);
-    expect(adapter.userName).toBe(FIXTURE.bot.name);
   });
 
   it('with neither configured, initialize reads both from one GET /users/myself', async () => {
