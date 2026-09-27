@@ -4,11 +4,9 @@
  * exists for the compiler, which is why nothing below is awaited at the top
  * level or needs a credential.
  *
- * What it writes out is the shapes README.md documents, and README.md's
- * samples mirror it once #104 is on main. They are not extracted from it
- * automatically, so a README sample that changes shape changes here in the
- * same commit — otherwise the README can document a call that no longer
- * compiles, which is what the 2026-09-23 release review found by hand.
+ * The samples are not extracted from README.md automatically, so a README
+ * sample that changes shape changes here in the same commit — otherwise the
+ * README can document a call that no longer compiles.
  */
 import { createMemoryState } from '@chat-adapter/state-memory';
 import {
@@ -47,7 +45,6 @@ chat.onNewMention(async (thread, message) => {
   await thread.post(reply);
 
   await thread.post({ markdown: '<@U100> please take a look' });
-  await thread.post({ markdown: '<@T7> <@project> release is out' });
 
   const { part } = decodeMessageId(message.id);
   if (part === 'root') {
@@ -65,7 +62,6 @@ export function POST(
 
 export async function reachBacklogDirectly(): Promise<void> {
   const client: Backlog = backlog.client();
-  await client.getRateLimit();
   await client.getCustomFields(500);
   await client.getPullRequests(500, '700', { count: 20 });
   await client.patchIssue(8001, { assigneeId: 100 });
