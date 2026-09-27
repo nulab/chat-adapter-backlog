@@ -533,7 +533,7 @@ describe('user ids', () => {
   });
 });
 
-describe('ids beyond the safe integer range', () => {
+describe('ids past 2^53-1, which Number would read as a float that re-encodes as a different id (1e20 for 99999999999999999999)', () => {
   const BIG = '99999999999999999999';
   const LARGEST = String(Number.MAX_SAFE_INTEGER);
 

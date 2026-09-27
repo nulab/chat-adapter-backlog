@@ -68,9 +68,11 @@ export function requireCommentInThread(
  * Membership is not checked: Backlog drops a non-member id without failing
  * the request (measured).
  */
-const notifiedUserIdSchema = z.array(z.number().int().positive()).optional();
+const backlogPostableExtrasSchema = z.object({
+  notifiedUserId: z.array(z.number().int().positive()).optional(),
+});
 
-export function extractNotifiedUserId(
+function extractNotifiedUserId(
   message: AdapterPostableMessage
 ): number[] | undefined {
   if (typeof message !== 'object' || message === null) {
@@ -79,14 +81,16 @@ export function extractNotifiedUserId(
   if (!('notifiedUserId' in message)) {
     return undefined;
   }
-  const result = notifiedUserIdSchema.safeParse(message.notifiedUserId);
+  const result = backlogPostableExtrasSchema.safeParse({
+    notifiedUserId: message.notifiedUserId,
+  });
   if (!result.success) {
     throw new ValidationError(
       'backlog',
-      `notifiedUserId must be an array of positive integers: ${z.prettifyError(result.error)}`
+      `notifiedUserId must be an array of positive integers: ${result.error.message}`
     );
   }
-  return result.data;
+  return result.data.notifiedUserId;
 }
 
 /**
@@ -95,7 +99,7 @@ export function extractNotifiedUserId(
  * unattached upload after an hour) without racing a later one that would
  * otherwise still be in flight.
  */
-export async function uploadFiles(
+async function uploadFiles(
   client: Backlog,
   files: FileUpload[],
   toBuffer: (file: FileUpload) => Promise<Buffer>

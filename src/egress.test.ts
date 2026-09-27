@@ -5,11 +5,9 @@ import {
   addReaction,
   bufferStream,
   editComment,
-  extractNotifiedUserId,
   postComment,
   removeReaction,
   requireCommentInThread,
-  uploadFiles,
 } from './egress';
 import { BacklogMarkdownConverter } from './format/markdown';
 import { encodeMessageId } from './ids';
@@ -128,40 +126,6 @@ describe('requireCommentInThread', () => {
   });
 });
 
-describe('extractNotifiedUserId', () => {
-  it('a mistyped notifiedUserId is a validation error', () => {
-    const message = {
-      markdown: 'hi',
-      notifiedUserId: ['not-a-number'],
-    } as unknown as Parameters<typeof extractNotifiedUserId>[0];
-    expect(() => extractNotifiedUserId(message)).toThrow(ValidationError);
-  });
-
-  it('a negative notifiedUserId is a validation error', () => {
-    const message = {
-      markdown: 'hi',
-      notifiedUserId: [-1],
-    } as unknown as Parameters<typeof extractNotifiedUserId>[0];
-    expect(() => extractNotifiedUserId(message)).toThrow(ValidationError);
-  });
-
-  it('a well-typed notifiedUserId passes through', () => {
-    const message: PostableMarkdown & BacklogPostableExtras = {
-      markdown: 'hi',
-      notifiedUserId: [100, 101],
-    };
-    expect(extractNotifiedUserId(message)).toEqual([100, 101]);
-  });
-
-  it('a postable without notifiedUserId has no extras', () => {
-    expect(extractNotifiedUserId({ markdown: 'hi' })).toBeUndefined();
-  });
-
-  it('a string postable has no extras', () => {
-    expect(extractNotifiedUserId('hi')).toBeUndefined();
-  });
-});
-
 describe('postComment', () => {
   it.each([
     { label: 'issue', ref: ISSUE, threadId: THREAD_ID },
@@ -254,6 +218,76 @@ describe('postComment', () => {
       content: 'See attached',
       attachmentId: [77],
     });
+  });
+
+  it.each([
+    { label: 'a mistyped', notifiedUserId: ['not-a-number'] },
+    { label: 'a negative', notifiedUserId: [-1] },
+  ])(
+    '$label notifiedUserId is a validation error and posts nothing',
+    async ({ notifiedUserId }) => {
+      const addComment = vi.fn();
+      const message = {
+        markdown: 'hi',
+        notifiedUserId,
+      } as unknown as PostableMarkdown;
+
+      await expect(
+        postComment({
+          host: HOST,
+          projectId: PROJECT_ID,
+          subject: subjectStub(ISSUE, { addComment }),
+          client: stubClient({}),
+          converter: new BacklogMarkdownConverter(),
+          message,
+          toBuffer: noFiles,
+        })
+      ).rejects.toThrow(ValidationError);
+      expect(addComment).not.toHaveBeenCalled();
+    }
+  );
+
+  it('a string postable is posted with no users to notify', async () => {
+    const addComment = vi.fn().mockResolvedValue(comment());
+    await postComment({
+      host: HOST,
+      projectId: PROJECT_ID,
+      subject: subjectStub(ISSUE, { addComment }),
+      client: stubClient({}),
+      converter: new BacklogMarkdownConverter(),
+      message: 'hi',
+      toBuffer: noFiles,
+    });
+
+    expect(addComment).toHaveBeenCalledWith({ content: 'hi' });
+  });
+
+  it('stops uploading after a file fails, and posts no comment', async () => {
+    const postSpaceAttachment = vi.fn().mockResolvedValue({ id: 77 });
+    const addComment = vi.fn();
+    await expect(
+      postComment({
+        host: HOST,
+        projectId: PROJECT_ID,
+        subject: subjectStub(ISSUE, { addComment }),
+        client: stubClient({ postSpaceAttachment }),
+        converter: new BacklogMarkdownConverter(),
+        message: {
+          markdown: 'See attached',
+          files: [
+            { filename: 'a.txt', data: Buffer.from('a') },
+            { filename: 'b.txt', data: Buffer.from('b') },
+            { filename: 'c.txt', data: Buffer.from('c') },
+          ],
+        },
+        toBuffer: (file) =>
+          file.filename === 'b.txt'
+            ? Promise.reject(new Error('cannot read b'))
+            : Promise.resolve(Buffer.from('a')),
+      })
+    ).rejects.toThrow('cannot read b');
+    expect(postSpaceAttachment).toHaveBeenCalledOnce();
+    expect(addComment).not.toHaveBeenCalled();
   });
 
   it('a failed comment call rejects instead of returning a synthetic message', async () => {
@@ -434,26 +468,5 @@ describe('bufferStream', () => {
   it('an empty stream buffers to an empty string', async () => {
     async function* chunks(): AsyncIterable<string> {}
     expect(await bufferStream(chunks())).toBe('');
-  });
-});
-
-describe('uploadFiles', () => {
-  it('stops issuing uploads after a failure', async () => {
-    const postSpaceAttachment = vi.fn().mockResolvedValue({ id: 77 });
-    await expect(
-      uploadFiles(
-        stubClient({ postSpaceAttachment }),
-        [
-          { filename: 'a.txt', data: Buffer.from('a') },
-          { filename: 'b.txt', data: Buffer.from('b') },
-          { filename: 'c.txt', data: Buffer.from('c') },
-        ],
-        (file) =>
-          file.filename === 'b.txt'
-            ? Promise.reject(new Error('cannot read b'))
-            : Promise.resolve(Buffer.from('a'))
-      )
-    ).rejects.toThrow('cannot read b');
-    expect(postSpaceAttachment).toHaveBeenCalledOnce();
   });
 });

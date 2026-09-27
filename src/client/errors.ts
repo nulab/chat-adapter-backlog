@@ -153,7 +153,10 @@ export function mapTransportError(cause: unknown): NetworkError {
   );
 }
 
-/** An `AdapterError` the injected `fetch` already mapped passes through unchanged. */
+/**
+ * The injected `fetch` has already mapped an `AdapterError`; wrapping it again
+ * would bury Backlog's error code under a `NetworkError`.
+ */
 export function asAdapterError(cause: unknown): AdapterError {
   return cause instanceof AdapterError ? cause : mapTransportError(cause);
 }
