@@ -1078,11 +1078,12 @@ answers 400 with error code 6 `Undefined resource` (measured 2026-09-06) — and
 Consume the iterable to completion, concatenating `string` chunks and
 `{ type: "markdown_text" }` chunks; ignore `task_update`/`plan_update` chunks.
 Then exactly one `postMessage(threadId, { markdown: buffered })` and return its
-result. Rationale is rate-limit protection (D4). `options.signal` aborting ends consumption and posts what was
-buffered so far — `" "` when that is nothing, the same as an empty stream
-(§4.2, §15 question 7): the contract `stream()` keeps whatever ends it is a
-`SentMessage` the caller can edit or delete, and posting nothing would mean
-resolving to `null` after consumption, which question 7 rejected.
+result. Rationale is rate-limit protection (D4). `options.signal` aborting ends
+consumption and posts what was buffered so far — `" "` when that is nothing, the
+same as an empty stream (§4.2, §15 question 7): the contract `stream()` keeps
+whatever ends it is a `SentMessage` the caller can edit or delete, and posting
+nothing would mean resolving to `null` after consumption, which question 7
+rejected.
 
 Consumption is raced against the signal rather than read with `for await`,
 which can only re-check the signal once the next chunk arrives. A source that
@@ -2402,7 +2403,7 @@ open list.
 | 9 | Type-4 deletion in the first release | **confirmed** — shipped; see §15.2 | `DISPATCHED_ACTIVITY_TYPES` includes 4 and dispatches `chat.processMessageDeleted` unconditionally (`src/webhook/payload.ts`) (#12) |
 | 10 | Retry defaults | **confirmed** — `maxRetries: 1`, `maxWaitMs: 60_000`, both overridable, `maxRetries: 0` supported | `DEFAULT_MAX_RETRIES` / `DEFAULT_MAX_WAIT_MS` in `src/client/rate-limit.ts`, validated in `src/adapter.ts`; `src/client/rate-limit.test.ts` "retries once when the reset is within maxWaitMs", "gives up without waiting when the wait would exceed maxWaitMs", "maxRetries: 0 never retries even with an imminent reset" (#9, bounded further by #71) |
 | 11 | Live-suite variables | **changed** — four, not three: `BACKLOG_LIVE_PULL_REQUEST=<repositoryId>:<number>` joined `BACKLOG_HOST`, `BACKLOG_API_KEY`, `BACKLOG_LIVE_ISSUE_ID` | `src/test/live.test.ts` reads all four and skips the pull-request half independently of the issue half, because a pull request needs a Git-enabled project and two coordinates an issue id cannot carry (#15, #24). The suite itself has still never been run — §15.4 |
-| 12 | No timestamp-staleness window | **confirmed** — accepted, with the departure documented in §5.1; CLAUDE.md's "Don't" list was later reconciled with it rather than left contradicting it | `src/webhook/verify.ts` applies no timestamp check; §5.1 states the departure and its reason (unsigned timestamps give no protection and would drop measured late redeliveries). The plan's rider "amend CLAUDE.md wording for this adapter" was **not** taken up: CLAUDE.md's "Don't" list is generic adapter guidance, and the reader who needs this adapter's choice is reading §5.1 (#12) |
+| 12 | No timestamp-staleness window | **confirmed** — accepted, with the departure documented in §5.1; CLAUDE.md's "Don't" list was later reconciled with it rather than left contradicting it | `src/webhook/verify.ts` applies no timestamp check; §5.1 states the departure and its reason (unsigned timestamps give no protection and would drop measured late redeliveries). (#12) |
 | 13 | D-PR10 pull-request comment attachment resolution | **confirmed** — lazy list-and-match by name, newest match wins | The type-20 / `changeLog` attachment builder in `src/subject/pull-request.ts` resolves `fetchData` through `GET …/pullRequests/:number/attachments` only when the consumer asks (#22) |
 | 14 | D-PR2 nested `subject` in the id grammar | **confirmed** — nested `BacklogSubjectRef`, kind keyword explicit for both kinds | `BacklogSubjectRef` (`src/types.ts`) is written and read only by `src/ids.ts` and dispatched only by `subjectClientFor` (`src/subject/client.ts`); `src/subject/containment.test.ts` fails the build on a third module that dispatches on `.kind` — a tripwire, not a proof, and its header lists what it cannot see (#22, weakened deliberately by #83) |
 | 15 | D-PR7 `listThreads` population | **confirmed** — issues only, documented, with the pull-request route named | `BacklogAdapter.listThreads` and its Why-not comment; a caller holding a repository uses `api(host).listPullRequests`, which spends `read` rather than `search` (measured 2026-09-06); README row (#24, #25) |

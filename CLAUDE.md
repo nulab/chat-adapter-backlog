@@ -51,7 +51,7 @@ through the queue anyway. The current split — `src/client/port.ts` with
 described at the top of `src/index.ts` — is what that refactor removes; until
 it lands, read `src/index.ts` for which side the barrel exports. zod types
 never reach the published `.d.ts`: `scripts/check-published-types.mjs` fails
-the build on any import but `chat` there.
+the build on any import there but `chat` and `backlog-js`.
 
 `.github/workflows/ci.yml` builds the bundle, imports it in a real Node
 process, constructs an adapter from it and asserts `adapter.name === 'backlog'`.
@@ -87,20 +87,21 @@ Every fact has exactly one home. Before writing one down, find that home; if
 the fact is already there, point at it or say nothing. A second copy is not
 emphasis, it is the version that goes stale.
 
-| Kind of fact                                                                          | Home                                                                               |
-| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| How the adapter does something                                                        | the code — names, types, structure                                                 |
-| What it guarantees, member by member                                                  | the tests, named after the behaviour                                               |
-| The consumer-visible contract, and each design decision with its rejected alternatives | [docs/specs/adapter.md](./docs/specs/adapter.md) — decisions in §14, verdicts in §15 |
-| What Backlog and the Chat SDK core actually do, with the date it was measured         | `.claude/rules/*.md`                                                               |
-| Why one change was made                                                               | the squash commit body                                                             |
-| Why the obvious code would break                                                      | a comment on that code                                                             |
-| How to work here: gates, CI coupling, PR rules, conventions                           | this file and [DEVELOPMENT.md](./DEVELOPMENT.md)                                   |
+| Kind of fact                                         | Home                                                             |
+| ---------------------------------------------------- | ---------------------------------------------------------------- |
+| How the adapter does something                       | the code: names, types, structure                                |
+| What it guarantees, member by member                 | the tests, named after the behaviour                             |
+| The consumer-visible contract and design decisions   | [the spec](./docs/specs/adapter.md): §14 decisions, §15 verdicts |
+| What Backlog and the Chat SDK core do, with the date | `.claude/rules/*.md`                                             |
+| Why one change was made                              | the squash commit body                                           |
+| Why the obvious code would break                     | a comment on that code                                           |
+| How to work here: gates, CI coupling, PR rules       | this file and [DEVELOPMENT.md](./DEVELOPMENT.md)                 |
 
 - **The spec** states what a consumer can observe and which decisions shaped
   it. It describes behaviour: it does not restate the README's content, list
-  the tests to write, or record how the work was ordered. It summarises a measurement only as far as the measurement changes that
-  behaviour, and points at the rules file for the evidence. Tests are written
+  the tests to write, or record how the work was ordered. It summarises a
+  measurement only as far as the measurement changes that behaviour, and
+  points at the rules file for the evidence. Tests are written
   from it; when code and spec disagree, one of them is wrong and the PR that
   notices fixes it.
 - **`.claude/rules/*.md`** load automatically when a `src/**/*.ts` file is
@@ -119,7 +120,10 @@ emphasis, it is the version that goes stale.
   still make to them. Never cite a plan from code.
 
 When a document and this file disagree, the document is newer; fix this file
-in the same PR.
+in the same PR. The one exception is temporary: for Surface (YAGNI), Parse at
+the boundary, the Types target and Test strategy, this file is ahead of the
+spec — which still requires the in-memory port, its conformance suite and
+`Date`-returning ports — until the refactor PRs rewrite those spec sections.
 
 ## Comments
 
@@ -219,8 +223,8 @@ pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
   `postinstall` script — npm and Yarn run those on a consumer's machine, where
   no devDependency exists (#99) — and via `scripts/check-published-types.mjs`,
   which runs after tsdown, on a `dist/index.d.ts` that imports any module but
-  `chat`. Touching `exports`, `files`, `scripts` or the build config means
-  running the build, not just the type check.
+  `chat` and `backlog-js`. Touching `exports`, `files`, `scripts` or the build
+  config means running the build, not just the type check.
 - `engines.node` is `">=20"` (matching the `chat` core package), so do not use
   APIs newer than Node 20 in shipped code. The test matrix runs the suite on
   Node 20, 22, 24 and 26, so a 26-only API now fails a job rather than reaching
@@ -477,6 +481,9 @@ of a realtime transport and the activity types are measured facts, recorded in
 `backlog-pull-request-facts.md`. Do not reason about pull requests from the
 issue side.
 
+_Interim: the rate-limit text below and "Dependency plan" are rewritten by
+#111._
+
 **Rate limits.** ([Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/),
 [Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/))
 Limits are **per user, per minute**, in four independent buckets:
@@ -504,8 +511,10 @@ Traps, in order of how easily they are missed:
 ## Dependency plan
 
 Build on [`backlog-js`](https://github.com/nulab/backlog-js) (v0.20.1, MIT,
-Nulab's own, tsdown-built, single runtime dependency `qs`), wrapped behind a
-narrow internal port. It does not provide, and this repo must add:
+Nulab's own, tsdown-built, single runtime dependency `qs`). The narrow
+internal port it is currently wrapped behind is being removed in favour of
+calling `backlog-js` directly (see Types and Test strategy). It does not
+provide, and this repo must add:
 
 1. Rate-limit bucket awareness (classify each request into read/update/search/
    icon and track the headers per bucket).

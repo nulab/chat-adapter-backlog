@@ -201,8 +201,8 @@ Local-only hook tweaks go in `lefthook-local.yml`, which is gitignored.
 - Name tests after the behavior they specify, not the function they call.
 
 `pnpm test` must stay runnable with no credentials, no network and no Backlog
-space. Platform clients are replaced with `vi.mock`; do not reach for msw or
-nock.
+space. Stub the `backlog-js` client's methods with `vi.fn`; do not maintain a
+fake Backlog, and do not reach for msw or nock.
 
 ### Opt-in live suite
 
