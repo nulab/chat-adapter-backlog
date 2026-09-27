@@ -54,8 +54,7 @@ wins, so re-verify against the tag before changing code.
   (`chat.ts:3113-3115`). An absent `isDM` member means `false`.
 - `onSubscribedMessage` does not fire for the subscribing message or for bot
   messages (`types.ts:1984-2011`). `thread.subscribe()` is `state.subscribe`
-  plus optional `adapter.onThreadSubscribe` (`thread.ts:436-442`); the adapter
-  keeps no per-thread state, it only has to keep delivering every comment.
+  plus optional `adapter.onThreadSubscribe` (`thread.ts:436-442`).
 
 ## Mention detection
 
@@ -89,8 +88,7 @@ wins, so re-verify against the tag before changing code.
   placeholder (`"..."`, none when `fallbackStreamingPlaceholderText === null`),
   `editMessage` every `updateIntervalMs` (default 500 ms via
   `ChatConfig.streamingUpdateIntervalMs`), final edit (`thread.ts:950-1065`);
-  an empty stream posts `" "` (`thread.ts:1042`). Why the adapter overrides it:
-  spec D4.
+  an empty stream posts `" "` (`thread.ts:1042`).
 - `fromFullStream` (`from-full-stream.ts`, read in the published
   `chat@4.40.0` bundle `dist/chunk-BKACWYIW.js:15-48`, which names that source
   file) is what `thread.post(fullStream)` funnels an AI SDK stream through, and
@@ -102,8 +100,7 @@ wins, so re-verify against the tag before changing code.
   `{ type: "error" }` chunk rather than a thrown error, so a failed generation
   reaches `stream()` as a stream that yields nothing at all, not as a
   rejection. An adapter cannot distinguish it from a genuinely empty stream;
-  only the consumer iterating `fullStream` itself can (see
-  docs/specs/adapter.md §15 question 7).
+  only the consumer iterating `fullStream` itself can.
 - `startTyping` is required but may be a no-op (github `index.ts:1258-1260`);
   `endTyping` runs after the next post only if defined (`thread.ts:893-901`).
   No `shouldAcknowledge` exists in 4.40.0.

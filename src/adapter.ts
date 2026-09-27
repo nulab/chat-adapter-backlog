@@ -1015,7 +1015,7 @@ export class BacklogAdapter implements Adapter<
 
   /**
    * The seam every member goes through: one `SubjectClient` for the issue or
-   * pull request an id names (docs/plans/pull-request-support.md §3.4). The
+   * pull request an id names (D-PR2). The
    * kind is dispatched inside `subjectClientFor` and nowhere else, so nothing
    * in this class asks what it is holding.
    */

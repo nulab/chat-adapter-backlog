@@ -9,8 +9,6 @@ the design decisions behind it (§14, §15); the tests restate it as executable
 checks; the code implements it without restating it, citing a decision by its
 id (`D14`) where a Why-not comment needs one and never by section number,
 because sections renumber and the ids do not.
-[docs/plans/adapter-implementation.md](../plans/adapter-implementation.md) is
-the record of how the work was ordered, not a second requirement.
 
 Measured Backlog behaviour is summarised here only as far as it changes the
 adapter's observable behaviour. The measurements themselves, with dates and
@@ -184,8 +182,7 @@ Not exported: the port (`BacklogApi`) and its domain types, the in-memory port
 `mentionPattern`, the format converters (§9 — rendering is the adapter's
 `renderFormatted`), `ResolvedInstallation` and `ResolvedCredential`, the
 internal subject layer (`SubjectClient`, `subjectClientFor`) that selects
-the issue or pull-request endpoint family for a thread
-(docs/plans/pull-request-support.md §3.4), the port's `backlog-js` wrapper
+the issue or pull-request endpoint family for a thread (D-PR2), the port's `backlog-js` wrapper
 factory, zod schemas, the plain-text fallback converter and fixtures.
 
 Nothing from `zod` appears in an exported type, and `chat` and `backlog-js`
@@ -982,8 +979,7 @@ that notifies without a visible mention.
 
 Every egress member decodes `threadId`, resolves the installation, and uses the
 port for that host through the subject client the thread id's `subject`
-selects (issue endpoints or pull-request endpoints, D-PR2;
-docs/plans/pull-request-support.md §3.4). The behaviour below is the same for
+selects (issue endpoints or pull-request endpoints, D-PR2). The behaviour below is the same for
 both kinds unless a subsection says otherwise. Non-comment message ids (`:r`,
 `:u:`) are rejected with
 `ValidationError("backlog", "<id> is not a comment and cannot be edited, deleted or starred")`
@@ -2192,9 +2188,7 @@ for one scratch space is worse than requiring the two to share it.
   one-line description; an npm-version badge and a license badge; a **Status**
   section stating the release cadence and pre-1.0 semver (`0.1.0` first, a
   breaking change is a minor while the major is `0`), the contract coverage of
-  §4, and the catalog-listing choice
-  ([docs/plans/adapter-implementation.md](../plans/adapter-implementation.md)
-  P7); installation (`pnpm add @nulab/chat-adapter-backlog chat`);
+  §4, and the catalog-listing choice (§15.4 item 31); installation (`pnpm add @nulab/chat-adapter-backlog chat`);
   quick start (shape A with explicit fields); environment-variable table (the
   six `BACKLOG_*` variables, required/optional); configuration reference (§3.2
   table); platform setup (create bot user, add to project, issue API key,
@@ -2301,8 +2295,7 @@ for one scratch space is worse than requiring the two to share it.
   `fetchSingleMessage yes`, `fetchThreadInfo yes`, `fetchChannelMessages no`,
   `listThreads {partial, "Issues only"}` (D-PR7), `fetchChannelInfo yes`,
   `postChannelMessage {yes, "Creates an issue"}` — a pull request cannot be
-  created from Chat either (`base`/`branch` have no postable shape,
-  docs/plans/pull-request-support.md §9). `deleteMessage` appears once, as the
+  created from Chat either (`base`/`branch` have no postable shape). `deleteMessage` appears once, as the
   partial above; the issue-only matrix's `deleteMessage yes` is gone, not kept
   beside it.
 
@@ -2348,10 +2341,7 @@ for one scratch space is worse than requiring the two to share it.
 
 ## 15. Decision register (⚑)
 
-Every ⚑ in this document points here, and so do the decision sections of both
-plans ([docs/plans/adapter-implementation.md](../plans/adapter-implementation.md)
-§6 and [docs/plans/pull-request-support.md](../plans/pull-request-support.md)
-§8), which no longer carry verdicts of their own. This is the **one place a
+Every ⚑ in this document points here. This is the **one place a
 verdict is recorded**, so somebody deciding whether to release does not have
 to reconcile three tables that can drift apart — the way they had by
 2026-09-07, when the code had implemented every default the spec assumed and
@@ -2397,7 +2387,7 @@ open list.
 | 16 | Webhook form of types 18–20 | **confirmed** — measured, and rule 4 gained the predicted mention; see §15.2 | Two captures on a deployed receiver, 2026-09-06, matched to their activities by id (`.claude/rules/backlog-pull-request-facts.md`); the schemas name `assignee`, `base`, `branch` and `diff`, and `assigneeIdOf` in `src/webhook/inbound.ts` is read on 18, not on 19 or 20 (#23, narrowed to the root activities by #32) |
 | 17 | D9 rule 6 accepts any `reason` | **confirmed** — measured; a watcher appears in no `notifications[]`; see §15.2 | Measured 2026-09-06 (`.claude/rules/backlog-webhook-facts.md`); `src/webhook/inbound.ts` reads every `reason` (#35) |
 | 18 | P0 documentation title scope: `docs(docs)` or `docs(adapter)` | **confirmed** — `docs(docs)`, and it is now history | #2 landed as `docs(docs): add adapter specification and implementation plan`; CLAUDE.md's scope table lists `docs` as covering `docs/`. Nothing is left to decide |
-| 19 | Optional CI job for the live suite (implementation plan P7c) | **confirmed** — skipped | `.github/workflows/ci.yml` has no live job and reads no `BACKLOG_*` secret. The suite is opt-in and self-skipping, so nothing in CI depends on it; revisit only alongside #52 |
+| 19 | Optional CI job for the live suite | **confirmed** — skipped | `.github/workflows/ci.yml` has no live job and reads no `BACKLOG_*` secret. The suite is opt-in and self-skipping, so nothing in CI depends on it; revisit only alongside #52 |
 | 20 | D-PR1 channel of a pull-request thread | **confirmed** — the project, exactly as for issues | `channelIdFromThreadId` is the first three segments for both kinds (`src/ids.ts`); the formatting rule and the project cache are per project, and a repository has neither (#22) |
 | 21 | D-PR3 `deleteMessage` on a pull-request thread | **confirmed** — `AdapterError` with `UNSUPPORTED_OPERATION`, thrown before any call | `deleteComment` in `src/subject/pull-request.ts` rejects without a request, citing the measured 400/6 `Undefined resource`; the subject client carries `capabilities: { deleteComment: false }` so no member has to ask what kind it holds, and the README row is what tells a consumer (#22, #25) |
 | 22 | D-PR4 adapter option to enable or disable pull requests | **confirmed** — none; the webhook subscription is the switch | No `subjects` field exists on `BacklogAdapterConfig` (`src/types.ts`); leaving 18–20 out of `activityTypeIds[]` is the documented way to decline them, and 14 is declined the same way (#22, #23) |
@@ -2405,10 +2395,10 @@ open list.
 | 24 | D-PR6 a pull request linked to an issue | **confirmed** — its own thread; the link is metadata and never routes | the `issue` key of `threadMetadata` in `src/subject/pull-request.ts`, and `raw.payload.content.issue`; `src/webhook/payload.test.ts` "a pull request linked to an issue is still its own subject" (#23) |
 | 25 | D-PR8 `fetchSubject().type` for a pull request | **confirmed** — `'pull_request'` | `subjectType: 'pull_request'` in `src/subject/pull-request.ts`, documented on `SubjectClient` (`src/subject/client.ts`); `src/reads.test.ts` and `src/subject/pull-request.test.ts` assert it (#22) |
 | 26 | D-PR9 root message part tag | **confirmed** — `r` for both kinds | `src/ids.ts` encodes and parses `r`; `src/ids.test.ts` and the `threadIdContract` roundtrip cover it (#22) |
-| 27 | D15 version line | **confirmed 2026-09-07** — the package's own semver, starting at `0.1.0`; #17, which had it track `chat`'s line, is superseded | #58; §7 of the implementation plan and DEVELOPMENT.md "Versioning". The dependency **ranges** are the other half of D15 and are unchanged (§14) |
-| 28 | Repository visibility at publish time | **confirmed 2026-09-09** — the repository is public at publish time; the first publish authenticates with a token and later ones with Trusted Publishing | A maintainer decision rather than a code one, so its evidence is a prerequisite the maintainer supplies, not a module: recorded in §15.4 and in [docs/plans/release-mechanism.md](../plans/release-mechanism.md) §1.3 and §5, which carry the two npm rules it rests on — provenance requires a public source repository, and Trusted Publishing cannot be configured for a package that does not exist yet. DEVELOPMENT.md's "The first release, step by step" carries it as the checklist a releaser follows, with the token secret named `NPM_TOKEN` on the `production` environment |
+| 27 | D15 version line | **confirmed 2026-09-07** — the package's own semver, starting at `0.1.0`; #17, which had it track `chat`'s line, is superseded | #58; DEVELOPMENT.md "Versioning". The dependency **ranges** are the other half of D15 and are unchanged (§14) |
+| 28 | Repository visibility at publish time | **confirmed 2026-09-09** — the repository is public at publish time; the first publish authenticates with a token and later ones with Trusted Publishing | A maintainer decision rather than a code one, so its evidence is a prerequisite the maintainer supplies, not a module: recorded in §15.4, which carries the two npm rules it rests on — provenance requires a public source repository, and Trusted Publishing cannot be configured for a package that does not exist yet. DEVELOPMENT.md's "The first release, step by step" carries it as the checklist a releaser follows, with the token secret named `NPM_TOKEN` on the `production` environment |
 | 29 | Whether done criterion 3 stands: the live suite must run against a real space before `0.1.0` | **open — blocks `0.1.0`** | §15.4. The suite exists and self-skips (row 11); the run itself is issue #52 |
-| 30 | M9 and M12, the two pull-request questions left unmeasured | **open — does not block `0.1.0`** | §15.4; [docs/plans/pull-request-support.md](../plans/pull-request-support.md) §5. No code reads either |
+| 30 | M9 and M12, the two pull-request questions left unmeasured | **open — does not block `0.1.0`** | §15.4. No code reads either |
 | 31 | Catalog listing: community or vendor-official | **open — does not block `0.1.0`** | §15.4. §13 holds the feature-matrix values a listing needs |
 
 ### 15.2 The four questions whose answer needed an argument
@@ -2472,7 +2462,7 @@ and recorded as such in `.claude/rules/backlog-pull-request-facts.md`:
 the webhook deliveries for a merge, a close and a comment with
 `attachmentId[]`, whose `changes[]` shapes are still activity-form
 measurements. A merge and a close have no API, so capturing them needs a
-git push or the UI (docs/plans/pull-request-support.md §4 P3, §5 M1).
+git push or the UI.
 
 **Question 17.**
 ~~**D9 rule 6 accepts any `reason`** — confirm, or name the reason codes
@@ -2528,8 +2518,8 @@ anonymous readers who get them the day the package appears. The first publish
 cannot use Trusted Publishing, because npm will not configure a trusted
 publisher for a package that does not exist yet, so it authenticates with a
 token; every later release uses Trusted Publishing.
-[docs/plans/release-mechanism.md](../plans/release-mechanism.md) §1.2, §1.3
-and §5 carry the sources and the route. This is a premise the release now
+DEVELOPMENT.md "The first release, step by step" carries the sources and the
+route. This is a premise the release now
 rests on, **not** a completed task — nothing here asserts that the repository
 has already been switched.
 
@@ -2538,9 +2528,8 @@ stop a release: the first blocks `0.1.0`, the last two do not. A closing
 paragraph names what the same review carved into follow-up issues instead,
 because those are work, not decisions.
 
-**29. The live suite has never been run — the one remaining `0.1.0` blocker.** Criterion 3 of
-[docs/plans/adapter-implementation.md](../plans/adapter-implementation.md) §1
-requires it to have run at least once against a real space, with the result
+**29. The live suite has never been run — the one remaining `0.1.0` blocker.** A release
+criterion requires it to have run at least once against a real space, with the result
 in the release PR, and §12.3 is written for that run. It needs credentials
 and a Git-enabled project on a development space (**#52**). Recommendation:
 keep the criterion. The suite is the only thing that ever executes the port
@@ -2551,16 +2540,14 @@ should be taken in the same session rather than opened separately: the
 remaining item of **#51** (a schema fixture recorded from a real body, so the
 test doubles can catch drift) and the two measurements below.
 
-**30. M9 and M12 stay unmeasured — not a blocker.**
-[docs/plans/pull-request-support.md](../plans/pull-request-support.md) §5: M9
+**30. M9 and M12 stay unmeasured — not a blocker.** M9
 is a populated `pullRequest` / `pullRequestComment` in the bot's own
 notification feed, M12 is redelivery. Neither gates behaviour — `markAsRead`
 matches by kind either way, and redelivery is documentation — and both need
 the same space as the live suite.
 
 **31. Catalog listing: community or vendor-official — not a blocker.** Prepared
-but never chosen (§13 holds the feature-matrix values; the implementation
-plan's §8 keeps it out of scope). Community listing needs a docs page and
+but never chosen (§13 holds the feature-matrix values). Community listing needs a docs page and
 allowlist entries in `vercel/chat`; vendor-official additionally needs
 catalog and scaffold entries, a changeset, product docs and an announcement.
 Recommendation: publish `0.1.0` first and list it as community, because the

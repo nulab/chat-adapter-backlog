@@ -36,6 +36,6 @@ nothing about live behavior. If the opt-in live suite ran, say so.
 - [ ] `exports`, `files`, `engines` or the build config changed: `pnpm build`
       ran locally, since publint and attw run only there.
 
-<!-- Adapter design constraints: rate limits in CLAUDE.md; webhook authenticity
+<!-- Adapter design constraints: rate limits in .claude/rules/backlog-api-facts.md; webhook authenticity
 (D2) and `stream()` (D4) in docs/specs/adapter.md §14; how to comment and
 where each fact lives in CLAUDE.md. -->

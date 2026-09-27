@@ -242,7 +242,7 @@ export interface BuildInboundMessageInput {
   botUserName: string;
   /**
    * The subject the activity is about, already resolved by the caller through
-   * `subjectOfActivity` (docs/plans/pull-request-support.md §3.4). It supplies
+   * `subjectOfActivity` (D-PR2). It supplies
    * both the ref every id is built from and the attachment mapping, which
    * differs per kind: an issue attachment carries its id, a pull-request one
    * resolves it by name (D-PR10).

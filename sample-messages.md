@@ -2,41 +2,15 @@
 
 One anonymised payload per activity type the adapter recognises, in the shape
 a real delivery carries. Generated from the fixtures in
-`src/test/fixtures/webhooks.ts`, so this file and the test suite cannot
-disagree; regenerate it rather than editing it by hand.
-
-The body is one Activity object as returned by
-[Get Recent Updates](https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/).
-Backlog publishes no dedicated webhook-payload page, and measured payloads
-match the activity shape in the envelope but **not** field for field: a webhook
-body additionally carries the issue snapshot (`assignee`, `status`, `priority`,
-…), spells one key `externalFileLinks` where the activity form says
-`external_file_links`, and omits the activity form’s `field_text` inside
-`changes[]`. A pull-request body adds four keys of its own — `assignee`,
-`base`, `branch` and `diff` (measured on a development space, 2026-09-06).
+`src/test/fixtures/webhooks.ts` by `scripts/generate-sample-messages.mts`, so
+regenerate it rather than editing it by hand. What Backlog delivers, and where
+a delivery differs from the activities API, is recorded with its measurements
+in `.claude/rules/backlog-webhook-facts.md` and
+`.claude/rules/backlog-pull-request-facts.md`.
 
 Vocabulary throughout: host `example.backlog.com`, bot `Chatbot` (id 999),
 users `Alice` (100) and `Bob` (101), project 500, issue 8001, repository 700
 (`example-repo`), pull request 12.
-
-Three properties of these payloads decide how a handler must read them:
-
-- **Nothing in the body identifies the space.** `project.projectKey` and the
-  numeric ids are not unique across Backlog spaces, so the host comes from the
-  request URL the webhook was registered with, never from the payload.
-- **Backlog attaches a changelog comment to every field update.** A set
-  `content.comment.id` therefore does not mean "no field change" — handlers key
-  on `content.changes[]`.
-- **`notifications` names who the delivery notified**, by user id and reason
-  code (measured on a development space, 2026-09-06). The same activity read
-  back from the activities API carries `[]` there, so a webhook is the only
-  place that list exists; most samples below show it empty because nobody was
-  notified.
-
-The pull-request payloads below are the **activity API** form, measured on a
-real space on 2026-09-06. The webhook form of types 18–20 is unmeasured; the
-adapter therefore requires only `content.id`, `content.number` and
-`content.repository.id`, and tolerates any key it does not name.
 
 ## Type 1 — Issue Created
 

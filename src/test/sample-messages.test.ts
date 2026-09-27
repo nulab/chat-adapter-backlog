@@ -11,11 +11,20 @@ import {
   commentWithStatusChange,
   descriptionEdited,
   FIXTURE,
+  gitPushed,
   issueCommented,
   issueCreated,
   issueDeleted,
   issueMultiUpdated,
   issueUpdatedWithoutComment,
+  pullRequestAdded,
+  pullRequestAssigneeChanged,
+  pullRequestCommented,
+  pullRequestCommentWithAttachment,
+  pullRequestDeleted,
+  pullRequestStatusChanged,
+  pullRequestUpdated,
+  RAW_MENTION,
   statusChanged,
 } from './fixtures/webhooks';
 
@@ -31,25 +40,6 @@ const samples = readFileSync(
  * describing payloads the adapter no longer parses.
  */
 describe('published sample payloads', () => {
-  it('documents one payload per recognised activity type', () => {
-    for (const heading of [
-      '## Type 1 — Issue Created',
-      '## Type 3 — Issue Commented',
-      '## Type 2 — Issue Updated — status only',
-      '## Type 2 — Issue Updated — assignee',
-      '## Type 2 — Issue Updated — description',
-      '## Type 2 — Issue Updated — attachment added',
-      '## Type 2 — Issue Updated — comment and status together',
-      '## Type 2 — Issue Updated — no comment id',
-      '## Type 4 — Issue Deleted',
-      '## Type 14 — Issue Multi Updated',
-      '## Type 14 — Issue Multi Updated — one issue',
-      '## Type 17 — Comment Notification Added',
-    ]) {
-      expect(samples).toContain(heading);
-    }
-  });
-
   it('matches the fixtures it was generated from', () => {
     for (const payload of [
       issueCreated({ assignee: FIXTURE.bot }),
@@ -64,6 +54,21 @@ describe('published sample payloads', () => {
       issueMultiUpdated({ text: 'Moving these to done.' }),
       bulkStatusChangedOnOneIssue(),
       commentNotificationAdded(),
+      issueCommented({
+        text: 'Please take a look when you get a chance.',
+        notifications: [{ user: FIXTURE.bot, reason: 2 }],
+      }),
+      pullRequestAdded({
+        summary: `Retry the deploy step ${RAW_MENTION}`,
+        assignee: FIXTURE.bot,
+      }),
+      pullRequestCommented(),
+      pullRequestCommentWithAttachment(),
+      pullRequestStatusChanged(),
+      pullRequestAssigneeChanged(),
+      pullRequestUpdated(),
+      pullRequestDeleted(),
+      gitPushed(),
     ]) {
       expect(samples).toContain(JSON.stringify(payload, null, 2));
     }

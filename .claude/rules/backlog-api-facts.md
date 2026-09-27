@@ -7,8 +7,7 @@ paths:
 
 Endpoint-level facts invisible in `backlog-js` typings and in the code. Facts
 marked "measured" were observed on a real Backlog space on the given date;
-re-measure before changing code that contradicts them. The rate-limit buckets
-are in CLAUDE.md § Backlog API landmines and are not repeated here.
+re-measure before changing code that contradicts them.
 
 ## Hosts
 
@@ -19,10 +18,8 @@ are in CLAUDE.md § Backlog API landmines and are not repeated here.
 
 ## Endpoints the adapter uses
 
-Bucket rule: Read = GET except Search/Icon; Update = POST/PATCH/DELETE; Search =
-Get Issue List, Count Issue, Get Wiki Page List, Count Wiki Page; Icon = the
-five icon endpoints (https://developer.nulab.com/docs/backlog/rate-limit/).
-Endpoint pages never state a bucket; the column applies that rule mechanically.
+Endpoint pages never state a bucket; the column applies § Rate limit's bucket
+rule mechanically.
 Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`.
 
 | Method and path | Bucket | `backlog-js` 0.20.1 |
@@ -111,8 +108,8 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
 - The comment's own author is never notified, even when listed explicitly. A
   probe that notifies the API-key owner looks identical to a rejected id; do not
   infer "dropped" from that case (measured 2026-08-18).
-- A stale user id costs a missing notification, never a failed post; add no
-  membership lookups ahead of a post to prevent a failure that cannot happen.
+- A stale user id therefore costs a missing notification, never a failed
+  post.
 
 ## Mention notation on write
 
@@ -141,12 +138,9 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
   (https://support.nulab.com/hc/en-us/articles/8709986448153; endpoint index).
 - `POST /stars` is **not idempotent**: the same comment starred twice by the
   same user answers success both times and ends up with two stars in `stars[]`
-  (measured 2026-09-06). The server has no upsert and no conflict error, so
-  the only way to make a repeat call a no-op is to read the comment first and
-  look for a star whose `presenter.id` is the caller's — which is what
-  docs/specs/adapter.md §6.5 requires and `src/egress.ts` does. That guard is
-  read-then-write, so it deduplicates a retry or a redelivered webhook but not
-  two calls in flight at once.
+  (measured 2026-09-06). The server has no upsert and no conflict error; the
+  only way to tell whether the caller already starred a comment is its
+  `stars[]`, by `presenter.id`.
 
 ## Notifications (per authenticated user)
 
@@ -171,8 +165,7 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
   and left `GET /notifications/count?alreadyRead=false` at 16 → 0 without
   touching any `resourceAlreadyRead`. `alreadyRead` is the inbox-badge count;
   `resourceAlreadyRead` is "this notification's target was read", which is
-  what Read Notification sets — code that short-circuits a repeat
-  `markAsRead` must test `resourceAlreadyRead`, never `alreadyRead`.
+  what Read Notification sets.
 
 ## Attachments
 
@@ -202,8 +195,23 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
   display time by the project's current rule (the API stores raw text), and a
   project's setting can flip, so read it rather than caching a belief about it.
 
-## Rate limit details beyond CLAUDE.md
+## Rate limit
 
+([Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/),
+[Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/))
+Limits are **per user, per minute**, in four independent buckets:
+
+| Bucket | Covers                                                     | Documented example |
+| ------ | ---------------------------------------------------------- | ------------------ |
+| read   | GET, excluding the Search and Icon endpoints               | 600                |
+| update | POST, PATCH, DELETE                                        | 150                |
+| search | Issue List, Count Issue, Wiki Page List, Count Wiki Page   | 150                |
+| icon   | Space Logo, User Icon, Project Icon, Group Icon, Team Icon | 60                 |
+
+- **Issue listing and counting draw on `search`, not `read`**, so a polling
+  loop consumes the 150 bucket, not the 600 one.
+- The numbers are the page's example values; it says limits differ between
+  Free and Paid plans. Nothing should hard-code them.
 - Scope is per **user**, not per API key: two keys of one user share one
   budget; one program using several users' keys is discouraged
   (https://developer.nulab.com/docs/backlog/rate-limit/).
@@ -259,13 +267,9 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
 
 ## No realtime transport
 
-- No SSE and no WebSocket exist; push is webhooks only. Anything else polls:
-  `updatedSince` on `GET /issues` (search bucket) has **date** granularity
-  (`yyyy-MM-dd`), so it cannot be a fine-grained cursor on its own, and
-  `GET /notifications` pages by `minId` / `maxId` / `count` (1–100)
-  (https://developer.nulab.com/docs/backlog/api/2/get-issue-list/,
-  https://developer.nulab.com/docs/backlog/api/2/get-notification/). A poller
-  needs a persisted cursor and a backoff.
+- No SSE and no WebSocket exist; push is webhooks only. Anything else polls,
+  and the two candidate cursors are coarse: § Issue listing (`updatedSince` is
+  a date) and § Notifications.
 
 ## `backlog-js` 0.20.1 specifics
 

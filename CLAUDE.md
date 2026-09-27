@@ -110,10 +110,7 @@ emphasis, it is the version that goes stale.
   spec.
 - **`docs/plans/*.md`** exist while a plan is being carried out. A finished
   plan is deleted — git history keeps it, and a record that reads like a
-  requirement misleads the next reader. `adapter-implementation.md`,
-  `pull-request-support.md` and `release-mechanism.md` are finished; they go
-  in the final comment sweep, together with the references `src/` and the spec
-  still make to them. Never cite a plan from code.
+  requirement misleads the next reader. Never cite a plan from code.
 
 When a document and this file disagree, the document is newer; fix this file
 in the same PR. The one exception is temporary: for Surface (YAGNI), Parse at
@@ -474,35 +471,10 @@ of a realtime transport and the activity types are measured facts, recorded in
 `backlog-pull-request-facts.md`. Do not reason about pull requests from the
 issue side.
 
-_Interim: the rate-limit text below and "Dependency plan" are rewritten by
-#111._
-
-**Rate limits.** ([Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/),
-[Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/))
-Limits are **per user, per minute**, in four independent buckets. These are
-Backlog's facts, for reasoning about what a member costs — the adapter does
-not classify requests into them or track them (docs/specs/adapter.md D5,
-§8.4):
-
-| Bucket | Covers                                                     | Documented example |
-| ------ | ---------------------------------------------------------- | ------------------ |
-| read   | GET, excluding the Search and Icon endpoints               | 600                |
-| update | POST, PATCH, DELETE                                        | 150                |
-| search | Issue List, Count Issue, Wiki Page List, Count Wiki Page   | 150                |
-| icon   | Space Logo, User Icon, Project Icon, Group Icon, Team Icon | 60                 |
-
-Traps, in order of how easily they are missed:
-
-1. **Issue listing and counting draw on `search`, not `read`.** The bucket that
-   any polling loop consumes is the 150 one, not the 600 one.
-2. **The numbers above are the documented example values.** The rate-limit page
-   states limits differ between Free and Paid plans and tells you to call
-   `GET /api/v2/rateLimit`. Do not hard-code 600/150/150/60 as invariants —
-   nothing in the adapter needs a number at all: a 429 carries its own reset.
-3. **Backlog sends no `Retry-After`.** Over limit is HTTP 429 with error
-   code 13. Compute the backoff from the failing response's
-   `X-RateLimit-Reset`, which is **UTC epoch seconds** — that one header is
-   all the retry reads.
+**Rate limits** are per user, per minute, in four buckets, and issue listing
+draws on `search`, not `read`; the table and its traps are in
+`backlog-api-facts.md` § Rate limit. The adapter does not classify requests
+into them or track them (docs/specs/adapter.md D5).
 
 ## Dependency plan
 

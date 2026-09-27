@@ -32,8 +32,7 @@ the code toward intuition. Pull-request activities (18–21) are in
   404: two spaces were observed allocating issue ids from interleaving ranges
   within minutes of each other (measured 2026-09-06), so an id from one space
   can name a real, unrelated issue in the other. Only the registered URL
-  prevents this; see docs/specs/adapter.md D19 for why the payload cannot be
-  cross-checked against the host.
+  prevents this.
 - `content.id` is the issue's space-wide numeric id; `content.key_id` is the
   trailing number of the issue key; the `issueKey` string is absent. Key
   persisted identifiers on `content.id` and `project.id`, never on `key_id` or
@@ -54,22 +53,22 @@ the code toward intuition. Pull-request activities (18–21) are in
   are *not* interchangeable in this one field, and the webhook is the only
   place the notification list can be read at all. An activity-API body
   replayed as a webhook is still valid — it just says nothing about who was
-  notified, which is why mention detection keeps its textual and assignment
-  rules (docs/specs/adapter.md §5.4).
+  notified.
 - Top-level `created` on the webhook and on the same activity fetched later via
   the API are identical strings (measured 2026-08-31). Top-level `id` is the
   activity id, not the issue or comment id.
 - `changes[]` entries on a **webhook** carry `field`, `new_value`, `old_value`
   and `type` (`"standard"`) and nothing else; `old_value` is present on an
   assignee change and is `""` when the previous assignee was empty (measured
-  2026-09-03, re-measured 2026-09-06). The activity-API form of the same entry
-  adds `field_text`, the localized display label — see "Webhook versus Get
-  Recent Updates". Parse `changes[]` with a schema that tolerates unknown keys.
+  2026-09-03, re-measured 2026-09-06); the activity-API form adds `field_text`
+  (see "Webhook versus Get Recent Updates").
 - `changes[].new_value` in activity JSON uses the same value system as the
   webhook: status as an id string (`{"field":"status","new_value":"4",
   "old_value":"3"}`), assignee as a display name. The REST comment `changeLog`
-  is different (camelCase `newValue`/`originalValue`, status as a display
-  name). Never rebuild one from the other (measured 2026-08-28).
+  is different: camelCase `newValue`/`originalValue`, and `status` and
+  `priority` as **display names** (measured 2026-08-28; `priority` 2026-09-06).
+  Those two fields are the whole conversion needed to match a webhook change
+  against the same change read back over REST.
 
 ## Webhook versus Get Recent Updates
 
@@ -107,9 +106,7 @@ carries the key in question:
   localized display label; the webhook form does not. This one has nothing to
   say about type 1, which carries no `changes[]` at all.
 
-`notifications` differs as well and in the more consequential direction: the
-activity form is always `[]`, so an activity replayed from the API cannot
-answer who was notified even when the original delivery could.
+`notifications` differs as well; see "Payload envelope".
 
 ## What each issue operation emits
 
@@ -190,8 +187,7 @@ answer who was notified even when the original delivery could.
   - Only `type`, the activity `id`, `created` (the three seconds between them)
     and `notifications[]` tell the two apart.
     A handler that dedupes on `content.comment.id` alone therefore drops the
-    type 17 as a repeat of the type 3 and loses the later recipient entirely
-    (docs/specs/adapter.md D10 accepts that cost deliberately).
+    type 17 as a repeat of the type 3 and loses the later recipient entirely.
 - Bulk operations from the issue list ("multi update") → **one** type 14
   however many issues were touched, and **no** type 2 or 3 for any of them
   (measured 2026-08-28 and again 2026-09-06). **One** issue ticked is a type 14
@@ -226,10 +222,6 @@ answer who was notified even when the original delivery could.
   comparing a four-field bulk update against the same fields changed singly
   from the issue page). Changing several fields at once lists them all, and
   both value systems appear in the one array — do not assume one.
-- `GET /issues/:id/comments`'s `changeLog` reports `priority` and `status` as
-  **display names** where the webhook reports ids (measured 2026-09-06). Those
-  two fields are the whole of the conversion needed to match a webhook change
-  against the same change read back over REST.
 - `notifications[]` on a type 14 carries the assignee notification (reason 1)
   **once per issue**, so the same user repeats; a batch that changed no
   assignee carries `[]` (measured 2026-09-06). What is peculiar to 14 is the
@@ -245,10 +237,8 @@ answer who was notified even when the original delivery could.
   `content.comment.content` and into every `link[].comment.content`.
 - Issue deleted → type 4 with `content: { id, key_id }`. Types 5–13, 15–16 and
   18–49 are wiki, file, git, pull-request, member and document events.
-- Linking an issue to a pull request → **type 3 on the issue**, with a system
-  `comment.content` naming the pull request and `changes: []` (measured
-  2026-09-06). A pull-request operation can therefore produce an issue-thread
-  message; see `backlog-pull-request-facts.md`.
+- Linking an issue to a pull request → **type 3 on the issue**; see
+  `backlog-pull-request-facts.md`.
 
 ## Type 2 `changes[]` field names and value notation
 
@@ -290,10 +280,7 @@ label a user sees, and only three fields carry an id:
   produced a type 3 with `changes: []` and left the field `null`. The
   notation they would use is therefore unknown; do not assume it from the
   rows above.
-- Type 14 (multi update) carries `changes[]` under the same field names and
-  the same notation, with no `old_value` — see the type 14 entry above.
-- The REST comment `changeLog` returns priority and status as **display
-  names** where the webhook returns ids; see "Payload envelope".
+- Type 14 carries the same field names and notation, with no `old_value`.
 
 ## Mentions
 
@@ -360,8 +347,7 @@ label a user sees, and only three fields carry an id:
   change",
   https://support.backlog.com/hc/en-us/articles/360051330313-Webhook-sender-IP-address)
   and Basic-auth credentials embedded in `hookUrl`. The Chat SDK's "verify the
-  signature, else 401" contract therefore cannot be met the usual way; the
-  path-secret + `webhookVerifier` shape the adapter uses instead is spec D2.
+  signature, else 401" contract therefore cannot be met the usual way.
 - Outbound timeout, retry count, retry schedule, `User-Agent` and
   `Content-Type` of the webhook request are **not documented** anywhere
   (https://developer.nulab.com/docs/backlog/api/2/add-webhook/ and the support
