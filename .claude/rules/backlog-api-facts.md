@@ -101,9 +101,13 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
   (`GET /issues/:id/attachments` still lists it). Deleting that attachment
   afterwards (`DELETE /issues/:id/attachments/:attachmentId`, 200) does not
   remove the comment either; it appends another changelog-only comment
-  (`attachment: null <- name`) (measured 2026-09-27). A comment whose
-  `changeLog` records a field change rather than an attachment was not
-  measured.
+  (`attachment: null <- name`) (measured 2026-09-27).
+- A field change behaves the same: a comment carried by a `PATCH
+  /issues/:id` that changed the priority has `changeLog: [{ field:
+  "priority", newValue, originalValue }]`, and Delete Comment on it responds
+  200 yet leaves it with `content: null` and that entry intact (measured
+  2026-09-27). So any comment with a non-empty `changeLog` survives Delete
+  Comment.
 
 ## `notifiedUserId[]` fails open
 
