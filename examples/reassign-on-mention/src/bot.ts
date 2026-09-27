@@ -1,8 +1,5 @@
 import { createMemoryState } from '@chat-adapter/state-memory';
-import {
-  createBacklogAdapter,
-  decodeThreadId,
-} from '@nulab/chat-adapter-backlog';
+import { createBacklogAdapter } from '@nulab/chat-adapter-backlog';
 import { Chat } from 'chat';
 import { z } from 'zod';
 
@@ -47,7 +44,7 @@ chat.onNewMention(async (thread, message) => {
 
   // The thread id already says which kind of subject this is, so the pull
   // request is declined without the fetch `message.subject` would cost.
-  const { subject } = decodeThreadId(message.threadId);
+  const { subject } = backlog.decodeThreadId(message.threadId);
   if (subject.kind === 'pullRequest') {
     await thread.post(PULL_REQUEST_COMMENT);
     return;

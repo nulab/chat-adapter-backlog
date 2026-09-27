@@ -86,13 +86,13 @@ hands out the `backlog-js` client the adapter makes its own calls with, so this
 request is counted in the same rate-limit budget, retried on a 429 by the same
 rule, and fails with the same error classes — none of which would be true of a
 second client built beside it. The reply then goes out with `thread.post()`,
-using `mentionUser(id)` to build Backlog's `<@U<id>>` notation; that notation
+mentioning the new assignee in Backlog's `<@U<id>>` notation; that notation
 notifies the user on its own, so the bot needs no `notifiedUserId`.
 
 **Pull requests are declined.** A pull request's assignee is set through a
 different endpoint, so a mention on one gets a one-line reply saying so. Which
 kind of subject a thread is is already encoded in its thread id, so
-`decodeThreadId(message.threadId)` answers the question without the API call
+`backlog.decodeThreadId(message.threadId)` answers the question without the API call
 `message.subject` would cost.
 
 ## Deploy

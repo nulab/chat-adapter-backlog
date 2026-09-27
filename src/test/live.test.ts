@@ -1,11 +1,10 @@
 import { AdapterError } from '@chat-adapter/shared';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-import {
-  createBacklogAdapter,
-  encodeMessageId,
-  encodeThreadId,
-} from '../index';
+import { createBacklogAdapter } from '../index';
+import { encodeMessageId, encodeThreadId } from '../ids';
+
+import type { BacklogAdapter } from '../adapter';
 
 import type { BacklogApi, PullRequestRef } from '../client/port';
 import type { BacklogSubjectRef } from '../types';
@@ -90,8 +89,16 @@ function createLiveAdapter() {
   });
 }
 
+/**
+ * The port is private to the adapter; element access is the one form
+ * TypeScript leaves open to a private member, kept to this one place.
+ */
+function portOf(adapter: BacklogAdapter): BacklogApi {
+  return adapter['api'](spaceHost);
+}
+
 function connect(): BacklogApi {
-  return createLiveAdapter().api(spaceHost);
+  return portOf(createLiveAdapter());
 }
 
 describe.skipIf(!configured).sequential('a real Backlog space', () => {

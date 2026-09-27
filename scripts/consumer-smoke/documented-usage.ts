@@ -13,10 +13,8 @@
 import { createMemoryState } from '@chat-adapter/state-memory';
 import {
   createBacklogAdapter,
-  createInMemoryBacklogApi,
-  MENTION_PROJECT_MEMBERS,
-  mentionTeam,
-  mentionUser,
+  decodeMessageId,
+  decodeUserId,
   type Backlog,
   type BacklogAdapter,
   type BacklogChannelPostableExtras,
@@ -52,10 +50,14 @@ chat.onNewMention(async (thread, message) => {
   };
   await thread.post(reply);
 
-  await thread.post({ markdown: `${mentionUser(100)} please take a look` });
-  await thread.post({
-    markdown: `${mentionTeam(7)} ${MENTION_PROJECT_MEMBERS} release is out`,
-  });
+  await thread.post({ markdown: '<@U100> please take a look' });
+  await thread.post({ markdown: '<@T7> <@project> release is out' });
+
+  const { part } = decodeMessageId(message.id);
+  if (part === 'root') {
+    const { userId } = decodeUserId(message.author.userId);
+    await thread.post({ markdown: `Thanks for the report, <@U${userId}>` });
+  }
 });
 
 export function POST(
@@ -78,12 +80,11 @@ export async function fileIssue(): Promise<void> {
 export async function reachBacklogDirectly(): Promise<{
   botUserName: string;
 }> {
-  const api = backlog.api(HOST);
-  await api.getIssue(8001);
-  await api.listPullRequests(500, 700, { count: 20 });
-
   const client: Backlog = backlog.client(HOST);
+  await client.getRateLimit();
   await client.getCustomFields(500);
+  await client.getPullRequests(500, '700', { count: 20 });
+  await client.patchIssue(8001, { assigneeId: 100 });
 
   return { botUserName: backlog.botUserName(HOST) };
 }
@@ -111,28 +112,6 @@ export function createMultiSpaceAdapter(): BacklogAdapter {
   });
 }
 
-export function createTestAdapter(): BacklogAdapter {
-  const api = createInMemoryBacklogApi({
-    projects: [
-      {
-        id: 500,
-        projectKey: 'EXAMPLE',
-        name: 'Example',
-        textFormattingRule: 'markdown',
-      },
-    ],
-    issueTypes: { 500: [{ id: 1, name: 'Task' }] },
-    repositories: [
-      { id: 700, projectId: 500, name: 'example-repo', description: '' },
-    ],
-  });
-
-  return createBacklogAdapter({
-    host: HOST,
-    apiKey: 'test',
-    botUserId: 999,
-    botUserName: 'Chatbot',
-    webhookSecret: 'test-webhook-secret',
-    createApi: () => api,
-  });
+export function botNameOnSecondSpace(): string {
+  return createMultiSpaceAdapter().botUserName('two.backlog.jp');
 }

@@ -48,8 +48,8 @@ timestamps stay the ISO strings Backlog sends, everywhere, so one type serves
 the API response and `message.raw`, which must survive a JSON round trip
 through the queue anyway. The current split — `src/client/port.ts` with
 `Date`-carrying domain types beside ISO-string raw types in `src/types.ts`,
-described at the top of `src/index.ts` — is what that refactor removes; until
-it lands, read `src/index.ts` for which side the barrel exports. zod types
+is what that refactor removes; until it lands, only the raw side is published
+(docs/specs/adapter.md §3.1). zod types
 never reach the published `.d.ts`: `scripts/check-published-types.mjs` fails
 the build on any import there but `chat` and `backlog-js`.
 

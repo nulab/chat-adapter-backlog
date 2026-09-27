@@ -1,4 +1,3 @@
-import { mentionUser } from '@nulab/chat-adapter-backlog';
 import { z } from 'zod';
 
 const change = z.object({
@@ -126,7 +125,7 @@ export function handBackComment(
   closedByUserId: number,
   fieldName: string
 ): string {
-  return `${mentionUser(closedByUserId)} ${fieldName} is still empty. Please fill it in before closing.`;
+  return `<@U${closedByUserId}> ${fieldName} is still empty. Please fill it in before closing.`;
 }
 
 /**

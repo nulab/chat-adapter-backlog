@@ -1,9 +1,5 @@
 import { createMemoryState } from '@chat-adapter/state-memory';
-import {
-  createBacklogAdapter,
-  decodeThreadId,
-  mentionUser,
-} from '@nulab/chat-adapter-backlog';
+import { createBacklogAdapter } from '@nulab/chat-adapter-backlog';
 import { generateText } from 'ai';
 import { Chat, type Thread } from 'chat';
 import { z } from 'zod';
@@ -57,7 +53,7 @@ chat.onNewMessage(/[\s\S]*/, async (thread, message) => {
     return;
   }
 
-  const { subject } = decodeThreadId(thread.id);
+  const { subject } = backlog.decodeThreadId(thread.id);
   if (subject.kind !== 'issue') {
     return;
   }
@@ -99,7 +95,7 @@ chat.onNewMessage(/[\s\S]*/, async (thread, message) => {
       }
     );
     await thread.post({
-      markdown: intakeComment(mentionUser(issue.createdUser.id), body),
+      markdown: intakeComment(`<@U${issue.createdUser.id}>`, body),
     });
     return;
   }
@@ -129,9 +125,6 @@ async function handOff(
   }
 
   await thread.post({
-    markdown: handOffComment(
-      mentionUser(env.INTAKE_CONTACT_USER_ID),
-      closedByName
-    ),
+    markdown: handOffComment(`<@U${env.INTAKE_CONTACT_USER_ID}>`, closedByName),
   });
 }

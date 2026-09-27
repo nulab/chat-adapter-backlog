@@ -148,57 +148,71 @@ that decodes correctly but is not a configured installation is a
 
 ### 3.1 Exports (`src/index.ts`)
 
-Runtime: `BacklogAdapter` (class), `createBacklogAdapter(config?)`,
-`encodeThreadId`, `decodeThreadId`, `channelIdFromThreadId`,
-`encodeChannelId`, `decodeChannelId`, `encodeMessageId`, `decodeMessageId`,
-`encodeUserId`, `decodeUserId`,
-`mentionUser(id)`, `mentionTeam(id)`, `MENTION_PROJECT_MEMBERS`,
-`mentionPattern(botUserName)`, `BacklogMarkdownConverter`,
-`BacklogNotationConverter`, `createInMemoryBacklogApi(seed?)`.
+The surface is held to the scale of the first-party adapters
+(`@chat-adapter/github`, `@chat-adapter/linear`), because every export is a
+semver promise (D-API1).
 
-Types: `BacklogAdapterConfig`, `BacklogInstallation`, `ResolvedInstallation`,
-`ResolvedCredential`, `Resolvable`, `BacklogThreadId`, `BacklogChannelId`, `BacklogSubjectRef`,
-`BacklogMessageId`, `BacklogMessagePart`, `BacklogUserId`, `BacklogRawMessage`,
-`BacklogPostableExtras`, `BacklogChannelPostableExtras`,
-`BacklogWebhookPayload`, `BacklogWebhookVerifier`, `BacklogApi` and the domain
-types it references (`BacklogIssue`, `BacklogPullRequest`,
-`BacklogGitRepository`, `BacklogComment`, `BacklogIssueComment`,
-`BacklogProject`, `BacklogUserRef`, `BacklogChange`, `BacklogStar`,
-`StarTarget`, `PullRequestRef`, `BacklogNotification`,
-`BacklogAttachmentInfo`, `TextFormattingRule`, request/query input types),
-`BacklogApiErrorDetail`,
-`InMemoryBacklogSeed`, and `Backlog` — `backlog-js`'s own client class,
+Runtime: `BacklogAdapter` (class), `createBacklogAdapter(config?)`,
+`decodeMessageId`, `decodeUserId`.
+
+Types: `BacklogAdapterConfig`, `BacklogInstallation`, `Resolvable`,
+`BacklogWebhookVerifier` — the config and what it references;
+`BacklogThreadId` and `BacklogSubjectRef`; `BacklogRawMessage` and every
+type it reaches — `BacklogRawIssue`, `BacklogRawComment`,
+`BacklogRawPullRequest`, `BacklogChange` (the raw side's, with ISO strings),
+`BacklogWebhookPayload` and `BacklogBulkUpdatePayload` with the
+`BacklogActivity*` shapes and the five activity variants they are built from,
+since a consumer that receives a value must be able to name its type;
+`BacklogMessageId`, `BacklogMessagePart` and `BacklogUserId`, which the two
+decoders return; `BacklogPostableExtras` and `BacklogChannelPostableExtras`,
+without which the Backlog-only fields of §3.4 cannot be typed at all;
+and `Backlog` — `backlog-js`'s own client class,
 re-exported so a consumer can name what `client(host)` returns without
 depending on `backlog-js` itself.
 
-Not exported: the internal subject layer (`SubjectClient`,
-`subjectClientFor`) that selects the issue or pull-request endpoint family
-for a thread — it is the seam egress and reads are written against
-(docs/plans/pull-request-support.md §3.4), not a consumer surface.
+The two decoders are the only free functions, because they read a grammar
+this adapter invented and no `Adapter` member reads back: a handler that needs
+the part a message is, or its author's numeric Backlog id, has nothing else to
+ask. A thread id is decoded with the adapter's own `decodeThreadId`, and the
+encoders are not exported, because a consumer never builds a message or user
+id. The mention notation is Backlog's documented syntax (§5.4), which a
+consumer writes as it would any other markup, so it is not wrapped either.
 
-Not exported: the port's `backlog-js` wrapper factory, zod schemas, the
-plain-text fallback converter, fixtures. Nothing from `zod` appears in an
-exported type, and `chat` and `backlog-js` are the only modules
-`dist/index.d.ts` may import — `scripts/check-published-types.mjs` fails
-`pnpm build` on any other, so `BacklogWebhookPayload` and
-`BacklogBulkUpdatePayload` are declared by hand in `src/types.ts` rather than
-aliased to a `z.infer`.
+Not exported: the port (`BacklogApi`) and its domain types, the in-memory port
+(§8.3) and the seam that injects one, the id encoders and
+`channelIdFromThreadId` as free functions, the mention helpers and
+`mentionPattern`, the format converters (§9 — rendering is the adapter's
+`renderFormatted`), `ResolvedInstallation` and `ResolvedCredential`, the
+internal subject layer (`SubjectClient`, `subjectClientFor`) that selects
+the issue or pull-request endpoint family for a thread
+(docs/plans/pull-request-support.md §3.4), the port's `backlog-js` wrapper
+factory, zod schemas, the plain-text fallback converter and fixtures.
+
+Nothing from `zod` appears in an exported type, and `chat` and `backlog-js`
+are the only modules `dist/index.d.ts` may import. `scripts/check-published-types.mjs`
+fails `pnpm build` on any other, and on a type the declarations contain but
+do not export. The first rule is why
+`BacklogWebhookPayload` and `BacklogBulkUpdatePayload` are declared by hand in
+`src/types.ts` rather than aliased to a `z.infer`.
 
 `backlog-js` does appear in one, and the exception is deliberate:
-`BacklogAdapter.client(host)` returns the configured `Backlog` client the port
-itself speaks through, for the endpoints the port does not name — changing an
-assignee, reading an issue's custom fields, anything else a bot needs and this
-adapter does not. Handing it out rather than leaving a caller to construct one
-is what keeps the guarantees: the client carries the adapter's bounded 429
-retry, its `@chat-adapter/shared` error mapping and its per-call credential
-resolution (§8.2), none of which a second client beside it would have. The cost is that this
-package's public types move with `backlog-js`'s, which is accepted because it
-is the library the adapter is built on and the same vendor ships both.
+`BacklogAdapter.client(host)` returns the configured `Backlog` client the
+adapter itself speaks through, for every endpoint the `Adapter` interface does
+not cover — changing an assignee, reading an issue's custom fields, listing a
+repository's pull requests, anything else a bot needs. Handing it out rather
+than leaving a caller to construct one is what keeps the guarantees: the
+client carries the adapter's bounded 429 retry, its `@chat-adapter/shared`
+error mapping and its per-call credential resolution (§8.2), none of which a
+second client beside it would have. The cost is that this package's public
+types move with `backlog-js`'s, which is accepted because it is the library
+the adapter is built on and the same vendor ships both. It is the one escape
+hatch, as `octokit` is `@chat-adapter/github`'s.
 
+An unknown host is `ResourceNotFoundError("backlog", "installation", host)`.
 `client(host)` throws `AdapterError` (`code: 'NO_CLIENT'`) when the adapter
-was constructed with a `createApi` seam, because the port is then not
-`backlog-js`-backed and there is no client to hand out. An unknown host is
-`ResourceNotFoundError`, as it is for `api(host)`.
+was built on the internal port seam, which only this repository's tests can
+reach: the port is then not `backlog-js`-backed and there is no client to
+hand out.
 
 ### 3.2 `createBacklogAdapter(config?)`
 
@@ -235,7 +249,6 @@ interface BacklogAdapterConfig {
   userName?: string;
   logger?: Logger;
   maxWebhookBodyBytes?: number;
-  createApi?: (installation: ResolvedInstallation) => BacklogApi;
 }
 type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | Promise<unknown>;
 ```
@@ -253,7 +266,6 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 | `userName` | `string` | first installation's bot name, configured or fetched | none | Non-empty. Exposed to the core as `adapter.userName`. |
 | `logger` | `Logger` (from `chat`) | `new ConsoleLogger("info").child("backlog")` | none | Replaced by `chat.getLogger("backlog")` in `initialize`. |
 | `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | none | Positive integer. Larger bodies → 413 (§5.1) ⚑. |
-| `createApi` | function | `backlog-js` implementation | none | Test seam; receives the resolved installation and returns a port. |
 
 Environment fallbacks apply **only** to shape A and only when the corresponding
 field is absent from `config` (an explicit empty string is a validation error,
@@ -313,8 +325,8 @@ Otherwise a deployment that moved from OAuth to an API key, wrote `apiKey` in
 `config` and forgot to unset `BACKLOG_ACCESS_TOKEN` would be refused with a
 message blaming the config it had just written.
 
-`ResolvedInstallation` is what validation produced, not a second name for
-`BacklogInstallation`, and it says so in the type:
+`ResolvedInstallation` (internal) is what validation produced, not a second
+name for `BacklogInstallation`, and it says so in the type:
 
 ```ts
 type ResolvedCredential =
@@ -330,7 +342,7 @@ type ResolvedInstallation = {
 ```
 
 So an installation carrying both credentials or neither is a type error, and
-`createApi` receives a value whose exclusivity no reader has to take on trust.
+the port factory receives a value whose exclusivity no reader has to take on trust.
 The input type stays permissive on purpose: config is assembled from
 `process.env` and JSON the compiler knows nothing about, and one
 `ValidationError` naming the field is a better report than a type error raised
@@ -348,9 +360,8 @@ throws makes that call reject with `AuthenticationError` wrapping the cause.
 
 - `readonly name = "backlog"`; `readonly userName: string` (a getter: `""`
   until a bot name left to `GET /users/myself` has been fetched, §3.2).
-- `api(host: string): BacklogApi` — the port for that installation (escape
-  hatch for endpoints outside the Chat SDK contract, D7). Unknown host →
-  `ResourceNotFoundError("backlog", "installation", host)`.
+- `client(host: string): Backlog` — the `backlog-js` client for that
+  installation, the one escape hatch (§3.1, D7).
 - `botUserName(host: string): string` — the bot's display name on that
   installation (D19). Unknown host → the same
   `ResourceNotFoundError("backlog", "installation", host)`. Unaffected by a
@@ -464,9 +475,8 @@ in the activity but raw `<@U…>` in REST (measured 2026-09-06). Consumers read
 All from `@chat-adapter/shared`, adapter name `"backlog"`:
 `ValidationError`, `AuthenticationError`, `PermissionError`,
 `ResourceNotFoundError`, `AdapterRateLimitError`, `NetworkError`,
-`AdapterError`. Mapping in §8.5. The id **encoders** throw `ValidationError`
-too, for the input §2.2 lists. `mentionUser`/`mentionTeam` throw a built-in
-`RangeError` for a non-positive-integer id (pure helpers, no adapter context).
+`AdapterError`. Mapping in §8.5. The id decoders, and the adapter's
+`encodeThreadId`, throw `ValidationError` too, for the input §2.2 lists.
 No `ZodError` and no `backlog-js` error class ever escapes the package.
 
 ## 4. Adapter contract coverage
@@ -944,8 +954,8 @@ A hand-typed `@Chatbot` is indistinguishable from a real mention; false
 positives are accepted and documented. A display-name collision with another
 user is likewise accepted.
 
-Outbound helpers: `mentionUser(id)` → `<@U<id>>`, `mentionTeam(id)` →
-`<@T<id>>`, `MENTION_PROJECT_MEMBERS` → `<@project>`; positive integers only.
+Outbound, a consumer writes Backlog's notation itself — `<@U<id>>`,
+`<@T<id>>`, `<@project>` — and the package exports no helper for it (§3.1).
 Writing `<@U…>` in content notifies the user even without `notifiedUserId`
 (Tips page; measured 2026-09-04). `notifiedUserId` is an independent mechanism
 that notifies without a visible mention.
@@ -1125,9 +1135,8 @@ returns neither object's `attachments[]`: `getIssue` does not surface one, and
 them is one extra read on **every** root message — `GET /issues/:issueIdOrKey/attachments`
 and `GET /projects/:projectId/git/repositories/:repositoryId/pullRequests/:number/attachments`
 — for a source that matters only when a body has files, so the adapter does
-not spend it and a consumer that wants them asks through `api(host)` (§3.3):
-`listPullRequestAttachments(ref)` is already on the port (§8.1), the issue
-list is not and adding it is a port change.
+not spend it and a consumer that wants them asks through `client(host)`
+(§3.3): `getIssueAttachments` and `getPullRequestAttachments`.
 
 `fetchData()` calls `GET /issues/:issueId/attachments/:attachmentId`
 ([Get Issue Attachment](https://developer.nulab.com/docs/backlog/api/2/get-issue-attachment/))
@@ -1338,7 +1347,7 @@ with `projectId[]`, `count` (default 50, clamped `[1, 100]`, non-integer →
 (cursor, `^(0|[1-9]\d*)$` else `ValidationError`). This endpoint draws on the
 **search** bucket (150/min documented example), not read. **Pull requests are
 not listed** (D-PR7): a pull-request list is per repository, a coordinate the
-channel id does not carry; `api(host).listPullRequests(projectId, repositoryId, …)`
+channel id does not carry; `client(host).getPullRequests(projectId, repositoryId, …)`
 is the route to one, and it spends `read`, not `search` (measured
 2026-09-06). Ordering is Backlog's
 default for the endpoint (`order=desc` on its unstated default sort key); no
@@ -1498,7 +1507,9 @@ outlive the request timeout.
 
 ### 8.3 In-memory implementation
 
-`createInMemoryBacklogApi(seed?)` is exported for consumers' tests. Seed:
+`createInMemoryBacklogApi(seed?)` backs this repository's own tests and is
+not exported (§3.1): a consumer tests its handlers with `@chat-adapter/tests`
+and mocks `client(host)`, as it would with any first-party adapter. Seed:
 `projects`, `issues`, `comments`, `users`, `issueTypes` per project,
 `priorities` (default `High/Normal/Low` with ids 2/3/4, matching the
 documented example), `notifications`, `repositories`, `pullRequests`,
@@ -2210,16 +2221,15 @@ for one scratch space is worse than requiring the two to share it.
   pull-request id; mentions (§5.4); issue creation (§6.7); stars (`commentId`
   or `pullRequestCommentId`); read receipts; history paging (§7.1);
   `message.subject.type` being `"issue"` or `"pull_request"` (D-PR8); raw API
-  and errors (§3.6, §8.5), with `api(host).listPullRequests` named as the route
-  to a repository's pull requests, `client(host)` named as the `backlog-js`
-  client for the endpoints the port does not — carrying the same retry and
-  errors, and throwing `NO_CLIENT` under a custom `createApi` — and the 429
+  and errors (§3.6, §8.5), with `client(host)` named as the `backlog-js`
+  client for everything the `Adapter` interface does not cover — a
+  repository's pull requests included — carrying the same retry and errors;
+  the two exported decoders; and the 429
   retry stated as a wait of up to 60 seconds that blocks the call — so a
   serverless deployment must allow more execution time than that, with the
   two `warn` lines
-  named as how the wait becomes visible; testing with
-  `createInMemoryBacklogApi`, with `createApi` in the configuration table
-  because that section passes it; license.
+  named as how the wait becomes visible; testing with `@chat-adapter/tests`
+  and a mocked `client(host)`; license.
   Every link into this repository is absolute
   (`https://github.com/nulab/chat-adapter-backlog/blob/main/…` for a file,
   `/tree/main/…` for a directory), never `./file`: README.md ships in the
@@ -2306,7 +2316,7 @@ for one scratch space is worse than requiring the two to share it.
 | D4 | `stream()` buffers and posts once | The core's 500 ms edit loop is ~120 update calls per minute against a documented example limit of 150. | Omitting `stream` (falls into that loop); throttled edits (still wasteful, and a comment edit emits no webhook anyway). |
 | D5 | One retry on 429/13, waiting until the failing response's own `X-RateLimit-Reset` for at most 60 s; otherwise `AdapterRateLimitError` with that wait as `retryAfter`. No bucket classification, no per-bucket header capture, no rate-limit snapshot, and no configuration of either bound | Limits differ per plan and are per user, so a 429 is the only signal that matters and it carries its own reset. `backlog-js` turns a non-2xx into its own error before the headers are visible, so the retry lives in the injected `fetch`. One bounded retry converts most transient 429s into success without hiding sustained exhaustion. Tracking was built and removed: its only consumer was a public `rateLimit(host)` / `getRateLimit()` pair nothing in the adapter read, and neither first-party adapter for a comparable service (GitHub, Linear) tracks limits at all. The bounds were once `config.rateLimit.{maxRetries,maxWaitMs}` and were removed for the same reason: neither of those adapters exposes retry tuning, a one-minute window makes a 60 s ceiling sufficient, and the one caller need it served — a serverless timeout below the wait — is met by raising the timeout. | Hard-coded 600/150/150/60; unbounded backoff; no retry at all (every 429 becomes a failed reply); classifying each request into read/update/search/icon and recording per-(host, bucket) snapshots (cost without a consumer: the retry needs only the failing response); `rateLimit.{maxRetries,maxWaitMs}` options (surface and validation for a tuning no caller needs). |
 | D6 | Error class from `errors[].code` first, status second; detail as `cause` | The error-response page maps meaning to codes, not statuses; `cause` keeps `moreInfo` for operators without leaking `backlog-js` types. | Status-only mapping; re-exporting `backlog-js` errors. |
-| D7 | No host-application hooks; `api(host)` is the only escape hatch | Engagement/subscription state is the `StateAdapter`'s job; drop prediction depends on private core keys. | Engagement callback, inbound observer, dedupe-key helpers. |
+| D7 | No host-application hooks; `client(host)` is the only escape hatch | Engagement/subscription state is the `StateAdapter`'s job; drop prediction depends on private core keys. | Engagement callback, inbound observer, dedupe-key helpers. |
 | D8 | Numeric ids everywhere; host inside message and user ids | Issue keys change on project-key rename; the core's dedupe key has no thread component. | Issue keys in thread ids; host-less message ids. |
 | D9 | Mention = the bot in the webhook's `notifications[]` (any `reason`), display name in text (left-bounded, case-sensitive), or assignment to the bot | The webhook's `notifications[]` **is** populated (measured 2026-09-06) and is the only signal for a comment addressed through the notification field, which leaves no `@name` in the text; text and assignment still carry every delivery that has no notification, including an activity-API body replayed as a webhook. Assignee changes arrive by display name. Only explicit addressing lands in that list: an account merely **watching** an issue stayed out of `notifications[]` across a comment and two field-only `PATCH`es, while a non-watching user addressed on the same issue arrived with `reason: 2` (measured 2026-09-06), so no `reason` needs excluding. | Text and assignment only (silently ignores the notification field, the UI's normal way to address someone); filtering to `reason: 2` (drops reason codes not measured here for no gain, since assignment is already covered and watching was measured not to notify at all); case-insensitive match (Japanese names have no case, ASCII names would over-match). |
 | D10 | Types 1, 2, 3, 14 and 18, 19, 20 processed, 4 optional deletion, rest ignored; register `activityTypeIds`, never `allEvent` | Only issue and pull-request activity maps to a thread; 14 was ignored here until 2026-09-06 on the ground that it "has no per-issue comment", which measurement disproved — `content.link[].comment.id` is a comment that exists (D22); 17 carries the **original** comment, so dispatching it would re-deliver a message id already dispatched; 21 was never observed (D-PR5). | `allEvent` (wiki/git/document noise). Dispatching 17: `dedupe:backlog:<message.id>` suppresses the repeat only for `dedupeTtlMs` (§5.5), and a notification added a day later fires the same comment a second time. The accepted cost is a blind spot — a 17 whose `notifications[]` names the bot is the only signal that the bot was mentioned on a comment **after** it was posted, and acting on it needs a message id that distinguishes the notification from the comment it repeats. The pair was measured on a development space, 2026-09-06: a type 3 naming one recipient and, three seconds later, a type 17 naming another carry different activity ids but the same `content.comment.id`, the same text and an identical `content`, so `content.comment.id` cannot separate them and `notifications[]` — a delta, not the comment's recipient list — is the only field that names what the second delivery added (`.claude/rules/backlog-webhook-facts.md`). |
@@ -2327,11 +2337,12 @@ for one scratch space is worse than requiring the two to share it.
 | D-PR4 | No adapter option selecting kinds | The webhook subscription already is that switch; a mismatch between an option and the subscription would silently drop delivered events. | `subjects: ('issue' \| 'pullRequest')[]` config. |
 | D-PR5 | Type 21 is 200 Ignored and not in the registration guidance | It was not observed: merge (UI or git push) and close both arrive as type 19 status changes, no delete operation exists in the UI or the API, and the project's activity history holds none (measured 2026-09-06); the docs and `backlog-js` disagree on its very name. | `processMessageDeleted` on 21 (nothing to test it against). |
 | D-PR6 | A pull request linked to an issue is its own thread; the link is metadata | The link can be changed (`changes[field="issue"]`, measured); routing by it would move a thread. | Routing pull-request activity into the linked issue's thread. |
-| D-PR7 | `listThreads` lists issues only | A pull-request list is per repository, a coordinate the channel id lacks; `api(host).listPullRequests` covers it. | Interleaving every repository's pull requests (N+1 reads, two cursor grammars); listing pull requests only. |
+| D-PR7 | `listThreads` lists issues only | A pull-request list is per repository, a coordinate the channel id lacks; `client(host).getPullRequests` covers it. | Interleaving every repository's pull requests (N+1 reads, two cursor grammars); listing pull requests only. |
 | D-PR8 | `fetchSubject().type` is `"pull_request"` | The `@chat-adapter/github` convention; the core types it as a free string, so bot authors already branch on that literal. | `"pullRequest"` (matches our `kind`, not the ecosystem). |
 | D-PR9 | Root part tag `r` for both kinds (was `i`) | `i` meant "issue" and would mislead on a pull request; a tagless root makes the grammar irregular. | Keep `i`; no tag. |
 | D-PR10 ⚑ | Pull-request comment attachments resolve their id by **name** through the attachment list, newest match first | Neither the type-20 `changes[]` nor the REST `changeLog` carries an attachment id for pull requests (measured 2026-09-06); the list is the only id source and names are not unique. | Omitting `fetchData` on pull-request comment attachments (loses the file entirely); one list call per comment eagerly (a read per message). |
 | D19 | `botUserName(host)` exposed; `botUserId` still private | `userName` is one string, so a consumer running spaces under different display names has no way to build or match its own mention string per space and must duplicate the installation config to get one; the name is already public in every rewritten comment body, while the id is not and would mislead the core's `@<id>` pattern. | Requiring one display name across all spaces (an operational constraint the adapter cannot enforce); exposing the whole `ResolvedInstallation` (leaks credentials and `botUserId`); a `userName(host)` name (reads like the core's `userName`, which it deliberately is not). |
+| D-API1 | The public surface is the adapter, its factory, the config and the types reachable from it, the thread-id and raw-message types, two id decoders and one escape hatch, `client(host)` | Every export is a semver promise, and the first-party adapters (`@chat-adapter/github@4.41.0`, `@chat-adapter/linear@4.41.0`) export the same kinds of thing and one client getter; the decoders stay because this adapter's id grammar is its own and no `Adapter` member reads a message or user id back. | A second escape hatch, `api(host)`, exposing the internal port and some thirty domain types; a `createApi` config field and an exported in-memory port (a test seam the references do not offer, and one that fixes the port's shape as public API); free-function copies of the `Adapter` members' id codec; mention helpers for a notation Backlog documents; the format converters, which `renderFormatted` already applies. |
 | — | Self messages are not dispatched by the adapter | `selfMessageContract` asserts nothing is dispatched; the core's own `isMe` skip is a second line of defence. | Relying on the core alone. |
 | — ⚑ | No timestamp-staleness window | See §5.1: unsigned timestamps give no protection and would drop measured late redeliveries. | Rejecting payloads older than N minutes. |
 

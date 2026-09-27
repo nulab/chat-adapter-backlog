@@ -544,7 +544,7 @@ function listedIssueRoot(
  * `listThreads` (docs/specs/adapter.md §7.6). Lists the project's **issues**
  * and deliberately not its pull requests (D-PR7): a pull-request list is per
  * repository, a coordinate a channel id does not carry, and
- * `api(host).listPullRequests(projectId, repositoryId, …)` is the route to
+ * `client(host).getPullRequests(projectId, repositoryId, …)` is the route to
  * one — a `read`-bucket call, not a `search` one (measured 2026-09-06,
  * `.claude/rules/backlog-pull-request-facts.md` "Rate limit"), so merging the
  * two lists here would also mix two budgets behind one cursor.
