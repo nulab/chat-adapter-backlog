@@ -81,7 +81,7 @@ delivery carries (`null` when unassigned, measured on a development space,
 notification described.
 
 **The two calls.** The reassignment is
-`backlog.client(host).patchIssue(issueId, { assigneeId })`. `client(host)`
+`backlog.client().patchIssue(issueId, { assigneeId })`. `client()`
 hands out the `backlog-js` client the adapter makes its own calls with, so this
 request is counted in the same rate-limit budget, retried on a 429 by the same
 rule, and fails with the same error classes — none of which would be true of a

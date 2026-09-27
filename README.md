@@ -83,17 +83,16 @@ wired up, environment variables and a handler that does something useful — see
 
 ## Environment variables
 
-Fallbacks apply only to the single-space shape, and only when the field is
-absent from the config object. An explicit empty string is a validation error,
-not a request to fall back.
+A fallback applies only when the field is absent from the config object. An
+explicit empty string is a validation error, not a request to fall back.
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `BACKLOG_HOST` | yes | Space host without a scheme, port or path. |
 | `BACKLOG_API_KEY` | one of the two | Personal API key, sent in the `Backlog-API-Key` header. |
 | `BACKLOG_ACCESS_TOKEN` | one of the two | OAuth 2.0 bearer token instead of a key. |
-| `BACKLOG_BOT_USER_ID` | no | Numeric id of the bot user. Read from `GET /api/v2/users/myself` when unset or blank — see **Bot identity**. |
-| `BACKLOG_BOT_USER_NAME` | no | The bot's display name, as Backlog renders it in a comment. Read from `GET /api/v2/users/myself` when unset or blank. |
+| `BACKLOG_BOT_USER_ID` | recommended | Numeric id of the bot user. Read from `GET /api/v2/users/myself` when unset or blank — see **Bot identity**. |
+| `BACKLOG_BOT_USER_NAME` | no | The bot's display name, as Backlog renders it in a comment. Only a typed `@name` needs it. |
 | `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter. At least 16 bytes. |
 
 ## Configuration
@@ -101,69 +100,38 @@ not a request to fall back.
 | Option | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `host` | `string` | — | Full hostname. Backlog spaces also live on `backlog.jp` and legacy `backlogtool.com`, so this is never a subdomain slug. |
-| `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | — | Exactly one per installation. The function form is resolved on **every** call and never cached, so an expiring token can be refreshed without reconstructing the adapter. |
+| `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | — | Exactly one. The function form is resolved on **every** call and never cached, so an expiring token can be refreshed without reconstructing the adapter. |
 | `botUserId` | `number` | `GET /users/myself` | Positive integer, at most `Number.MAX_SAFE_INTEGER` — it is encoded into user ids. Recognises the adapter's own messages and assignment to the bot. |
-| `botUserName` | `string` | `GET /users/myself` | Non-empty. Mentions arrive as resolved text, so this is what the mention pattern matches. |
-| `webhookSecret` | `string` | — | Required on every installation unless `webhookVerifier` is set. **At least 16 bytes**, checked when the adapter is constructed — it is the only thing standing between the URL and your projects, so a short one is refused rather than warned about. |
-| `installations` | `BacklogInstallation[]` | — | Several spaces in one adapter. Mutually exclusive with the fields above. |
+| `botUserName` | `string` | `GET /users/myself` when `botUserId` is also unset | Non-empty. Mentions arrive as resolved text, so this is what a typed `@name` is matched against. Also `adapter.userName`. |
+| `webhookSecret` | `string` | — | Required unless `webhookVerifier` is set. **At least 16 bytes**, checked when the adapter is constructed — it is the only thing standing between the URL and your projects, so a short one is refused rather than warned about. |
 | `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check entirely — for a reverse-proxy assertion, mTLS or an IP allowlist. |
-| `userName` | `string` | first installation's bot name | Exposed to the core as `adapter.userName`. One string for the whole adapter; per space, read `adapter.botUserName(host)`. |
 | `logger` | `Logger` | `ConsoleLogger("info")` | Replaced by `chat.getLogger("backlog")` in `initialize`. |
+
+One adapter serves one Backlog space: an API key belongs to one space, so a
+second space is a second adapter under its own `Chat` and webhook URL. An
+option the adapter does not know, such as a leftover `installations`, is a
+`ValidationError` rather than silently ignored.
 
 ### Bot identity
 
-`botUserId` and `botUserName` may be left out, per installation. Whichever is
-missing is read from `GET /api/v2/users/myself` — the user the API key or
-token acts as — once per installation, when `initialize` runs (on the first
-webhook, or `chat.initialize()`). A value you configure always wins over the
-fetched one, so you can pin the display name your users type and leave the id
-to the API.
+The adapter needs the bot's user id to recognise its own comments and
+assignments, and asks `GET /api/v2/users/myself` — the user the API key or
+token acts as — for it once, when `initialize` runs (on the first webhook, or
+`chat.initialize()`), only if `botUserId` is unset. That lookup also fills a
+missing `botUserName`. Set `BACKLOG_BOT_USER_ID` and no request is ever made,
+which matters where every cold start runs `initialize` again.
 
-- **Configure both and the adapter never asks.** That is the setting for a
-  runtime that starts a fresh instance per request, where every cold start
-  would otherwise spend one `read`-bucket call.
+`botUserName` is needed only to recognise a hand-typed `@name` in comment
+text. Leave it out beside a configured id and `initialize` logs one warning:
+a typed `@name` is then not a mention, while notifications and assignment
+still are, and `adapter.userName` is `""`, so the Chat SDK core matches
+`@<chat.userName>` instead — give `new Chat({ userName })` a non-empty value.
+
 - **A failed lookup does not fail `initialize`.** It is logged as a warning
   and retried by the next webhook or call that needs it. A webhook whose bot
   identity still cannot be learned is answered **503** and not dispatched:
   without the id the adapter cannot tell the bot's own comments apart, and a
   bot that answers itself answers forever.
-- `adapter.userName` is `""` and `adapter.botUserName(host)` throws until the
-  lookup has answered; both are settled once `initialize` resolves.
-
-### Several spaces
-
-```ts
-createBacklogAdapter({
-  installations: [
-    { host: 'one.backlog.com', apiKey: () => readKey('one'), botUserId: 999, botUserName: 'Chatbot', webhookSecret: '…' },
-    { host: 'two.backlog.jp',  apiKey: () => readKey('two'), botUserId: 42,  botUserName: 'Chatbot', webhookSecret: '…' },
-  ],
-});
-```
-
-Register each space's webhook with its own `?host=`. Nothing in a Backlog
-payload identifies the space — `projectKey` and the numeric ids are not unique
-across spaces — so the host comes from the URL, and it is part of every thread,
-message and user id this adapter mints. Because the URL is the only source,
-getting that one parameter wrong is not a validation error but a silent
-cross-space read: see **Webhook authenticity** below.
-
-The bot may carry a different display name in each space, so ask per host:
-
-```ts
-adapter.userName;                       // 'Chatbot' — the first installation's name
-adapter.botUserName('two.backlog.jp');  // 'Helperbot'
-```
-
-`adapter.userName` is a single string the Chat SDK core uses for its own
-fallback `@<userName>` regex, which therefore agrees with only one space.
-Mention detection itself is the adapter's and is correct everywhere: it
-resolves the installation from the webhook's `?host=` and matches that space's
-name. Anything you build on the mention string — stripping the prefix off a
-command, addressing the bot in your own text — should read
-`botUserName(host)`, not `userName`. An unconfigured host throws the same
-`ResourceNotFoundError` as `client(host)`. `botUserId` stays private, because the
-core's `@<id>` pattern would be wrong for every space but one.
 
 ## Platform setup
 
@@ -171,10 +139,10 @@ core's `@<id>` pattern would be wrong for every space but one.
    answer in. It needs permission to comment.
 2. **Issue an API key** as that user: **Personal Settings → API**. If the
    section is missing, an administrator must enable API access for the space.
-3. **Optionally, pin its identity.** `GET /api/v2/users/myself` with that key
-   reports `id` — that is `botUserId`, not the login name — and `name`, the
-   `botUserName`. Leave both out and the adapter reads them itself (see
-   **Bot identity**); set both and it never has to.
+3. **Pin its id.** `GET /api/v2/users/myself` with that key reports `id` —
+   that is `BACKLOG_BOT_USER_ID`, not the login name — and `name`, the
+   optional `BACKLOG_BOT_USER_NAME`. Leave the id out and the adapter reads it
+   on every cold start (see **Bot identity**).
 4. **Generate a webhook secret**: `openssl rand -hex 32`. Anything under 16
    bytes is rejected at construction.
 5. **Register a webhook per project** (Project Settings → Integrations →
@@ -182,12 +150,12 @@ core's `@<id>` pattern would be wrong for every space but one.
    [Add Webhook](https://developer.nulab.com/docs/backlog/api/2/add-webhook/)):
 
    ```
-   https://<your-app>/api/webhooks/backlog?host=<host>&token=<secret>
+   https://<your-app>/api/webhooks/backlog?token=<secret>
    ```
 
-   Check the `host` against the space you are registering in. A wrong one is
-   accepted silently and read with this space's credentials — **Webhook
-   authenticity** below says what that does.
+   Register it only in the space this deployment is configured for. Another
+   space's webhook pointed here is accepted silently and read with this
+   space's credentials — **Webhook authenticity** below says what that does.
 
    Select activity types **1, 2, 3** (issue created, updated, commented),
    **14** (issues updated in bulk) and **18, 19, 20** (pull request added,
@@ -225,8 +193,8 @@ the secret in the URL is the strongest sender-side check available, and it is
 weaker than an HMAC — anyone who learns the URL can post to it.
 
 The adapter compares it in constant time and answers **401 with an identical
-body** for a missing token, a wrong token, an unknown host and a missing host,
-so an unauthenticated caller cannot map your configuration. It also checks the
+body** for a missing and a wrong token, so an unauthenticated caller learns
+nothing from the difference. It also checks the
 token **before it reads the request body**, so a caller who has found the URL
 but not the secret costs your function nothing but a 401 after its headers.
 
@@ -241,10 +209,10 @@ check: an IP allowlist against
 (they are "subject to change"), Basic auth credentials in the hook URL, mTLS,
 or a reverse-proxy assertion.
 
-**A right secret with a wrong `host` is authentic.** Verification proves that
-the caller knows one space's secret, and nothing more: no Backlog payload says
-which space it came from, so the adapter believes the URL. Register space B's
-webhook with `?host=<space A>&token=<space A's secret>` and every delivery
+**A right secret from the wrong space is authentic.** Verification proves that
+the caller knows the secret, and nothing more: no Backlog payload says which
+space it came from, so the adapter takes it to be the configured one. Register
+space B's webhook with space A's deployment URL and secret and every delivery
 verifies, gets its 200, and is then addressed with space A's credentials.
 Nothing is posted, and the sender sees a success.
 
@@ -256,9 +224,9 @@ tied back to a host, and the one candidate for a consistency check
 (`project.projectKey`) would start dropping real events the first time
 somebody renames a project key (docs/specs/adapter.md D19).
 
-So check the `host` in every hook URL you register. The trace to grep for when
-a space has gone quiet is `project lookup failed` naming a project id that host
-does not have.
+So register the hook URL only in its own space. The trace to grep for when
+a space has gone quiet is `project lookup failed` naming a project id that
+space does not have.
 
 Keep the URL out of logs and issue trackers: it carries the secret.
 
@@ -308,7 +276,7 @@ What a pull-request thread cannot do — delete a comment, get listed by
 | Mentions | yes — the webhook's notification list, a text match, or assignment to the bot |
 | Reactions | partial — one Backlog star; the emoji is ignored (see below) |
 | Streaming | partial — buffered, posted once (see below) |
-| Issue creation via `channel.post()` | **no** — call `client(host).postIssue()` (see below) |
+| Issue creation via `channel.post()` | **no** — call `client().postIssue()` (see below) |
 | Pull-request creation, merge or close | **no** — Backlog exposes no API (see below) |
 | Thread listing | partial — issues only (see below) |
 | User lookup, parent subject | yes — both kinds |
@@ -328,13 +296,13 @@ Limitations worth knowing before you build on this:
   normally.
 - **`listThreads` lists issues only.** A pull-request list is per repository, a
   coordinate the channel id does not carry;
-  `client(host).getPullRequests(projectId, repositoryId, …)` is the route to one.
+  `client().getPullRequests(projectId, repositoryId, …)` is the route to one.
 - **A pull request cannot be closed or merged from Chat.** Backlog exposes no
   API for a status change. Merge in git or in the UI; the change then arrives
   as a type-19 activity like any other update.
 - **`channel.post()` rejects with `ValidationError`.** A channel is a
   project, and a project id is not a thread. Create an issue with
-  `client(host).postIssue(...)`; nothing creates a pull request, because
+  `client().postIssue(...)`; nothing creates a pull request, because
   Backlog exposes no API for it.
 - **Creating a pull request with `notifiedUserId[]` adds a system comment no
   activity announces**, so `fetchMessages` returns one message the webhook
@@ -466,9 +434,8 @@ decodeUserId(message.author.userId).userId; // 100 — the numeric Backlog user 
 Detected when the delivery names the bot among the users it notified, when the
 message text matches `@<botUserName>` (case-sensitive, left-bounded, so
 `@Chatbot2` and `foo@Chatbot` do not match), or when the bot is assigned the
-issue or the pull request. The name compared is the one configured for the space
-the event came from, so several spaces under different display names each match
-their own; `adapter.botUserName(host)` reports it.
+issue or the pull request. Without a `botUserName` the text rule is off and the
+other two still hold (see **Bot identity**).
 
 The notification list is what makes the UI's own way of addressing someone work.
 A comment whose recipients were chosen in the issue's notification field —
@@ -481,9 +448,7 @@ counts as a mention.
 Through `chat`, the effective check is looser than that: the core runs its own
 `@<userName>` regex **case-insensitively** and ORs the result in, so `@chatbot`
 reaches your handler with `isMention` true even though this adapter answered
-false. The core can only add mentions, never remove one, and it compares
-`userName` — the first installation's name — so on every other space the
-case-sensitive rule above is the whole story.
+false. The core can only add mentions, never remove one.
 
 Two asymmetries are worth knowing.
 
@@ -554,7 +519,7 @@ plan. The adapter does not track them: it spends what it needs, and a request
 Backlog refuses with a 429 is retried or surfaced as `AdapterRateLimitError`
 (below). To see the figures yourself, call Backlog's
 [Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/)
-through `client(host)`.
+through `client()`.
 
 Issue listing and counting draw on Backlog's **search** limit, not `read` — the
 trap any polling loop falls into. Listing or counting **pull requests** draws on
@@ -563,13 +528,13 @@ says nothing about the other.
 
 For anything outside the Chat SDK contract — custom fields, project settings,
 changing an assignee, the pull-request list `listThreads` deliberately does not
-cover — `client(host)` hands back the very
+cover — `client()` hands back the very
 [`backlog-js`](https://github.com/nulab/backlog-js) client the adapter makes
 its own calls with, so those calls share the same 429 retry and raise the same
 errors:
 
 ```ts
-const client = adapter.client('example.backlog.com');
+const client = adapter.client();
 const fields = await client.getCustomFields(500); // projectId
 const pullRequests = await client.getPullRequests(500, '700', { count: 20 }); // projectId, repositoryId
 ```
@@ -611,7 +576,7 @@ A bot's own tests need no network and no credentials when they stop at the
 adapter's boundary. The handlers a bot registers receive a `Thread` and a
 `Message`, so test them with the Chat SDK's own kit —
 [`@chat-adapter/tests`](https://chat-sdk.dev/docs/testing) builds a mock
-adapter, `ChatInstance` and state — and mock `adapter.client(host)` with your
+adapter, `ChatInstance` and state — and mock `adapter.client()` with your
 test runner where a handler reaches Backlog directly. The adapter does not
 offer an in-memory Backlog of its own.
 

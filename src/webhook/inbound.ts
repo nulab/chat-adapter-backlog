@@ -27,14 +27,15 @@ export type BulkUpdateLink = BulkUpdateActivity['content']['link'][number];
 export interface InboundContext {
   host: string;
   botUserId: number;
-  botUserName: string;
+  botUserName: string | undefined;
   format: (text: string) => MessageData['formatted'];
 }
 
 type Notification = WebhookActivity['notifications'][number];
 
 export interface MentionEvidence {
-  botUserName: string;
+  /** Unset turns off the two rules that match the name; the id rules remain. */
+  botUserName: string | undefined;
   botUserId: number;
   text: string;
   /**
@@ -64,7 +65,7 @@ export function detectMention(evidence: MentionEvidence): boolean {
   if (evidence.notifications.some((entry) => entry.user.id === botUserId)) {
     return true;
   }
-  if (mentionPattern(botUserName).test(text)) {
+  if (botUserName !== undefined && mentionPattern(botUserName).test(text)) {
     return true;
   }
   if (
@@ -78,10 +79,13 @@ export function detectMention(evidence: MentionEvidence): boolean {
   }
   // Kept beside the notification rule for a body replayed from the activity
   // API, whose `notifications[]` is always empty (measured).
-  return changes.some(
-    (change) =>
-      ASSIGNMENT_CHANGE_FIELDS.includes(change.field) &&
-      change.newValue === botUserName
+  return (
+    botUserName !== undefined &&
+    changes.some(
+      (change) =>
+        ASSIGNMENT_CHANGE_FIELDS.includes(change.field) &&
+        change.newValue === botUserName
+    )
   );
 }
 

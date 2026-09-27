@@ -7,12 +7,10 @@ import {
 import { ConsoleLogger, Message as MessageCtor } from 'chat';
 
 import { createBacklogJsTransport } from './client/backlog-js';
+import { parseConfig } from './config';
+import type { SpaceConfig } from './config';
 import type { Backlog } from 'backlog-js';
-import type {
-  BacklogApi,
-  BacklogCredentials,
-  TextFormattingRule,
-} from './client/port';
+import type { BacklogApi, TextFormattingRule } from './client/port';
 import {
   addReaction as addReactionToComment,
   bufferStream,
@@ -31,7 +29,6 @@ import {
   encodeChannelId,
   encodeMessageId,
   encodeThreadId as encodeThreadIdStruct,
-  validateHost,
 } from './ids';
 import {
   fetchChannelInfo as fetchChannelInfoRead,
@@ -49,14 +46,9 @@ import type { SubjectClient, SubjectNames } from './subject/client';
 import type {
   BacklogAdapterConfig,
   BacklogChannelId,
-  BacklogInstallation,
   BacklogRawMessage,
   BacklogSubjectRef,
   BacklogThreadId,
-  BacklogWebhookVerifier,
-  Resolvable,
-  ResolvedCredential,
-  ResolvedInstallation,
 } from './types';
 import { buildBulkUpdateMessage, buildInboundMessage } from './webhook/inbound';
 import type { InboundContext } from './webhook/inbound';
@@ -95,358 +87,26 @@ import type {
 } from 'chat';
 
 /**
- * Builds the `backlog-js`-backed port for one installation.
- *
- * The credential is passed as the resolver itself rather than an already
- * resolved string: the port awaits it on every request and never memoises the
- * result (docs/specs/adapter.md §3.2, §8.2), so a caller whose OAuth token
- * expires hourly refreshes it without reconstructing the adapter. Resolving it
- * here instead would pin the first value for the process's lifetime.
- *
- * The logger is passed as an accessor for the same reason: `initialize`
- * replaces `this.logger` with the `ChatInstance`'s, while `apiCache` keeps the
- * port built before it, so a resolved `Logger` would send the rate-limit lines
- * to the construction-time `ConsoleLogger` forever.
- */
-function defaultCreateTransport(
-  logger: () => Logger
-): (installation: ResolvedInstallation) => AdapterTransport {
-  return (installation) =>
-    createBacklogJsTransport({
-      host: installation.host,
-      credentials: toCredentials(installation),
-      logger,
-    });
-}
-
-/**
- * What one host's traffic goes through. `client` is absent exactly when a test
- * replaced the port with one that is not `backlog-js`-backed, because there is
- * then no client to hand out and inventing one would talk to the network.
+ * What the space's traffic goes through. `client` is absent exactly when a
+ * test replaced the port with one that is not `backlog-js`-backed, because
+ * there is then no client to hand out and inventing one would talk to the
+ * network.
  */
 interface AdapterTransport {
   api: BacklogApi;
   client?: Backlog;
 }
 
-/** Who the bot is on one installation, once configuration and `GET /users/myself` have both had their say. */
+/** The name is absent when only the id was configured (see `initialize`). */
 interface BotIdentity {
   id: number;
-  name: string;
-}
-
-/**
- * There is no "neither credential" branch, and none is reachable: an
- * installation is a `ResolvedCredential`, so the compiler narrows the second
- * test to `never` and a third case would be dead code the reader has to
- * reason about (this function used to end in an unreachable `throw`).
- *
- * Each resolvable is copied into a local first because the closure outlives
- * the narrowing — reading `installation.apiKey` inside the arrow would widen
- * back to `Resolvable | undefined`.
- */
-function toCredentials(installation: ResolvedInstallation): BacklogCredentials {
-  if (installation.apiKey !== undefined) {
-    const apiKey = installation.apiKey;
-    return { apiKey: () => resolve(apiKey) };
-  }
-  const accessToken = installation.accessToken;
-  return { accessToken: () => resolve(accessToken) };
-}
-
-function resolve(resolvable: Resolvable): string | Promise<string> {
-  return typeof resolvable === 'function' ? resolvable() : resolvable;
+  name: string | undefined;
 }
 
 const CONVERTERS: Record<TextFormattingRule, BaseFormatConverter> = {
   markdown: new BacklogMarkdownConverter(),
   backlog: new BacklogNotationConverter(),
 };
-
-const ENV_HOST = 'BACKLOG_HOST';
-const ENV_API_KEY = 'BACKLOG_API_KEY';
-const ENV_ACCESS_TOKEN = 'BACKLOG_ACCESS_TOKEN';
-const ENV_BOT_USER_ID = 'BACKLOG_BOT_USER_ID';
-const ENV_BOT_USER_NAME = 'BACKLOG_BOT_USER_NAME';
-const ENV_WEBHOOK_SECRET = 'BACKLOG_WEBHOOK_SECRET';
-
-function fail(message: string): never {
-  throw new ValidationError('backlog', message);
-}
-
-/**
- * `Number.isSafeInteger`, not `Number.isInteger`: the id ends up in
- * `encodeUserId`, whose grammar stops at 2^53-1 because a larger value cannot
- * be read back out of an id string (docs/specs/adapter.md §2.1). Accepting
- * one here would defer the same rejection to the first outbound mention.
- */
-function validateBotUserId(value: number, label: string): number {
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    fail(`${label} must be a positive integer, at most 2^53-1`);
-  }
-  return value;
-}
-
-function parseBotUserIdFromEnv(raw: string, envVar: string): number {
-  if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
-    fail(
-      `environment variable ${envVar} must be a positive integer, at most 2^53-1`
-    );
-  }
-  return Number(raw);
-}
-
-function validateBotUserName(value: string, label: string): string {
-  if (value.trim().length === 0) {
-    fail(`${label} must not be empty`);
-  }
-  return value;
-}
-
-/**
- * The webhook secret is the whole of webhook authenticity when no
- * `webhookVerifier` is configured: Backlog signs nothing, so anyone who can
- * guess the URL can post a payload the adapter will act on
- * (docs/specs/adapter.md §11). Sixteen bytes is the floor at which guessing
- * is not the cheap attack, and it is a construction-time `ValidationError`
- * rather than a warning because config resolution has no logger to warn into
- * and a library must not decide for a deployment that a weak secret is
- * acceptable — the README's `openssl rand -hex 32` produces 64.
- */
-const MIN_WEBHOOK_SECRET_BYTES = 16;
-
-function validateWebhookSecret(value: string, label: string): string {
-  if (value.length === 0) {
-    fail(`${label} must not be empty`);
-  }
-  if (Buffer.byteLength(value, 'utf8') < MIN_WEBHOOK_SECRET_BYTES) {
-    fail(
-      `${label} must be at least ${MIN_WEBHOOK_SECRET_BYTES} bytes; generate one with \`openssl rand -hex 32\``
-    );
-  }
-  return value;
-}
-
-function validateApiKey(value: string, label: string): string {
-  if (value.length === 0) {
-    fail(`${label} must not be empty`);
-  }
-  return value;
-}
-
-/**
- * Reads a required string field, in this order: explicit config value (even
- * an empty string, which is a validation error rather than a fallback
- * trigger — docs/specs/adapter.md §3.2), then the environment variable. Both
- * absent names the field and its env var in one message so a misconfigured
- * deployment sees exactly what to set.
- */
-function requireWithEnvFallback(
-  configValue: string | undefined,
-  envVar: string,
-  fieldLabel: string
-): string {
-  if (configValue !== undefined) {
-    return configValue;
-  }
-  const envValue = process.env[envVar];
-  if (envValue !== undefined) {
-    return envValue;
-  }
-  fail(`${fieldLabel} is required: set config.${fieldLabel} or ${envVar}`);
-}
-
-/**
- * Validates one installation's fields, shared by shape A (after env
- * fallbacks resolve it into this shape) and shape B (each array element).
- * `requireSecret` is false only when `config.webhookVerifier` replaces the
- * secret check for every installation (D2).
- */
-function validateInstallation(
-  candidate: {
-    host: string;
-    apiKey?: Resolvable;
-    accessToken?: Resolvable;
-    botUserId?: number;
-    botUserName?: string;
-    webhookSecret?: string;
-  },
-  requireSecret: boolean
-): ResolvedInstallation {
-  const host = validateHost(candidate.host, 'host');
-
-  const credential = resolveCredential(candidate);
-
-  if (candidate.botUserId !== undefined) {
-    validateBotUserId(candidate.botUserId, 'botUserId');
-  }
-  if (candidate.botUserName !== undefined) {
-    validateBotUserName(candidate.botUserName, 'botUserName');
-  }
-
-  if (requireSecret) {
-    if (candidate.webhookSecret === undefined) {
-      fail(
-        'webhookSecret is required: set config.webhookSecret, an installation webhookSecret, or config.webhookVerifier'
-      );
-    }
-    validateWebhookSecret(candidate.webhookSecret, 'webhookSecret');
-  } else if (candidate.webhookSecret !== undefined) {
-    validateWebhookSecret(candidate.webhookSecret, 'webhookSecret');
-  }
-
-  const resolved: ResolvedInstallation = { host, ...credential };
-  if (candidate.botUserId !== undefined) {
-    resolved.botUserId = candidate.botUserId;
-  }
-  if (candidate.botUserName !== undefined) {
-    resolved.botUserName = candidate.botUserName;
-  }
-  if (candidate.webhookSecret !== undefined) {
-    resolved.webhookSecret = candidate.webhookSecret;
-  }
-  return resolved;
-}
-
-/**
- * The one place "exactly one of `apiKey`/`accessToken`" is decided
- * (docs/specs/adapter.md §3.2). It returns the credential as a
- * `ResolvedCredential` rather than reporting a verdict about the candidate,
- * so the exclusivity leaves this function as a type and no later reader has
- * to trust that it was checked.
- */
-function resolveCredential(candidate: {
-  apiKey?: Resolvable;
-  accessToken?: Resolvable;
-}): ResolvedCredential {
-  if (candidate.apiKey !== undefined && candidate.accessToken !== undefined) {
-    fail('exactly one of apiKey or accessToken is allowed, not both');
-  }
-  if (candidate.apiKey !== undefined) {
-    if (typeof candidate.apiKey === 'string') {
-      validateApiKey(candidate.apiKey, 'apiKey');
-    }
-    return { apiKey: candidate.apiKey };
-  }
-  if (candidate.accessToken !== undefined) {
-    if (typeof candidate.accessToken === 'string') {
-      validateApiKey(candidate.accessToken, 'accessToken');
-    }
-    return { accessToken: candidate.accessToken };
-  }
-  fail('exactly one of apiKey or accessToken is required');
-}
-
-/**
- * Only for the two optional `BACKLOG_BOT_*` variables: a blank line copied
- * from `.env.example` means "look it up", whereas a blank required variable
- * stays the validation error `requireWithEnvFallback` reports.
- */
-function blankAsUnset(value: string | undefined): string | undefined {
-  return value === '' ? undefined : value;
-}
-
-function resolveShapeA(
-  config: BacklogAdapterConfig,
-  requireSecret: boolean
-): ResolvedInstallation {
-  const host = requireWithEnvFallback(config.host, ENV_HOST, 'host');
-
-  // The credential falls back to the environment as a *pair*, not field by
-  // field like every other option: `apiKey` and `accessToken` are one
-  // mutually exclusive choice, so an explicit one alongside the other's
-  // variable is a leftover, never an instruction. Falling back per field made
-  // a deployment that moved from OAuth to an API key without unsetting
-  // `BACKLOG_ACCESS_TOKEN` fail `validateInstallation`'s "exactly one of
-  // apiKey or accessToken" check, blaming the config the caller had just
-  // written (docs/specs/adapter.md §3.2).
-  const hasExplicitCredential =
-    config.apiKey !== undefined || config.accessToken !== undefined;
-  const apiKey = hasExplicitCredential
-    ? config.apiKey
-    : process.env[ENV_API_KEY];
-  const accessToken = hasExplicitCredential
-    ? config.accessToken
-    : process.env[ENV_ACCESS_TOKEN];
-
-  if (apiKey === undefined && accessToken === undefined) {
-    fail(
-      `apiKey is required: set config.apiKey, config.accessToken, ${ENV_API_KEY}, or ${ENV_ACCESS_TOKEN}`
-    );
-  }
-  if (
-    !hasExplicitCredential &&
-    apiKey !== undefined &&
-    accessToken !== undefined
-  ) {
-    fail(
-      `exactly one of ${ENV_API_KEY} or ${ENV_ACCESS_TOKEN} is allowed, not both`
-    );
-  }
-
-  const botUserIdFromEnv = blankAsUnset(process.env[ENV_BOT_USER_ID]);
-  const botUserId =
-    config.botUserId ??
-    (botUserIdFromEnv === undefined
-      ? undefined
-      : parseBotUserIdFromEnv(botUserIdFromEnv, ENV_BOT_USER_ID));
-  const botUserName =
-    config.botUserName ?? blankAsUnset(process.env[ENV_BOT_USER_NAME]);
-
-  const webhookSecret =
-    config.webhookSecret !== undefined
-      ? config.webhookSecret
-      : process.env[ENV_WEBHOOK_SECRET];
-
-  const candidate: {
-    host: string;
-    apiKey?: Resolvable;
-    accessToken?: Resolvable;
-    botUserId?: number;
-    botUserName?: string;
-    webhookSecret?: string;
-  } = { host };
-  if (botUserId !== undefined) {
-    candidate.botUserId = botUserId;
-  }
-  if (botUserName !== undefined) {
-    candidate.botUserName = botUserName;
-  }
-  if (apiKey !== undefined) {
-    candidate.apiKey = apiKey;
-  }
-  if (accessToken !== undefined) {
-    candidate.accessToken = accessToken;
-  }
-  if (webhookSecret !== undefined) {
-    candidate.webhookSecret = webhookSecret;
-  }
-
-  return validateInstallation(candidate, requireSecret);
-}
-
-function resolveShapeB(
-  installations: BacklogInstallation[],
-  requireSecret: boolean
-): ResolvedInstallation[] {
-  if (installations.length === 0) {
-    fail('installations must not be empty');
-  }
-
-  const resolved = installations.map((installation) =>
-    validateInstallation(installation, requireSecret)
-  );
-
-  const seenHosts = new Set<string>();
-  for (const installation of resolved) {
-    if (seenHosts.has(installation.host)) {
-      fail(`duplicate installation host "${installation.host}"`);
-    }
-    seenHosts.add(installation.host);
-  }
-
-  return resolved;
-}
 
 function subjectOfRaw(raw: BacklogRawMessage): {
   projectId: number;
@@ -509,7 +169,7 @@ function repositoryNameKey(host: string, repositoryId: number): string {
  * Backlog the same way: decode the id, build the `SubjectClient` its subject
  * selects (`src/subject/client.ts`), and call the one implementation of the
  * member that serves both kinds. The class itself owns only what a
- * subject cannot: the per-host installations and ports, the per-channel
+ * subject cannot: the space's configuration and port, the per-channel
  * project cache both formatting and pull-request URLs read, the repository-name
  * cache a pull request's URL needs, and the webhook response ladder.
  *
@@ -529,26 +189,20 @@ export class BacklogAdapter implements Adapter<
 > {
   readonly name = 'backlog';
 
-  private readonly installations: Map<string, ResolvedInstallation>;
-  private readonly configuredUserName: string | undefined;
-  private readonly firstHost: string;
+  private readonly space: SpaceConfig;
   /**
-   * `host -> BotIdentity`, filled at construction for an installation that
-   * configured both halves and by `GET /users/myself` for the rest
-   * (docs/specs/adapter.md §3.2, D23). A failed lookup leaves no entry, so
-   * the next caller that needs the identity asks again.
+   * Configured, or learned from `GET /users/myself` when the id was left out.
+   * A failed lookup leaves it `undefined`, so the next caller that needs it
+   * asks again (D23).
    */
-  private readonly botIdentities = new Map<string, BotIdentity>();
+  private identity: BotIdentity | undefined;
   /**
    * Not `readonly`: `src/adapter.test.ts` replaces it after construction to
-   * run the adapter on an in-memory port. There is no config field for that,
+   * run the adapter on another port. There is no config field for that,
    * because a config field would be a published promise.
    */
-  private createTransport: (
-    installation: ResolvedInstallation
-  ) => AdapterTransport;
-  private readonly webhookVerifier: BacklogWebhookVerifier | undefined;
-  private readonly apiCache = new Map<string, AdapterTransport>();
+  private createTransport: () => AdapterTransport;
+  private cachedTransport: AdapterTransport | undefined;
   /**
    * Keyed by channel id and cached for the process's lifetime (D14). The
    * project key rides along because a pull request's web URL needs it and
@@ -565,128 +219,75 @@ export class BacklogAdapter implements Adapter<
   private chat: ChatInstance | undefined;
 
   constructor(config: BacklogAdapterConfig = {}) {
-    const shapeBFields = config.installations;
-    const shapeAFieldsPresent =
-      config.host !== undefined ||
-      config.apiKey !== undefined ||
-      config.accessToken !== undefined ||
-      config.botUserId !== undefined ||
-      config.botUserName !== undefined ||
-      config.webhookSecret !== undefined;
-
-    if (shapeBFields !== undefined && shapeAFieldsPresent) {
-      fail(
-        'installations and single-space fields (host, apiKey, accessToken, botUserId, botUserName, webhookSecret) are mutually exclusive'
-      );
+    this.space = parseConfig(config);
+    const { botUserId, botUserName } = this.space;
+    if (botUserId !== undefined) {
+      this.identity = { id: botUserId, name: botUserName };
     }
-
-    const requireSecret = config.webhookVerifier === undefined;
-
-    const resolvedInstallations: ResolvedInstallation[] =
-      shapeBFields !== undefined
-        ? resolveShapeB(shapeBFields, requireSecret)
-        : [resolveShapeA(config, requireSecret)];
-
-    this.installations = new Map(
-      resolvedInstallations.map((installation) => [
-        installation.host,
-        installation,
-      ])
-    );
-
-    const firstInstallation = resolvedInstallations[0];
-    if (firstInstallation === undefined) {
-      // resolveShapeA always returns exactly one installation and
-      // resolveShapeB rejects an empty array above, so this is unreachable —
-      // the check exists only to satisfy noUncheckedIndexedAccess.
-      fail('at least one installation is required');
-    }
-
-    this.firstHost = firstInstallation.host;
-    this.configuredUserName =
-      config.userName !== undefined
-        ? validateBotUserName(config.userName, 'userName')
-        : undefined;
-    for (const installation of resolvedInstallations) {
-      if (
-        installation.botUserId !== undefined &&
-        installation.botUserName !== undefined
-      ) {
-        this.botIdentities.set(installation.host, {
-          id: installation.botUserId,
-          name: installation.botUserName,
-        });
-      }
-    }
-
-    this.webhookVerifier = config.webhookVerifier;
-    this.logger = config.logger ?? new ConsoleLogger('info').child('backlog');
-    this.createTransport = defaultCreateTransport(() => this.logger);
+    this.logger =
+      this.space.logger ?? new ConsoleLogger('info').child('backlog');
+    // The logger is read per request rather than captured: `initialize`
+    // swaps in the `ChatInstance`'s after the transport may have been built.
+    this.createTransport = () =>
+      createBacklogJsTransport({
+        host: this.space.host,
+        credentials: this.space.credentials,
+        logger: () => this.logger,
+      });
   }
 
-  /** `""` rather than a guess until fetched: the core then falls back to `chat.userName`. */
+  /** `""` when the name is unknown: the core then falls back to `chat.userName`. */
   get userName(): string {
-    return (
-      this.configuredUserName ??
-      this.botIdentities.get(this.firstHost)?.name ??
-      ''
-    );
+    return this.identity?.name ?? this.space.botUserName ?? '';
   }
 
   /**
-   * A failed bot identity lookup is logged, never thrown: the core memoises a
+   * A configured `botUserId` means no `GET /users/myself` at all, even with
+   * the name missing: on serverless every cold start runs `initialize`, and a
+   * bot that never relies on a typed `@name` would spend a request per start
+   * learning it. A failed lookup is logged, never thrown: the core memoises a
    * rejected `initialize` and never retries it, which would refuse every later
-   * webhook until the process restarts (docs/specs/adapter.md D23).
+   * webhook until the process restarts (D23).
    */
   async initialize(chat: ChatInstance): Promise<void> {
     this.chat = chat;
     this.logger = chat.getLogger('backlog');
-    await Promise.all(
-      [...this.installations.keys()]
-        .filter((host) => !this.botIdentities.has(host))
-        .map((host) =>
-          this.botIdentity(host).catch((cause: unknown) => {
-            this.logger.warn('bot identity lookup failed; retried on demand', {
-              host,
-              error: cause instanceof Error ? cause.message : String(cause),
-            });
-          })
-        )
-    );
-    this.logger.debug(
-      `initialized for host(s) ${[...this.installations.keys()].join(', ')}` +
-        ` (chat=${this.chat !== undefined},` +
-        ` webhookVerifier=${this.webhookVerifier !== undefined})`
-    );
+    if (this.identity === undefined) {
+      await this.botIdentity().catch((cause: unknown) => {
+        this.logger.warn('bot identity lookup failed; retried on demand', {
+          host: this.space.host,
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      });
+    } else if (this.identity.name === undefined) {
+      this.logger.warn(
+        'botUserName is not set: a typed @name in comment text is not detected as a mention; notifications and assignment still are. Set BACKLOG_BOT_USER_NAME to enable it.'
+      );
+    }
   }
 
-  private async botIdentity(host: string): Promise<BotIdentity> {
-    const installation = this.resolveInstallation(host);
-    const known = this.botIdentities.get(host);
-    if (known !== undefined) {
-      return known;
+  private async botIdentity(): Promise<BotIdentity> {
+    if (this.identity !== undefined) {
+      return this.identity;
     }
-    const myself = await this.api(host).getMyself();
-    const identity: BotIdentity = {
-      id: installation.botUserId ?? myself.id,
-      name: installation.botUserName ?? myself.name,
+    const myself = await this.api(this.space.host).getMyself();
+    this.identity = {
+      id: myself.id,
+      name: this.space.botUserName ?? myself.name,
     };
-    this.botIdentities.set(host, identity);
-    return identity;
+    return this.identity;
   }
 
   /** For the synchronous members, which cannot await `botIdentity`. */
-  private knownBotIdentity(host: string): BotIdentity {
-    this.resolveInstallation(host);
-    const identity = this.botIdentities.get(host);
-    if (identity === undefined) {
+  private knownBotIdentity(): BotIdentity {
+    if (this.identity === undefined) {
       throw new AdapterError(
-        `the bot identity for "${host}" is not known yet: configure botUserId and botUserName, or let initialize() read them from GET /users/myself`,
+        'the bot identity is not known yet: configure botUserId, or let initialize() read it from GET /users/myself',
         'backlog',
         'BOT_IDENTITY_UNRESOLVED'
       );
     }
-    return identity;
+    return this.identity;
   }
 
   encodeThreadId(platformData: BacklogThreadId): string {
@@ -710,27 +311,20 @@ export class BacklogAdapter implements Adapter<
     _status?: string,
     _options?: TypingOptions
   ): Promise<void> {
-    // Backlog has no typing indicator (docs/specs/adapter.md §4.1); the
+    // Backlog has no typing indicator; the
     // member is required by the Adapter interface, so it resolves immediately.
   }
 
   /**
-   * Resolved installation lookup, used by `api()` and (later) every egress
-   * member that needs a per-host client. `Map<host, ...>` because shape A is
-   * modelled as a single-entry installation map internally, so this is the
-   * one place that knows the difference between shape A and B.
+   * An id is well-formed whatever space it names, so a host other than the
+   * configured one is refused here, at the point of use, rather than by the
+   * decoder.
    */
-  private resolveInstallation(host: string): ResolvedInstallation {
-    const installation = this.installations.get(host);
-    if (installation === undefined) {
-      this.logger.warn(`no installation configured for host "${host}"`);
-      throw new ResourceNotFoundError('backlog', 'installation', host);
-    }
-    return installation;
-  }
-
   private api(host: string): BacklogApi {
-    return this.transport(host).api;
+    if (host !== this.space.host) {
+      throw new ResourceNotFoundError('backlog', 'space', host);
+    }
+    return this.transport().api;
   }
 
   /**
@@ -742,12 +336,11 @@ export class BacklogAdapter implements Adapter<
    * It is handed out rather than left to the caller to construct because a
    * second client would have none of what this one carries: its bounded 429
    * retry, its `@chat-adapter/shared` error mapping and its per-call
-   * credential resolution (docs/specs/adapter.md §3.1, §8.2). It holds no
-   * credential of its own, so it is safe to keep past the call that asked for
-   * it.
+   * credential resolution. It holds no credential of its own, so it is safe
+   * to keep past the call that asked for it.
    */
-  client(host: string): Backlog {
-    const { client } = this.transport(host);
+  client(): Backlog {
+    const { client } = this.transport();
     if (client === undefined) {
       throw new AdapterError(
         'no Backlog client: this adapter runs on a port that is not `backlog-js`-backed',
@@ -758,26 +351,9 @@ export class BacklogAdapter implements Adapter<
     return client;
   }
 
-  private transport(host: string): AdapterTransport {
-    const installation = this.resolveInstallation(host);
-    let transport = this.apiCache.get(host);
-    if (transport === undefined) {
-      transport = this.createTransport(installation);
-      this.apiCache.set(host, transport);
-    }
-    return transport;
-  }
-
-  /**
-   * The bot's display name on that installation (docs/specs/adapter.md §3.3).
-   * `userName` is one string for the whole adapter — the first installation's
-   * name — so a consumer running several spaces under different display names
-   * cannot build or match its own mention string from it. Only the name is
-   * exposed, not the installation: `botUserId` stays private (§3.3) and a
-   * credential must never leave through a getter.
-   */
-  botUserName(host: string): string {
-    return this.knownBotIdentity(host).name;
+  private transport(): AdapterTransport {
+    this.cachedTransport ??= this.createTransport();
+    return this.cachedTransport;
   }
 
   /**
@@ -986,17 +562,17 @@ export class BacklogAdapter implements Adapter<
     request: Request,
     options?: WebhookOptions
   ): Promise<Response> {
-    const verified = await verifyWebhookRequest({
+    const rawBody = await verifyWebhookRequest({
       request,
-      webhookVerifier: this.webhookVerifier,
-      installations: this.installations,
+      webhookVerifier: this.space.webhookVerifier,
+      webhookSecret: this.space.webhookSecret,
       logger: this.logger,
     });
-    if (verified === undefined) {
+    if (rawBody === undefined) {
       this.logger.warn('webhook rejected: unauthorized');
       return new Response('Unauthorized', { status: 401 });
     }
-    const { host, rawBody } = verified;
+    const { host } = this.space;
 
     let body: unknown;
     try {
@@ -1027,7 +603,7 @@ export class BacklogAdapter implements Adapter<
 
     let identity: BotIdentity;
     try {
-      identity = await this.botIdentity(host);
+      identity = await this.botIdentity();
     } catch (cause) {
       this.logger.error('webhook rejected: bot identity unavailable', {
         host,
@@ -1161,7 +737,7 @@ export class BacklogAdapter implements Adapter<
     const context = this.inboundContext(
       raw.host,
       activity.project.id,
-      this.knownBotIdentity(raw.host)
+      this.knownBotIdentity()
     );
     if (activity.type === 14) {
       const issueId = raw.kind === 'bulkUpdate' ? raw.issueId : undefined;
@@ -1282,7 +858,7 @@ export class BacklogAdapter implements Adapter<
       api: this.api(host),
       subject: this.subjectClient(host, projectId, subject),
       commentId,
-      botUserId: (await this.botIdentity(host)).id,
+      botUserId: (await this.botIdentity()).id,
     });
   }
 
@@ -1300,7 +876,7 @@ export class BacklogAdapter implements Adapter<
       api: this.api(host),
       subject: this.subjectClient(host, projectId, subject),
       commentId,
-      botUserId: (await this.botIdentity(host)).id,
+      botUserId: (await this.botIdentity()).id,
     });
   }
 
@@ -1314,11 +890,7 @@ export class BacklogAdapter implements Adapter<
       threadId,
       options,
       subject,
-      builders: this.messageBuilders(
-        host,
-        converter,
-        await this.botIdentity(host)
-      ),
+      builders: this.messageBuilders(host, converter, await this.botIdentity()),
     });
   }
 
@@ -1338,7 +910,7 @@ export class BacklogAdapter implements Adapter<
         this.messageBuilders(
           host,
           await this.converterFor(host, projectId),
-          await this.botIdentity(host)
+          await this.botIdentity()
         ),
     });
   }
@@ -1361,7 +933,7 @@ export class BacklogAdapter implements Adapter<
    * Issues only, and no companion member lists pull requests (D-PR7): a
    * pull-request list is keyed by repository, a coordinate no channel id
    * carries. A caller that has the repository reaches its pull requests
-   * through `client(host).getPullRequests(projectIdOrKey, repoIdOrName,
+   * through `client().getPullRequests(projectIdOrKey, repoIdOrName,
    * …)`, which spends the **read** bucket rather than the
    * `search` bucket Get Issue List below draws on (measured 2026-09-06,
    * `.claude/rules/backlog-pull-request-facts.md` "Rate limit").
@@ -1376,11 +948,7 @@ export class BacklogAdapter implements Adapter<
       channelId,
       options,
       api: this.api(host),
-      builders: this.messageBuilders(
-        host,
-        converter,
-        await this.botIdentity(host)
-      ),
+      builders: this.messageBuilders(host, converter, await this.botIdentity()),
       // Every thread this lists is an issue: a pull-request list is per
       // repository, a coordinate a channel id does not carry (D-PR7), so the
       // subject of each row is known before the row is read.
@@ -1400,7 +968,7 @@ export class BacklogAdapter implements Adapter<
     return getUserRead({
       userId,
       api: this.api(host),
-      botUserId: (await this.botIdentity(host)).id,
+      botUserId: (await this.botIdentity()).id,
     });
   }
 
@@ -1436,18 +1004,12 @@ export class BacklogAdapter implements Adapter<
   rehydrateAttachment(attachment: Attachment): Attachment {
     return rehydrateAttachmentRead({
       attachment,
-      configuredHosts: new Set(this.installations.keys()),
+      configuredHosts: new Set([this.space.host]),
       apiFor: (host) => this.api(host),
     });
   }
 }
 
-/**
- * Zero-config-friendly factory (docs/specs/adapter.md §3.2): every shape-A
- * field falls back to an environment variable inside the constructor, so
- * `createBacklogAdapter()` with no arguments works when the environment is
- * fully populated.
- */
 export function createBacklogAdapter(
   config?: BacklogAdapterConfig
 ): BacklogAdapter {

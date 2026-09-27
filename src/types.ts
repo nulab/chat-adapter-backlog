@@ -286,12 +286,10 @@ export interface BacklogPostableExtras {
 }
 
 /**
- * A deployment-supplied escape hatch for webhook authenticity. Backlog issues
- * no HMAC signature (docs/specs/adapter.md §11,
- * [Add Webhook](https://developer.nulab.com/docs/backlog/api/2/add-webhook/)
- * accepts only `name`, `description`, `hookUrl`, `allEvent`,
- * `activityTypeIds[]`), so a consumer may plug in a reverse-proxy assertion,
- * mTLS or an IP allowlist instead of (or in addition to) the shared secret.
+ * Replaces the `?token=` check: a request is accepted when this returns or
+ * resolves a truthy value, and answered 401 otherwise or when it throws.
+ * Backlog signs no webhook, so this is where a reverse-proxy assertion, mTLS
+ * or an IP allowlist plugs in.
  */
 export type BacklogWebhookVerifier = (
   request: Request,
@@ -307,97 +305,32 @@ export type BacklogWebhookVerifier = (
 export type TextFormattingRule = 'markdown' | 'backlog';
 
 /**
- * A config value that is either a static string or resolved per call. Every
- * outbound request awaits the resolver form and never caches its result, so a
- * consumer can rotate an OAuth access token without reconstructing the
- * adapter (docs/specs/adapter.md §3.2, vendor-official requirement in
- * CLAUDE.md "Conventions to follow").
+ * A credential given as a string or as a function the adapter calls before
+ * every request, never caching its result, so an OAuth access token can be
+ * refreshed without reconstructing the adapter.
  */
 export type Resolvable = string | (() => string | Promise<string>);
 
 /**
- * One configured Backlog space (shape B of `BacklogAdapterConfig`,
- * docs/specs/adapter.md §3.2). Exactly one of `apiKey`/`accessToken` is
- * required, and `webhookSecret` is required unless
- * `BacklogAdapterConfig.webhookVerifier` is set (D2); the constructor
- * enforces both.
+ * Configuration for one Backlog space. Every field but `webhookVerifier` and
+ * `logger` falls back to its `BACKLOG_*` environment variable when absent, so
+ * `createBacklogAdapter()` with no argument works from the environment alone.
+ * The constructor throws `ValidationError` for a value it cannot use.
  *
- * Deliberately **not** a union stating "exactly one credential", although
- * that is the rule: config is the shape a consumer assembles, often from
- * `process.env` or JSON the compiler knows nothing about, and every field
- * here is checked at construction anyway. Stating the exclusivity in the
- * input type would turn one uniform `ValidationError` naming the field into a
- * type error a plain-JavaScript consumer never sees and a TypeScript one
- * meets while building the object rather than where the value came from. The
- * strictness belongs on the way out, after the constructor's check.
- */
-export interface BacklogInstallation {
-  host: string;
-  apiKey?: Resolvable;
-  accessToken?: Resolvable;
-  botUserId?: number;
-  botUserName?: string;
-  webhookSecret?: string;
-}
-
-/**
- * The credential half of a {@link ResolvedInstallation}: **exactly one** of
- * the two, stated as a union rather than as two optional fields. `?: never`
- * is what says "not this one" under `exactOptionalPropertyTypes` — the key
- * may be omitted and may not be written, `undefined` included — so an
- * installation carrying both credentials, or neither, is a type error instead
- * of a constructor-time `ValidationError`.
- */
-export type ResolvedCredential =
-  | { apiKey: Resolvable; accessToken?: never }
-  | { accessToken: Resolvable; apiKey?: never };
-
-/**
- * One configured Backlog installation after shape A/B resolution and
- * validation (docs/specs/adapter.md §3.2). The port factory receives this,
- * not the raw config, so a test seam or a future port never has to re-derive
- * validation the constructor already did — which is only worth anything if
- * the type says what was validated, so it is not a second copy of
- * {@link BacklogInstallation}:
- *
- * - the credential is a {@link ResolvedCredential}, so "exactly one of
- *   `apiKey`/`accessToken`" holds by construction;
- * - `host` is lowercased, and stays a plain `string` deliberately. A brand
- *   would state that too, but only by making every construction site — the
- *   constructor, every fixture, every port double a test writes —
- *   cast into it, and the one producer of the value is `validateHost` in
- *   `src/ids.ts`, which lowercases through the same grammar the id codec
- *   uses. The cost outweighs what the brand buys (issue #62);
- * - `botUserId`/`botUserName` stay as configured: the port is built before
- *   `GET /users/myself` has answered, so the fetched identity is not here.
- */
-export type ResolvedInstallation = {
-  host: string;
-  botUserId?: number;
-  botUserName?: string;
-  webhookSecret?: string;
-} & ResolvedCredential;
-
-/**
- * Constructor config for `BacklogAdapter` / `createBacklogAdapter`
- * (docs/specs/adapter.md §3.2). Shape A (single space, every field falling
- * back to an environment variable) and shape B (`installations`) are
- * mutually exclusive; the adapter validates that exclusivity at construction
- * time rather than the type system, for the same reason as
- * `BacklogInstallation`.
+ * - Exactly one of `apiKey` and `accessToken`.
+ * - `webhookSecret` is required unless `webhookVerifier` is set.
+ * - `botUserId` left out is read once from `GET /users/myself`, which also
+ *   fills a missing `botUserName`. With `botUserId` set and `botUserName`
+ *   left out, no request is made and a hand-typed `@name` in comment text is
+ *   not a mention; notifications and assignment still are.
  */
 export interface BacklogAdapterConfig {
-  // Shape A — one space, every field falls back to an environment variable.
   host?: string;
   apiKey?: Resolvable;
   accessToken?: Resolvable;
   botUserId?: number;
   botUserName?: string;
   webhookSecret?: string;
-  // Shape B — several spaces. Mutually exclusive with shape A's fields.
-  installations?: BacklogInstallation[];
-  // Shared
   webhookVerifier?: BacklogWebhookVerifier;
-  userName?: string;
   logger?: Logger;
 }

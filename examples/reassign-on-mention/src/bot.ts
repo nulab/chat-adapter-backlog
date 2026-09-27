@@ -14,16 +14,10 @@ import {
  * Read and validated at module load, so a missing variable or a non-numeric id
  * fails the first cold start instead of sending `NaN` to Backlog on the first
  * mention. `createBacklogAdapter()` reads the same environment itself; these
- * three are the ones this file also needs by name.
+ * two are the ones this file also needs by name.
  */
 const env = z
   .object({
-    // Lower-cased because the adapter keys its installations by the lower-cased
-    // host, and `client()` below looks one up by this string.
-    BACKLOG_HOST: z
-      .string()
-      .min(1)
-      .transform((host) => host.toLowerCase()),
     BACKLOG_BOT_USER_ID: z.coerce.number().int().positive(),
     BACKLOG_BOT_USER_NAME: z.string().min(1),
   })
@@ -61,7 +55,7 @@ chat.onNewMention(async (thread, message) => {
     // with, so this request is counted in the same rate-limit budget and its
     // failures arrive as the same error classes.
     await backlog
-      .client(env.BACKLOG_HOST)
+      .client()
       .patchIssue(subject.issueId, { assigneeId: decision.to.id });
   }
 

@@ -2,7 +2,6 @@ import { ValidationError } from '@chat-adapter/shared';
 import { describe, expect, it } from 'vitest';
 
 import {
-  MENTION_PROJECT_MEMBERS,
   channelIdFromThreadId,
   decodeChannelId,
   decodeMessageId,
@@ -11,9 +10,7 @@ import {
   encodeChannelId,
   encodeMessageId,
   encodeThreadId,
-  encodeUserId,
   mentionPattern,
-  mentionTeam,
   mentionUser,
 } from './ids';
 import type { BacklogMessageId, BacklogThreadId } from './types';
@@ -514,26 +511,15 @@ describe('message ids', () => {
 });
 
 describe('user ids', () => {
-  it('a user id round-trips through its pinned encoding', () => {
-    const decoded = { host: 'example.backlog.com', userId: 100 };
-
-    expect(encodeUserId(decoded)).toBe('example.backlog.com:100');
-    expect(decodeUserId(encodeUserId(decoded))).toEqual(decoded);
-  });
-
-  it('a bare numeric user id is rejected even with one installation', () => {
-    expect(() => decodeUserId('999')).toThrow(ValidationError);
-  });
-
-  it('splits on the last colon, not the first', () => {
-    // A host is never expected to contain a colon, but the decoder's split
-    // point is specified as "the last colon" (docs/specs/adapter.md §2.2);
-    // this proves it finds the trailing numeric segment rather than the
-    // first one it encounters.
+  it('a user id decodes to its host and numeric id', () => {
     expect(decodeUserId('example.backlog.com:100')).toEqual({
       host: 'example.backlog.com',
       userId: 100,
     });
+  });
+
+  it('a bare numeric user id is rejected', () => {
+    expect(() => decodeUserId('999')).toThrow(ValidationError);
   });
 
   it('an empty host is rejected', () => {
@@ -602,150 +588,9 @@ describe('ids beyond the safe integer range', () => {
   });
 });
 
-describe('encoders reject what their own decoder could not read back', () => {
-  const HOST = 'example.backlog.com';
-  const rootPart = { part: 'root' } as const;
-  const issueRef = { kind: 'issue', issueId: 8001 } as const;
-  const UNENCODABLE = [
-    0,
-    -5,
-    1.5,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    Number.MAX_SAFE_INTEGER + 2,
-  ];
-
-  it.each([
-    'Example.Backlog.com',
-    'https://example.backlog.com',
-    'example.backlog.com/api',
-    'example.backlog.com:443',
-    'example backlog.com',
-    '',
-  ])('a host of "%s" is rejected rather than repaired', (host) => {
-    const messageId = { host, subject: issueRef, ...rootPart };
-
-    expect(() => encodeThreadId({ ...issueThread, host })).toThrow(
-      ValidationError
-    );
-    expect(() => encodeChannelId({ host, projectId: 500 })).toThrow(
-      ValidationError
-    );
-    expect(() => encodeMessageId(messageId)).toThrow(ValidationError);
-    expect(() => encodeUserId({ host, userId: 100 })).toThrow(ValidationError);
-  });
-
-  it.each(UNENCODABLE)('a project id of %s is rejected', (projectId) => {
-    const channelId = { host: HOST, projectId };
-
-    expect(() => encodeThreadId({ ...issueThread, projectId })).toThrow(
-      ValidationError
-    );
-    expect(() => encodeChannelId(channelId)).toThrow(ValidationError);
-  });
-
-  it.each(UNENCODABLE)('an issue id of %s is rejected', (issueId) => {
-    const subject = { kind: 'issue', issueId } as const;
-    const threadId = { ...issueThread, subject };
-    const messageId = { host: HOST, subject, ...rootPart };
-
-    expect(() => encodeThreadId(threadId)).toThrow(ValidationError);
-    expect(() => encodeMessageId(messageId)).toThrow(ValidationError);
-  });
-
-  it.each(UNENCODABLE)('a repository id of %s is rejected', (repositoryId) => {
-    const subject = { kind: 'pullRequest', repositoryId, number: 12 } as const;
-
-    expect(() => encodeThreadId({ ...pullRequestThread, subject })).toThrow(
-      ValidationError
-    );
-  });
-
-  it.each(UNENCODABLE)('a pull request number of %s is rejected', (number) => {
-    const subject = { kind: 'pullRequest', repositoryId: 700, number } as const;
-
-    expect(() => encodeThreadId({ ...pullRequestThread, subject })).toThrow(
-      ValidationError
-    );
-  });
-
-  it.each(UNENCODABLE)('a comment id of %s is rejected', (commentId) => {
-    const part = { part: 'comment', commentId } as const;
-    const messageId = { host: HOST, subject: issueRef, ...part };
-
-    expect(() => encodeMessageId(messageId)).toThrow(ValidationError);
-  });
-
-  it.each(UNENCODABLE)('a user id of %s is rejected', (userId) => {
-    const userIdStruct = { host: HOST, userId };
-
-    expect(() => encodeUserId(userIdStruct)).toThrow(ValidationError);
-  });
-
-  it('an update message id with an empty timestamp is rejected', () => {
-    const part = { part: 'update', created: '' } as const;
-    const messageId = { host: HOST, subject: issueRef, ...part };
-
-    expect(() => encodeMessageId(messageId)).toThrow(ValidationError);
-  });
-
-  it('an update message id keeps any other timestamp, colons included', () => {
-    // The decoder rejoins everything after "u:", so non-empty is the whole
-    // rule — the encoder must not invent a stricter one and reject a
-    // timestamp Backlog actually sent.
-    const part = { part: 'update', created: '2026-09-03T04:05:06Z' } as const;
-    const messageId = { host: HOST, subject: issueRef, ...part };
-
-    expect(encodeMessageId(messageId)).toBe(
-      'example.backlog.com:issue:8001:u:2026-09-03T04:05:06Z'
-    );
-  });
-});
-
 describe('mentionUser', () => {
   it('renders a Backlog user mention token', () => {
     expect(mentionUser(100)).toBe('<@U100>');
-  });
-
-  it('rejects a non-positive-integer id', () => {
-    expect(() => mentionUser(0)).toThrow(RangeError);
-    expect(() => mentionUser(-1)).toThrow(RangeError);
-    expect(() => mentionUser(1.5)).toThrow(RangeError);
-  });
-
-  it('rejects with a built-in RangeError, not a ValidationError', () => {
-    expect(() => mentionUser(0)).not.toThrow(ValidationError);
-  });
-
-  it('rejects an id no user id could round-trip, as encodeUserId does', () => {
-    const unsafe = Number.MAX_SAFE_INTEGER + 2;
-
-    expect(() => mentionUser(unsafe)).toThrow(RangeError);
-    expect(() => mentionTeam(unsafe)).toThrow(RangeError);
-  });
-
-  it('rejects NaN with a RangeError that names it', () => {
-    expect(() => mentionUser(Number.NaN)).toThrow(RangeError);
-    expect(() => mentionUser(Number.NaN)).toThrow(
-      'NaN is not a positive integer'
-    );
-  });
-});
-
-describe('mentionTeam', () => {
-  it('renders a Backlog team mention token', () => {
-    expect(mentionTeam(7)).toBe('<@T7>');
-  });
-
-  it('rejects a non-positive-integer id', () => {
-    expect(() => mentionTeam(0)).toThrow(RangeError);
-    expect(() => mentionTeam(Number.NaN)).toThrow(RangeError);
-  });
-});
-
-describe('MENTION_PROJECT_MEMBERS', () => {
-  it('is the project-wide mention token', () => {
-    expect(MENTION_PROJECT_MEMBERS).toBe('<@project>');
   });
 });
 

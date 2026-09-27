@@ -83,8 +83,8 @@ const adapter = adapterModule.createBacklogAdapter();
 assert.equal(adapter.name, 'backlog');
 assert.equal(adapter.userName, process.env.BACKLOG_BOT_USER_NAME);
 
-// Both BACKLOG_BOT_* variables are set, so the bot identity is configured and
-// `initialize` has nothing to ask `GET /users/myself` for.
+// BACKLOG_BOT_USER_ID is set, so `initialize` has nothing to ask
+// `GET /users/myself` for — with the name set, and again without it.
 const silentLogger = {
   debug() {},
   info() {},
@@ -98,14 +98,23 @@ await adapter.initialize({ getLogger: () => silentLogger });
 assert.equal(
   networkAttempts,
   0,
-  'initialize reached the network although botUserId and botUserName were configured'
+  'initialize reached the network although botUserId was configured'
+);
+
+delete process.env.BACKLOG_BOT_USER_NAME;
+await adapterModule
+  .createBacklogAdapter()
+  .initialize({ getLogger: () => silentLogger });
+assert.equal(
+  networkAttempts,
+  0,
+  'initialize reached the network to learn only the bot name'
 );
 
 // The three variables README.md calls required, and nothing else: the bot
 // identity is left to `GET /users/myself`, which `initialize` would make —
 // construction still must not.
 delete process.env.BACKLOG_BOT_USER_ID;
-delete process.env.BACKLOG_BOT_USER_NAME;
 assert.equal(adapterModule.createBacklogAdapter().name, 'backlog');
 assert.equal(networkAttempts, 0, 'construction reached the network');
 

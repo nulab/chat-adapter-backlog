@@ -21,12 +21,6 @@ import {
  */
 const env = z
   .object({
-    // Lower-cased because the adapter keys its installations by the lower-cased
-    // host, and `client()` below looks one up by this string.
-    BACKLOG_HOST: z
-      .string()
-      .min(1)
-      .transform((host) => host.toLowerCase()),
     BUG_ISSUE_TYPE_NAME: z.string().min(1).default('Bug'),
     DONE_STATUS_ID: z.coerce.number().int().positive().default(4),
     INTAKE_CONTACT_USER_ID: z.coerce.number().int().positive(),
@@ -74,9 +68,7 @@ chat.onNewMessage(/[\s\S]*/, async (thread, message) => {
   // so reading the issue is the route that is uniform across the three
   // activity types. It goes through the client the adapter hands out, so it is
   // counted in the adapter's own rate-limit budget.
-  const issue = await backlog
-    .client(env.BACKLOG_HOST)
-    .getIssue(subject.issueId);
+  const issue = await backlog.client().getIssue(subject.issueId);
   if (issue.issueType.name !== env.BUG_ISSUE_TYPE_NAME) {
     return;
   }
@@ -120,7 +112,7 @@ async function handOff(
 ): Promise<void> {
   if (currentAssigneeId !== env.INTAKE_CONTACT_USER_ID) {
     await backlog
-      .client(env.BACKLOG_HOST)
+      .client()
       .patchIssue(issueId, { assigneeId: env.INTAKE_CONTACT_USER_ID });
   }
 

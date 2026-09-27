@@ -20,9 +20,9 @@ real surface, so there **is** a pattern in this repo to follow now: read the
 neighbouring module before adding to one.
 
 Layout, mirroring the PR scopes so a change's scope is its path:
-`src/adapter.ts` (the class and `createBacklogAdapter`), `src/ids.ts` (the id
-grammar), `src/types.ts` (public types, including the serialisable raw-message
-shapes), `src/egress.ts` and `src/reads.ts`, `src/subject/*` (the issue and
+`src/adapter.ts` (the class and `createBacklogAdapter`), `src/config.ts` (config
+plus environment, one schema), `src/ids.ts` (the id grammar), `src/types.ts`
+(public types, including the serialisable raw-message shapes), `src/egress.ts` and `src/reads.ts`, `src/subject/*` (the issue and
 pull-request halves of a thread behind one `SubjectClient`), `src/webhook/*`
 (ingress), `src/client/*` (the Backlog API port), `src/format/*` (the
 converters), and `src/test/fixtures/*`.
@@ -53,8 +53,9 @@ included, so a `preinstall` that would break a consumer's install (#99) fails
 there — and runs `scripts/consumer-smoke/smoke.mjs` on Node 20, where the
 entry has to resolve through `exports` and `createBacklogAdapter()` gets no
 argument at all — the five `BACKLOG_*` variables are the whole configuration,
-and because the two `BACKLOG_BOT_*` ones are set, `initialize` must reach no
-network either (without them it would ask `GET /users/myself`; spec D23).
+and because `BACKLOG_BOT_USER_ID` is set, `initialize` must reach no network
+either, with or without the name (without the id it would ask
+`GET /users/myself`; spec D23).
 So `exports`, `files`, the env fallbacks and the floor of `engines.node` fail
 here rather than at a consumer. Changing any of those four means changing that
 consumer in the same commit; its assertions are one file, in the order a
@@ -489,7 +490,7 @@ adapter read, and the retry needs only the failing response's own header
 
 Both live in the **`fetch` injected into the client**, not around the
 port's call sites, because that is the only seam every `backlog-js` method
-funnels through. That is what lets `adapter.client(host)` hand a consumer the
+funnels through. That is what lets `adapter.client()` hand a consumer the
 very client the port speaks through — for the endpoints the port does not name
 — without either being bypassed. The consequence, taken knowingly:
 `backlog-js` appears in the published types, so dropping it for plain `fetch`
@@ -572,7 +573,7 @@ Two rules about what an example may do, both load-bearing:
   sent). The same goes for `process.env`: one schema at module load, so a
   missing variable or a non-numeric id fails the first cold start rather than
   sending `NaN` to Backlog later.
-- **Reach Backlog through `backlog.client(host)`.** That is the `backlog-js`
+- **Reach Backlog through `backlog.client()`.** That is the `backlog-js`
   client the adapter hands out for the endpoints its port does not name, and it
   carries the adapter's bounded 429 retry and its error classes. An example must not build a Backlog client of its own, and
   must not depend on `backlog-js` directly.
@@ -582,7 +583,8 @@ State is `@chat-adapter/state-memory`, and no example subscribes to a thread.
 Environment variable names are shared across examples, not invented per
 example: the five the adapter reads (`BACKLOG_HOST`, `BACKLOG_API_KEY`,
 `BACKLOG_BOT_USER_ID`, `BACKLOG_BOT_USER_NAME`, `BACKLOG_WEBHOOK_SECRET` — the
-two `BACKLOG_BOT_*` optional, read from `GET /users/myself` when unset) plus
+id set in every `.env.example` so no cold start reads it from
+`GET /users/myself`, the name optional) plus
 meaningful names for the rest — `DONE_STATUS_ID`, `REQUIRED_CUSTOM_FIELD_ID`,
 `BUG_ISSUE_TYPE_NAME`, `INTAKE_CONTACT_USER_ID`, `AI_MODEL`,
 `AI_GATEWAY_API_KEY`. No `EXAMPLE_` prefix.

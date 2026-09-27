@@ -7,7 +7,7 @@
  * a handler asking which part a message is, or its author's numeric id, has
  * nothing else to ask.
  *
- * `backlog-js` reaches the published types through `client(host)`, on
+ * `backlog-js` reaches the published types through `client()`, on
  * purpose: handing out the client the adapter speaks through keeps a
  * consumer's extra calls inside the adapter's rate-limit accounting, retry
  * and error mapping, where a second client would spend the same per-user
@@ -20,7 +20,6 @@ export { decodeMessageId, decodeUserId } from './ids';
 export type {
   BacklogAdapterConfig,
   BacklogChange,
-  BacklogInstallation,
   BacklogMessageId,
   BacklogMessagePart,
   BacklogPostableExtras,

@@ -92,7 +92,7 @@ pull-request activity.
 report, was it just closed — are answered from the message alone, and they are
 asked before anything is read, so a comment on a bug costs no API call.
 
-**Is it a bug?** The issue is read with `backlog.client(host).getIssue(id)`
+**Is it a bug?** The issue is read with `backlog.client().getIssue(id)`
 and its `issueType.name` is compared with
 `BUG_ISSUE_TYPE_NAME`. That one read is also where the summary, description,
 reporter and assignee come from, so the handler spends exactly one request and
@@ -103,7 +103,7 @@ snapshot at all (measured on a development space, 2026-09-06), and `issueType`
 is not among the fields the adapter's payload types declare. One read answers
 all three activity types the same way.
 
-`client(host)` hands out the `backlog-js` client the adapter makes its own
+`client()` hands out the `backlog-js` client the adapter makes its own
 calls with, which is how both this read and the reassignment below stay inside
 the adapter's bounded 429 retry and its error classes. Building a second
 client here would have both silently not apply.
@@ -159,7 +159,7 @@ Then set:
 | `BACKLOG_HOST`           | yes      | Space host, no scheme — `example.backlog.com`.                                 |
 | `BACKLOG_API_KEY`        | yes      | The bot user's API key. Also used for the reassignment.                        |
 | `BACKLOG_BOT_USER_ID`    | yes      | The bot user's numeric id.                                                     |
-| `BACKLOG_BOT_USER_NAME`  | yes      | The bot user's display name.                                                   |
+| `BACKLOG_BOT_USER_NAME`  | no       | The bot user's display name.                                                   |
 | `BACKLOG_WEBHOOK_SECRET` | yes      | The secret that also sits in the hook URL.                                     |
 | `INTAKE_CONTACT_USER_ID` | yes      | Numeric user id a closed bug is handed to. Startup fails if this is not an id. |
 | `BUG_ISSUE_TYPE_NAME`    | no       | Issue type to triage. Defaults to `Bug`; use `バグ` on a Japanese space.       |
@@ -179,7 +179,7 @@ the same change made from the issue list. Never use **allEvent**.
 ## Limits
 
 - **Both Backlog calls go through the adapter's client.** Reading the issue and
-  reassigning it use `backlog.client(host)`, so they share the adapter's one
+  reassigning it use `backlog.client()`, so they share the adapter's one
   bounded 429 retry and its error classes — but
   they also share its per-minute budget with everything else the adapter does,
   and a request that fails after the retry surfaces as a thrown error with the
