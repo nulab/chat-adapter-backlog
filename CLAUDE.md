@@ -5,6 +5,13 @@ Contributor setup and the release process live in
 [DEVELOPMENT.md](./DEVELOPMENT.md); this file covers what you cannot derive by
 reading the code.
 
+The codebase is heading into a maintenance phase. It grew one feature at a
+time, and each addition saw only part of the whole, so the goal of every rule
+below is a codebase a human can take over: readable at a glance, one copy of
+each piece of knowledge (DRY), and nothing built for a need nobody has
+(YAGNI). Speed is not the goal. When a rule here and that goal pull apart, the
+goal wins and the rule gets fixed.
+
 ## State of the repo
 
 A Backlog adapter for [Chat SDK](https://chat-sdk.dev/). Every required
@@ -33,15 +40,18 @@ green run. It strips comments before matching but not string literals, so
 prose outside a comment (a log message, a fixture) keeps the `kind` read and
 the subject-kind literal on separate lines.
 
-One split is worth knowing before you touch either side: `src/client/port.ts`
-owns the **API domain** types, which carry `Date` objects, while `src/types.ts`
-owns the **raw-message** types reachable from `message.raw`, which carry ISO
-strings so a serialised `Message` survives the queue round trip. The root and
-comment shapes say which side they are on in their own names —
-`BacklogRawIssue`, `BacklogRawComment`, `BacklogRawPullRequest` — so only
-`BacklogChange` and `TextFormattingRule` are declared on both sides. Which of
-the two the barrel exports, and why, is written at the top of `src/index.ts`;
-read it there rather than trusting a second copy of it here.
+**Types.** The target, which the code does not reach yet: `backlog-js`'s
+`Entity.*` types are the source of truth for every Backlog shape, and this
+repository declares only the deviations measured against them (recorded in
+`.claude/rules/*.md`) as an overlay on those types. Nothing converts to `Date`:
+timestamps stay the ISO strings Backlog sends, everywhere, so one type serves
+the API response and `message.raw`, which must survive a JSON round trip
+through the queue anyway. The current split — `src/client/port.ts` with
+`Date`-carrying domain types beside ISO-string raw types in `src/types.ts`,
+described at the top of `src/index.ts` — is what that refactor removes; until
+it lands, read `src/index.ts` for which side the barrel exports. zod types
+never reach the published `.d.ts`: `scripts/check-published-types.mjs` fails
+the build on any import but `chat` there.
 
 `.github/workflows/ci.yml` builds the bundle, imports it in a real Node
 process, constructs an adapter from it and asserts `adapter.name === 'backlog'`.
@@ -88,7 +98,8 @@ emphasis, it is the version that goes stale.
 | How to work here: gates, CI coupling, PR rules, conventions                           | this file and [DEVELOPMENT.md](./DEVELOPMENT.md)                                   |
 
 - **The spec** states what a consumer can observe and which decisions shaped
-  it. It summarises a measurement only as far as the measurement changes that
+  it. It describes behaviour: it does not restate the README's content, list
+  the tests to write, or record how the work was ordered. It summarises a measurement only as far as the measurement changes that
   behaviour, and points at the rules file for the evidence. Tests are written
   from it; when code and spec disagree, one of them is wrong and the PR that
   notices fixes it.
@@ -100,11 +111,12 @@ emphasis, it is the version that goes stale.
   and which files CI couples together. It does not restate Backlog or Chat SDK
   facts — those are in the rules — nor the adapter's behaviour — that is the
   spec.
-- **`docs/plans/*.md`** are records. `adapter-implementation.md` and
-  `pull-request-support.md` describe stacks that have landed, and
-  `release-mechanism.md` a decision that has been implemented. Read one for
-  the reasoning behind an old decision; never cite one from code, and never
-  treat one as a requirement the spec does not also state.
+- **`docs/plans/*.md`** exist while a plan is being carried out. A finished
+  plan is deleted — git history keeps it, and a record that reads like a
+  requirement misleads the next reader. `adapter-implementation.md`,
+  `pull-request-support.md` and `release-mechanism.md` are finished; they go
+  in the final comment sweep, together with the references `src/` and the spec
+  still make to them. Never cite a plan from code.
 
 When a document and this file disagree, the document is newer; fix this file
 in the same PR.
@@ -146,23 +158,43 @@ volume is not care.
 - A comment that disagrees with the code is a bug, fixed in the PR that finds
   it.
 
-## Surface
+## Surface (YAGNI)
 
-Build what a consumer uses, not everything the spec could be read to allow.
-Every export, config field and public method is permanent once released and a
-test obligation now.
+The bar for anything the adapter has is whether a consumer **needs** it — not
+whether Backlog makes it possible. The scale reference is the first-party
+`@chat-adapter/github` and `@chat-adapter/linear`, which implement the whole
+contract in roughly 1.4k–2k lines; a feature this adapter has and they lack
+needs a reason specific to Backlog.
 
-- An optional `Adapter` member exists only where Backlog has a one-to-one
-  counterpart (D13); anything else stays absent so the core degrades on its
-  own.
-- A public export, config field or method needs a consumer who cannot get the
-  same result another way. "Might be useful" is not that consumer.
-- A spec requirement that no consumer relies on is a candidate for deletion
-  from the spec, not for implementation. Propose the deletion; do not build
-  around it.
-- A test double is test code unless it is published, and then it is surface
-  like any other. A fake that needs its own conformance suite to stay honest is
-  a second implementation — weigh that before adding one.
+- Every optional `Adapter` member, config option, public export, public
+  method, cache, retry and defensive check names the consumer need it serves.
+  "Backlog supports it", "might be useful" and "just in case" are not needs.
+  Without one, delete it; do not keep it because it already works.
+- Everything public is permanent once released and a test obligation now, so
+  the default answer to "should this be exported?" is no.
+- A spec requirement that no consumer relies on is a deletion from the spec,
+  not an implementation task. Propose the deletion; do not build around it.
+- Say a thing once. Two modules that make the same decision, two types for
+  the same shape, and two tests of the same behaviour are each one too many.
+
+## Parse at the boundary, trust inside
+
+Every external input is parsed **exactly once**, by a zod schema, in one module
+per boundary: the webhook body, each Backlog API response, config plus
+environment variables, and id strings. Code past that module trusts the
+parsed type.
+
+- Shape, presence and normalisation belong in the schema: `null` versus
+  missing, numeric strings, positive integers, the id grammar, mutually
+  exclusive config fields, the environment fallback. Inner code does no
+  ad-hoc `=== undefined`, `Number.isInteger` or length re-checks of a value a
+  schema already produced; if one seems needed, the schema is missing a rule.
+- A check that depends on remote state — does this comment belong to this
+  thread, does this project exist on this host — is not parsing. It is an
+  explicit guard, and a boundary's guards are gathered in one function rather
+  than spread through the callers.
+- A `ZodError` is translated into a `@chat-adapter/shared` error in one place
+  per boundary, and never escapes the package.
 
 ## Quality gates
 
@@ -491,9 +523,18 @@ is no longer a change invisible to consumers (docs/specs/adapter.md §3.1,
 
 ## Test strategy
 
-- Vitest, colocated `src/**/*.test.ts`. Replace the Backlog port, not the
-  network: no msw, no nock, no recorded HTTP outside the port's own wrapper
-  tests.
+- Vitest, colocated `src/**/*.test.ts`.
+- **One layer per behaviour.** A behaviour is tested where it is decided, once:
+  not through `BacklogAdapter` and again through the module function behind
+  it. Adapter-level tests cover wiring; module tests cover the decision.
+- **Stub `backlog-js` with `vi.fn`** on the client's methods. Do not maintain a
+  fake Backlog or a conformance suite to keep one honest, and never msw or
+  nock. The injected `fetch` is tested at its own layer, with a stubbed `fetch`.
+- **No test restates a fixture or greps source text.** A test that asserts a
+  fixture equals itself, or that a string appears in a file, specifies nothing
+  a reader can use. `src/subject/containment.test.ts` predates this rule and
+  is its one standing exception; the refactor decides whether a type-level
+  guard can replace it or it goes.
 - Run the three contract suites from `@chat-adapter/tests`
   (`threadIdContract`, `selfMessageContract`, `connectWebhookContract`)
   against this adapter; they encode invariants that are easy to break
