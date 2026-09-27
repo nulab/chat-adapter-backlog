@@ -9,6 +9,7 @@ import {
   isMessageInThread,
 } from './ids';
 import { readUploadedFile, send } from './client/responses';
+import { converter } from './format';
 
 import type { AddCommentInput, SubjectClient } from './subject/client';
 import type {
@@ -19,7 +20,6 @@ import type {
 import type { Backlog } from 'backlog-js';
 import type {
   AdapterPostableMessage,
-  BaseFormatConverter,
   FileUpload,
   RawMessage,
   StreamChunk,
@@ -129,7 +129,6 @@ export interface PostCommentInput {
   subject: SubjectClient;
   /** For `POST /space/attachment`, which is space-level rather than per subject. */
   client: Backlog;
-  converter: BaseFormatConverter;
   message: AdapterPostableMessage;
   toBuffer: (file: FileUpload) => Promise<Buffer>;
 }
@@ -141,8 +140,7 @@ export interface PostCommentInput {
 export async function postComment(
   input: PostCommentInput
 ): Promise<RawMessage<BacklogRawMessage>> {
-  const { host, projectId, subject, client, converter, message, toBuffer } =
-    input;
+  const { host, projectId, subject, client, message, toBuffer } = input;
 
   const notifiedUserId = extractNotifiedUserId(message);
   const files = extractFiles(message);
@@ -197,7 +195,6 @@ export interface EditCommentInput {
   projectId: number;
   subject: SubjectClient;
   commentId: number;
-  converter: BaseFormatConverter;
   message: AdapterPostableMessage;
 }
 
@@ -208,7 +205,7 @@ export interface EditCommentInput {
 export async function editComment(
   input: EditCommentInput
 ): Promise<RawMessage<BacklogRawMessage>> {
-  const { host, projectId, subject, commentId, converter, message } = input;
+  const { host, projectId, subject, commentId, message } = input;
 
   if (extractFiles(message).length > 0) {
     throw new ValidationError(

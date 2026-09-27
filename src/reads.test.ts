@@ -388,7 +388,7 @@ describe('fetchMessage', () => {
     expect(message?.text).toBe('Comment 2');
   });
 
-  it('a message id from another issue is null without an API call, the formatting rule included', async () => {
+  it('a message id from another issue is null without an API call, the bot identity included', async () => {
     const resolveBuilders = vi.fn(async () => builders());
 
     const message = await fetchMessage({

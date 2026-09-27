@@ -248,7 +248,7 @@ export function statusChanged(
 
 /**
  * `backlog-webhook-facts.md` § Type 2 `changes[]` field names and value
- * notation.
+ * formats.
  */
 export function assigneeChanged(
   options: ActivityOptions & {

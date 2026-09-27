@@ -210,9 +210,9 @@ does, through `client()`.
   https://support.nulab.com/hc/en-us/articles/8775439725721-Backlog-text-formatting-rules).
 - Roughly a third of projects on a large production space (106 of 318) were
   `backlog` (measured 2026-08-26 via `GET /projects`), including admin-side
-  projects. Backlog notation support is not optional. Rendering is decided at
-  display time by the project's current rule (the API stores raw text), and a
-  project's setting can flip, so read it rather than caching a belief about it.
+  projects. Rendering is decided at display time by the project's current
+  rule (the API stores raw text), so the same text reads differently once a
+  project's setting flips.
 
 ## Rate limit
 

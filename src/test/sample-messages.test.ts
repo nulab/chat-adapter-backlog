@@ -115,7 +115,7 @@ const rows: [string, string, string, unknown][] = [
   [
     '18',
     'Pull Request Added',
-    '`<host>:pr:<repositoryId>:<number>:r` — the thread id comes from `content.repository.id` and `content.number`, never from `content.id`, which addresses no endpoint. The `summary` keeps mention notation raw while a description or comment carries it rewritten. `content.assignee` is the account the pull request was opened for, and opening one for the bot is a mention; on a 19 or a 20 the same key is the standing assignee and means nothing.',
+    '`<host>:pr:<repositoryId>:<number>:r` — the thread id comes from `content.repository.id` and `content.number`, never from `content.id`, which addresses no endpoint. The `summary` keeps a `<@U…>` mention raw while a description or comment carries it rewritten. `content.assignee` is the account the pull request was opened for, and opening one for the bot is a mention; on a 19 or a 20 the same key is the standing assignee and means nothing.',
     pullRequestAdded({
       summary: `Retry the deploy step ${RAW_MENTION}`,
       assignee: FIXTURE.bot,

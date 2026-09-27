@@ -17,7 +17,7 @@ replies by commenting.
 - Issues and pull requests are threads; the project is the channel
 - Post, edit and delete comments; upload and download attachments
 - Mentions by notification, by `@name` in the text, or by assignment to the bot
-- Backlog notation and Markdown projects both convert to and from Chat SDK's AST
+- Markdown (GFM) converts to and from Chat SDK's AST
 - `client()` gives you the underlying [`backlog-js`](https://github.com/nulab/backlog-js) client for every other endpoint
 - One bounded retry on a 429, and typed `@chat-adapter/shared` errors
 - Zero-config setup from environment variables
@@ -205,7 +205,7 @@ bot. Read `message.isMention` rather than matching the text yourself. The rules
 are in
 [Mention detection](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#54-mention-detection-d9).
 
-To mention someone, write Backlog's notation — `<@U<userId>>`, `<@T<teamId>>`
+To mention someone, write Backlog's mention syntax — `<@U<userId>>`, `<@T<teamId>>`
 or `<@project>` — or pass `notifiedUserId` to notify without a visible name:
 
 ```ts
@@ -273,8 +273,9 @@ Mock `adapter.client()` where a handler calls Backlog directly.
 - Adding the bot to an existing comment's recipients is ignored; address the
   bot when posting the comment.
 - `listThreads` and issue listing draw on Backlog's lower search limit.
-- Notation markers in your own text (`''bold''`, `%%strike%%`, `[[link]]`) are
-  rendered by Backlog. Post a `{ raw }` message to control escaping yourself.
+- Projects that use Backlog notation are not supported: posts appear as
+  Markdown source there, and incoming notation is read as Markdown. Switch the
+  project to Markdown in its settings.
 - `chat.getUser()` cannot route to this adapter. Call `adapter.getUser()`.
 - Delivery is at least once. Key durable idempotency on `message.id`.
 - DMs, ephemeral messages, modals, buttons, slash commands, scheduling and
@@ -282,8 +283,8 @@ Mock `adapter.client()` where a handler calls Backlog directly.
 
 Member-by-member coverage is in
 [Adapter contract coverage](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#4-adapter-contract-coverage),
-and the conversions that lose information in
-[Known lossy conversions](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#96-known-lossy-conversions).
+and how text and cards are rendered in
+[Formatting](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#9-formatting).
 
 ## Examples
 

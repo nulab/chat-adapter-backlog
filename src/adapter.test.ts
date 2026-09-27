@@ -338,13 +338,10 @@ function webhookAdapterConfig(overrides: Partial<BacklogAdapterConfig> = {}) {
   };
 }
 
-function exampleProject(
-  textFormattingRule: 'markdown' | 'backlog' = 'markdown'
-) {
+function exampleProject() {
   return project({
     projectKey: FIXTURE.projectKey,
     name: 'Example project',
-    textFormattingRule,
   });
 }
 
@@ -353,17 +350,6 @@ const EXAMPLE_ISSUE = issue({
   summary: 'Deploy fails on the staging space',
   createdUser: ALICE,
 });
-
-/** Answers Get Project for the fixture project, which every webhook and formatted write looks up. */
-function withProject(
-  adapter: BacklogAdapter,
-  textFormattingRule: 'markdown' | 'backlog' = 'markdown'
-): BacklogAdapter {
-  vi.spyOn(adapter.client(), 'getProject').mockResolvedValue(
-    exampleProject(textFormattingRule)
-  );
-  return adapter;
-}
 
 type Factory = () => Promise<Message<BacklogRawMessage>>;
 
@@ -391,9 +377,10 @@ function mockChat(
 async function webhookAdapter(
   config: Record<string, unknown> = {}
 ): Promise<{ adapter: BacklogAdapter; chat: ChatInstance }> {
-  const adapter = withProject(
-    createBacklogAdapter({ ...webhookAdapterConfig(), ...config })
-  );
+  const adapter = createBacklogAdapter({
+    ...webhookAdapterConfig(),
+    ...config,
+  });
   const chat = mockChat();
   await adapter.initialize(chat);
   return { adapter, chat };
@@ -500,7 +487,7 @@ describe('BacklogAdapter.handleWebhook', () => {
   it('answers before the dispatched message has been built', async () => {
     let release: (() => void) | undefined;
     const built = vi.fn();
-    const adapter = withProject(createBacklogAdapter(webhookAdapterConfig()));
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
     await adapter.initialize(
       mockChat(async (_adapter, _threadId, factory) => {
         await new Promise<void>((resolve) => {
@@ -526,7 +513,7 @@ describe('BacklogAdapter.handleWebhook', () => {
 
   it('logs a failed dispatch with its thread instead of rejecting', async () => {
     const logger = createMockLogger();
-    const adapter = withProject(createBacklogAdapter(webhookAdapterConfig()));
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
     await adapter.initialize(
       mockChat(async () => {
         throw new Error('handler exploded');
@@ -577,7 +564,7 @@ describe('BacklogAdapter.handleWebhook', () => {
     ]);
   });
 
-  it('looks the project up once for a bulk update, however many issues it touched', async () => {
+  it('builds the messages of a delivery without a project lookup', async () => {
     const adapter = createBacklogAdapter(webhookAdapterConfig());
     const getProject = vi
       .spyOn(adapter.client(), 'getProject')
@@ -587,11 +574,11 @@ describe('BacklogAdapter.handleWebhook', () => {
     await adapter.handleWebhook(webhookRequest(bulkFieldsChanged()));
     await vi.waitFor(() => expect(dispatched).toHaveLength(3));
 
-    expect(getProject).toHaveBeenCalledTimes(1);
+    expect(getProject).not.toHaveBeenCalled();
   });
 
   it("dispatches a pull-request comment into the pull request's thread", async () => {
-    const adapter = withProject(createBacklogAdapter(webhookAdapterConfig()));
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
     const dispatched = await initializeCapturingDispatches(adapter);
 
     await adapter.handleWebhook(webhookRequest(pullRequestCommented()));
@@ -616,28 +603,13 @@ describe('BacklogAdapter.handleWebhook', () => {
     });
     expect(getGitRepository).not.toHaveBeenCalled();
   });
-
-  it('formats the text with the rule of the project the delivery came from', async () => {
-    const adapter = withProject(
-      createBacklogAdapter(webhookAdapterConfig()),
-      'backlog'
-    );
-    const dispatched = await initializeCapturingDispatches(adapter);
-
-    await adapter.handleWebhook(
-      webhookRequest(issueCommented({ text: "''urgent''" }))
-    );
-
-    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
-    expect(dispatched[0]?.message.formatted).toEqual(URGENT_CONTENT);
-  });
 });
 
 describe('BacklogAdapter.parseMessage', () => {
   async function delivered(
     payload: Record<string, unknown>
   ): Promise<Message<BacklogRawMessage>[]> {
-    const adapter = withProject(createBacklogAdapter(webhookAdapterConfig()));
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
     const dispatched = await initializeCapturingDispatches(adapter);
     await adapter.handleWebhook(webhookRequest(payload));
     await vi.waitFor(() => expect(dispatched.length).toBeGreaterThan(0));
@@ -705,18 +677,6 @@ const ISSUE_SUBJECT: BacklogSubjectRef = {
   issueId: FIXTURE.issueId,
 };
 
-const URGENT_CONTENT: FormattedContent = {
-  type: 'root',
-  children: [
-    {
-      type: 'paragraph',
-      children: [
-        { type: 'strong', children: [{ type: 'text', value: 'urgent' }] },
-      ],
-    },
-  ],
-};
-
 /**
  * An adapter on the fixture space whose client answers Get Project,
  * Get Issue and Add Comment; a test stubs any other method it reaches, and
@@ -724,7 +684,6 @@ const URGENT_CONTENT: FormattedContent = {
  */
 function egressAdapter(
   options: {
-    textFormattingRule?: 'markdown' | 'backlog';
     logger?: ReturnType<typeof createMockLogger>;
   } = {}
 ) {
@@ -737,7 +696,7 @@ function egressAdapter(
     client,
     getProject: vi
       .spyOn(client, 'getProject')
-      .mockResolvedValue(exampleProject(options.textFormattingRule)),
+      .mockResolvedValue(exampleProject()),
     getIssue: vi
       .spyOn(client, 'getIssue')
       .mockResolvedValue(EXAMPLE_ISSUE as never),
@@ -852,36 +811,11 @@ describe('BacklogAdapter.postMessage', () => {
     });
     expect(backlog.postIssueComments).not.toHaveBeenCalled();
   });
-
-  it('a bold reply on a notation project uses two quotes', async () => {
-    const { adapter, backlog } = egressAdapter({
-      textFormattingRule: 'backlog',
-    });
-
-    await adapter.postMessage(EGRESS_THREAD_ID, { markdown: '**bold**' });
-
-    expect(backlog.postIssueComments).toHaveBeenCalledWith(FIXTURE.issueId, {
-      content: "''bold''",
-    });
-  });
-
-  it('an unreadable project setting degrades to markdown for one call', async () => {
-    const { adapter, backlog } = egressAdapter();
-    backlog.getProject.mockRejectedValue(new Error('project lookup failed'));
-
-    await adapter.postMessage(EGRESS_THREAD_ID, { markdown: '**bold**' });
-
-    expect(backlog.postIssueComments).toHaveBeenCalledWith(FIXTURE.issueId, {
-      content: '**bold**',
-    });
-  });
 });
 
 describe('BacklogAdapter.editMessage / deleteMessage', () => {
-  it("an edit rewrites the comment with the project's formatting rule", async () => {
-    const { adapter, backlog } = egressAdapter({
-      textFormattingRule: 'backlog',
-    });
+  it('an edit rewrites the comment with the rendered content', async () => {
+    const { adapter, backlog } = egressAdapter();
     const patchIssueComment = vi
       .spyOn(backlog.client, 'patchIssueComment')
       .mockImplementation(
@@ -900,7 +834,7 @@ describe('BacklogAdapter.editMessage / deleteMessage', () => {
     );
 
     expect(patchIssueComment).toHaveBeenCalledWith(FIXTURE.issueId, 1, {
-      content: "''bold''",
+      content: '**bold**',
     });
     expect(result.id).toBe(commentMessageId());
   });
@@ -995,23 +929,7 @@ describe('BacklogAdapter reactions', () => {
 });
 
 describe('BacklogAdapter.fetchMessages / fetchMessage / fetchThread', () => {
-  it('fetchMessage parses a comment with the project formatting rule', async () => {
-    const { adapter, backlog } = egressAdapter({
-      textFormattingRule: 'backlog',
-    });
-    vi.spyOn(backlog.client, 'getIssueComment').mockResolvedValue(
-      issueComment({ id: 1, content: "''urgent''" }) as never
-    );
-
-    const message = await adapter.fetchMessage(
-      EGRESS_THREAD_ID,
-      commentMessageId()
-    );
-
-    expect(message?.formatted).toEqual(URGENT_CONTENT);
-  });
-
-  it('an id fetchMessage answers null for spends no project lookup', async () => {
+  it('an id fetchMessage answers null for spends no request', async () => {
     const { adapter, backlog } = egressAdapter();
 
     const message = await adapter.fetchMessage(
@@ -1027,25 +945,6 @@ describe('BacklogAdapter.fetchMessages / fetchMessage / fetchThread', () => {
     expect(message).toBeNull();
     expect(backlog.getProject).not.toHaveBeenCalled();
     expect(network).not.toHaveBeenCalled();
-  });
-
-  it('fetchMessages parses comments with the project formatting rule', async () => {
-    const { adapter, backlog } = egressAdapter({
-      textFormattingRule: 'backlog',
-    });
-    vi.spyOn(backlog.client, 'getIssueComments').mockResolvedValue([
-      issueComment({ id: 1, content: "''urgent''" }),
-    ] as never);
-
-    const result = await adapter.fetchMessages(EGRESS_THREAD_ID, {
-      limit: 2,
-      direction: 'backward',
-    });
-    const urgent = result.messages.find(
-      (message) => message.text === "''urgent''"
-    );
-
-    expect(urgent?.formatted).toEqual(URGENT_CONTENT);
   });
 
   it('thread info names its kind for both issues and pull requests', async () => {
@@ -1217,8 +1116,8 @@ describe('BacklogAdapter.getUser', () => {
 });
 
 describe('BacklogAdapter.fetchChannelInfo', () => {
-  it('names the project and reports its key and formatting rule', async () => {
-    const { adapter } = egressAdapter({ textFormattingRule: 'backlog' });
+  it('names the project and reports its key', async () => {
+    const { adapter } = egressAdapter();
     const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
 
     await expect(adapter.fetchChannelInfo(channelId)).resolves.toEqual({
@@ -1229,7 +1128,6 @@ describe('BacklogAdapter.fetchChannelInfo', () => {
         host: FIXTURE.host,
         projectId: FIXTURE.projectId,
         projectKey: FIXTURE.projectKey,
-        textFormattingRule: 'backlog',
       },
     });
   });
@@ -1263,43 +1161,10 @@ const BOLD_CONTENT: FormattedContent = {
 };
 
 describe('BacklogAdapter.renderFormatted', () => {
-  async function onNotationProject(): Promise<BacklogAdapter> {
-    const { adapter } = egressAdapter({ textFormattingRule: 'backlog' });
-    await adapter.postMessage(EGRESS_THREAD_ID, {
-      markdown: 'prime the cache',
-    });
-    return adapter;
-  }
-
-  it("rendering for a thread uses its project's cached rule", async () => {
-    const adapter = await onNotationProject();
-
-    expect(adapter.renderFormatted(BOLD_CONTENT, EGRESS_THREAD_ID)).toBe(
-      "''bold''"
-    );
-  });
-
-  it('without a target renders Markdown', () => {
+  it('renders Markdown', () => {
     const adapter = new BacklogAdapter(validConfig());
 
     expect(adapter.renderFormatted(BOLD_CONTENT)).toBe('**bold**');
-  });
-
-  it("rendering for a channel uses that channel's cached rule", async () => {
-    const adapter = await onNotationProject();
-
-    expect(
-      adapter.renderFormatted(
-        BOLD_CONTENT,
-        `backlog:${FIXTURE.host}:${FIXTURE.projectId}`
-      )
-    ).toBe("''bold''");
-  });
-
-  it('rendering for a target that is neither a thread nor a channel id renders markdown', async () => {
-    const adapter = await onNotationProject();
-
-    expect(adapter.renderFormatted(BOLD_CONTENT, 'not-an-id')).toBe('**bold**');
   });
 });
 
@@ -1343,15 +1208,13 @@ connectWebhookContract({
   name: 'backlog',
   createChat: () => mockChat(),
   createAdapter: ({ webhookVerifier }) =>
-    withProject(
-      createBacklogAdapter({
-        host: FIXTURE.host,
-        apiKey: 'connect-key',
-        botUserId: FIXTURE.bot.id,
-        botUserName: FIXTURE.bot.name,
-        webhookVerifier,
-      })
-    ),
+    createBacklogAdapter({
+      host: FIXTURE.host,
+      apiKey: 'connect-key',
+      botUserId: FIXTURE.bot.id,
+      botUserName: FIXTURE.bot.name,
+      webhookVerifier,
+    }),
   makeWebhookRequest: () => webhookRequest(issueCommented(), { token: null }),
 });
 
@@ -1394,11 +1257,11 @@ selfMessageContract({
     ),
 });
 
-/** Answers `GET /users/myself` with the fixture bot, and Get Project. */
+/** Answers `GET /users/myself` with the fixture bot. */
 function answeringMyself(adapter: BacklogAdapter) {
-  const client = adapter.client();
-  vi.spyOn(client, 'getProject').mockResolvedValue(exampleProject());
-  return vi.spyOn(client, 'getMyself').mockResolvedValue(BOT as never);
+  return vi
+    .spyOn(adapter.client(), 'getMyself')
+    .mockResolvedValue(BOT as never);
 }
 
 function identitylessConfig() {

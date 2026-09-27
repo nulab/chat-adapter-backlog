@@ -423,7 +423,7 @@ describe('buildInboundMessage — type 18 Pull Request Added', () => {
     expect(fields.isMention).toBe(true);
   });
 
-  it('a summary mentioning the bot in raw notation is a mention', () => {
+  it('a summary mentioning the bot in the raw `<@U…>` form is a mention', () => {
     const activity = activityOfType(
       18,
       pullRequestAdded({ summary: `cc <@U${FIXTURE.bot.id}> please review` })
@@ -434,7 +434,7 @@ describe('buildInboundMessage — type 18 Pull Request Added', () => {
     expect(fields.isMention).toBe(true);
   });
 
-  it('an issue summary carrying the same raw notation is not a mention', () => {
+  it('an issue summary carrying the same raw form is not a mention', () => {
     const activity = created(
       issueCreated({ summary: `cc <@U${FIXTURE.bot.id}> please review` })
     );
@@ -444,7 +444,7 @@ describe('buildInboundMessage — type 18 Pull Request Added', () => {
     expect(fields.isMention).toBe(false);
   });
 
-  it('a summary mentioning another user in raw notation is not a mention', () => {
+  it('a summary mentioning another user in the raw form is not a mention', () => {
     const activity = activityOfType(
       18,
       pullRequestAdded({ summary: `cc <@U${FIXTURE.alice.id}> please review` })
@@ -707,7 +707,7 @@ describe('buildInboundMessage — types 19 and 20, comment id present', () => {
     expect(fields.isMention).toBe(false);
   });
 
-  it('raw mention notation in a comment is not a mention, only a summary keeps it literal', () => {
+  it('a raw `<@U…>` in a comment is not a mention, only a summary keeps it literal', () => {
     const activity = activityOfType(
       20,
       pullRequestCommented({ text: `cc <@U${FIXTURE.bot.id}>` })

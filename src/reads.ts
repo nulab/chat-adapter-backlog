@@ -394,7 +394,6 @@ export async function fetchChannelInfo(
       host,
       projectId,
       projectKey: project.projectKey,
-      textFormattingRule: project.textFormattingRule,
     },
   };
 }
