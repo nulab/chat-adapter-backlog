@@ -40,11 +40,7 @@ import {
   webhookRequest,
 } from './test/fixtures/webhooks';
 import { UNAUTHORIZED_BODY } from './webhook/verify';
-import type {
-  BacklogApi,
-  BacklogComment,
-  BacklogNotification,
-} from './client/port';
+import type { BacklogApi, BacklogComment } from './client/port';
 import type {
   BacklogBulkUpdatePayload,
   BacklogRawMessage,
@@ -566,7 +562,7 @@ describe('BacklogAdapter lifecycle and identity', () => {
 });
 
 describe('BacklogAdapter optional members Backlog cannot support are absent', () => {
-  it('has no openDM, postEphemeral, openModal, scheduleMessage, reply, postObject, editObject, fetchChannelMessages, endTyping, disconnect, onThreadSubscribe, getChannelVisibility, lockScope, persistThreadHistory, supportsTurnCancellation or botUserId', () => {
+  it('has no openDM, postEphemeral, openModal, scheduleMessage, reply, postObject, editObject, postChannelMessage, markAsRead, fetchChannelMessages, endTyping, disconnect, onThreadSubscribe, getChannelVisibility, lockScope, persistThreadHistory, supportsTurnCancellation or botUserId', () => {
     const adapter = new BacklogAdapter(validConfig());
     const optionalMembers = [
       'openDM',
@@ -576,6 +572,8 @@ describe('BacklogAdapter optional members Backlog cannot support are absent', ()
       'reply',
       'postObject',
       'editObject',
+      'postChannelMessage',
+      'markAsRead',
       'fetchChannelMessages',
       'endTyping',
       'disconnect',
@@ -599,12 +597,10 @@ describe('BacklogAdapter optional members Backlog cannot support are absent', ()
     const implementedMembers = [
       'stream',
       'fetchMessage',
-      'postChannelMessage',
       'listThreads',
       'getUser',
       'fetchSubject',
       'fetchChannelInfo',
-      'markAsRead',
       'rehydrateAttachment',
     ] as const;
 
@@ -1874,7 +1870,6 @@ describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () 
     const thread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
 
     expect(thread.metadata).toMatchObject({
-      repositoryName: FIXTURE.repositoryName,
       url: `https://${FIXTURE.host}/git/${FIXTURE.projectKey}/${FIXTURE.repositoryName}/pullRequests/${FIXTURE.pullRequestNumber}`,
     });
     expect(calls).toContain('getPullRequest');
@@ -2470,6 +2465,16 @@ describe('BacklogAdapter.postMessage (§6.1)', () => {
     });
   });
 
+  it('a channel id, which channel.post() passes, is a validation error and creates nothing', async () => {
+    const { adapter, api } = egressAdapter();
+    await expect(
+      adapter.postMessage(`backlog:${FIXTURE.host}:${FIXTURE.projectId}`, {
+        markdown: 'Deploy fails on staging',
+      })
+    ).rejects.toThrow(ValidationError);
+    expect(api.state.recordedInputs).toEqual([]);
+  });
+
   it('files are uploaded and attached to the comment', async () => {
     const { adapter, api } = egressAdapter();
     await adapter.postMessage(EGRESS_THREAD_ID, {
@@ -2737,27 +2742,6 @@ describe('BacklogAdapter.stream (§6.4, D4)', () => {
       // no chunks
     }
     await adapter.stream(EGRESS_THREAD_ID, chunks());
-    const addComment = api.state.recordedInputs.find(
-      (input) => input.method === 'addComment'
-    );
-    expect(addComment).toMatchObject({ input: { content: ' ' } });
-  });
-
-  it('an abort against a source that never produced posts a single space', async () => {
-    const { adapter, api } = egressAdapter();
-    const controller = new AbortController();
-    controller.abort();
-    const stalled: AsyncIterable<string> = {
-      [Symbol.asyncIterator]: () => ({
-        next: () => new Promise<IteratorResult<string>>(() => undefined),
-      }),
-    };
-
-    const result = await adapter.stream(EGRESS_THREAD_ID, stalled, {
-      signal: controller.signal,
-    });
-
-    expect(result.threadId).toBe(EGRESS_THREAD_ID);
     const addComment = api.state.recordedInputs.find(
       (input) => input.method === 'addComment'
     );
@@ -3049,7 +3033,6 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
     expect(pullRequest.metadata).toMatchObject({
       kind: 'pullRequest',
       repositoryId: FIXTURE.repositoryId,
-      repositoryName: FIXTURE.repositoryName,
       number: FIXTURE.pullRequestNumber,
       url: `https://${FIXTURE.host}/git/${FIXTURE.projectKey}/${FIXTURE.repositoryName}/pullRequests/${FIXTURE.pullRequestNumber}`,
     });
@@ -3068,7 +3051,6 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
 
     expect(thread.metadata).toMatchObject({ kind: 'pullRequest' });
     expect(thread.metadata).not.toHaveProperty('url');
-    expect(thread.metadata).not.toHaveProperty('repositoryName');
     expect(logger.warn).toHaveBeenCalledWith(
       'repository name lookup failed; url omitted',
       expect.objectContaining({ repositoryId: FIXTURE.repositoryId })
@@ -3203,22 +3185,6 @@ describe('BacklogAdapter.parseMessage round trip (§3.5)', () => {
     expect(parsed.author.isMe).toBe(true);
   });
 
-  it('the issue postChannelMessage created is rebuilt from its own raw', async () => {
-    const { adapter } = egressAdapter({
-      seed: { issueTypes: { [FIXTURE.projectId]: [{ id: 1, name: 'Task' }] } },
-    });
-
-    const created = await adapter.postChannelMessage(
-      `backlog:${FIXTURE.host}:${FIXTURE.projectId}`,
-      { markdown: '# Deploy is broken\n\nSee the logs for details.' }
-    );
-    const parsed = adapter.parseMessage(created.raw);
-
-    expect(parsed.id).toBe(created.id);
-    expect(parsed.threadId).toBe(created.threadId);
-    expect(parsed.text).toBe('Deploy is broken\n\nSee the logs for details.');
-  });
-
   it('an issue comment’s attachments are not rebuilt from its raw', async () => {
     const { adapter } = egressAdapter({
       seed: {
@@ -3258,98 +3224,6 @@ describe('BacklogAdapter.parseMessage round trip (§3.5)', () => {
     expect(fetched.attachments).toHaveLength(1);
     expect(adapter.parseMessage(fetched.raw).attachments).toEqual([]);
     expect(adapter.parseMessage(fetched.raw).raw).toEqual(fetched.raw);
-  });
-});
-
-describe('BacklogAdapter.postChannelMessage (§6.7)', () => {
-  it('posting to a channel creates an issue whose summary is the first block as plain text', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: { issueTypes: { [FIXTURE.projectId]: [{ id: 1, name: 'Task' }] } },
-    });
-    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
-    await adapter.postChannelMessage(channelId, {
-      markdown: '# Deploy is broken\n\nSee the logs for details.',
-    });
-    expect(api.state.recordedInputs).toContainEqual({
-      method: 'createIssue',
-      input: {
-        projectId: FIXTURE.projectId,
-        summary: 'Deploy is broken',
-        issueTypeId: 1,
-        priorityId: 3,
-        description: 'See the logs for details.',
-      },
-    });
-  });
-
-  it('stale cached defaults are refreshed once after a validation error', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: { issueTypes: { [FIXTURE.projectId]: [{ id: 1, name: 'Task' }] } },
-    });
-    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
-    // Warm the cache with the default issue type, then replace the project's
-    // issue types so the cached id no longer exists — a project setting that
-    // changed after the cache was populated. The port refuses the stale id
-    // itself, so nothing here has to stand in for the failure.
-    await adapter.postChannelMessage(channelId, { markdown: 'First issue' });
-    api.state.issueTypes[FIXTURE.projectId] = [{ id: 2, name: 'Bug' }];
-
-    const result = await adapter.postChannelMessage(channelId, {
-      markdown: 'Second issue',
-    });
-
-    expect(result.threadId).toMatch(
-      new RegExp(`^backlog:${FIXTURE.host}:${FIXTURE.projectId}:`)
-    );
-    const creates = api.state.recordedInputs.filter(
-      (input) => input.method === 'createIssue'
-    );
-    expect(creates.map((input) => input.input.issueTypeId)).toEqual([1, 1, 2]);
-  });
-
-  it('explicit issue type and priority are never retried', async () => {
-    // No issue types are seeded, so the port refuses the explicit id itself
-    // — the refresh path is what is on trial here, and it must not run for
-    // ids the caller supplied rather than the cache.
-    const { adapter, api } = egressAdapter();
-    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
-
-    await expect(
-      adapter.postChannelMessage(channelId, {
-        markdown: 'Explicit ids',
-        issueTypeId: 1,
-        priorityId: 3,
-      } as unknown as Parameters<BacklogAdapter['postChannelMessage']>[1])
-    ).rejects.toThrow(ValidationError);
-    expect(
-      api.state.recordedInputs.filter((input) => input.method === 'createIssue')
-    ).toHaveLength(1);
-  });
-
-  it('a channel post carrying a file with unsupported data is rejected as a backlog error, and creates no issue', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: { issueTypes: { [FIXTURE.projectId]: [{ id: 1, name: 'Task' }] } },
-    });
-    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
-    const rejection = adapter.postChannelMessage(channelId, {
-      markdown: 'Deploy is broken',
-      files: [{ filename: 'trace.log', data: new ReadableStream() }],
-    } as unknown as Parameters<BacklogAdapter['postChannelMessage']>[1]);
-
-    await expect(rejection).rejects.toThrow(ValidationError);
-    await expect(rejection).rejects.toMatchObject({ adapter: 'backlog' });
-    expect(api.state.uploads).toEqual([]);
-    expect(
-      api.state.recordedInputs.filter((input) => input.method === 'createIssue')
-    ).toEqual([]);
-  });
-
-  it('an empty summary is a validation error', async () => {
-    const { adapter } = egressAdapter();
-    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
-    await expect(
-      adapter.postChannelMessage(channelId, { markdown: '' })
-    ).rejects.toThrow(ValidationError);
   });
 });
 
@@ -3450,438 +3324,22 @@ describe('BacklogAdapter.fetchSubject (§7.4)', () => {
   });
 });
 
-describe('BacklogAdapter.fetchChannelInfo (§7.5)', () => {
-  it('fetching channel info replaces the cached formatting rule', async () => {
-    const { adapter, api } = egressAdapter({ textFormattingRule: 'markdown' });
+describe('BacklogAdapter.fetchChannelInfo', () => {
+  it('names the project and reports its key and formatting rule', async () => {
+    const { adapter } = egressAdapter({ textFormattingRule: 'backlog' });
     const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
 
-    // Warm the cache with the seeded "markdown" rule.
-    await adapter.postMessage(EGRESS_THREAD_ID, { markdown: '**bold**' });
-    api.state.projects[0] = {
-      ...(api.state.projects[0] as (typeof api.state.projects)[number]),
-      textFormattingRule: 'backlog',
-    };
-
-    const info = await adapter.fetchChannelInfo(channelId);
-    expect(info.metadata).toMatchObject({ textFormattingRule: 'backlog' });
-
-    await adapter.postMessage(EGRESS_THREAD_ID, { markdown: '**bold**' });
-    const addComment = api.state.recordedInputs.filter(
-      (input) => input.method === 'addComment'
-    );
-    expect(addComment[addComment.length - 1]).toMatchObject({
-      input: { content: "''bold''" },
-    });
-  });
-
-  it('clearing channel info forgets the host\u2019s repository names', async () => {
-    const calls: string[] = [];
-    const { adapter } = egressAdapter({
-      seed: pullRequestSeed(),
-      wrapApi: (api) => recordPortCalls(api, calls),
-    });
-    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
-
-    await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
-    calls.length = 0;
-    await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
-    expect(calls).not.toContain('getGitRepository');
-
-    await adapter.fetchChannelInfo(channelId);
-    calls.length = 0;
-    const thread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
-
-    expect(calls).toContain('getGitRepository');
-    expect(thread.metadata).toMatchObject({
-      repositoryName: FIXTURE.repositoryName,
-    });
-  });
-
-  it('clearing channel info leaves another space untouched', async () => {
-    const calls = new Map<string, string[]>([
-      [FIXTURE.host, []],
-      [FIXTURE.otherHost, []],
-    ]);
-    const ports = new Map<string, BacklogApi>(
-      [FIXTURE.host, FIXTURE.otherHost].map((host) => [
-        host,
-        recordPortCalls(
-          createInMemoryBacklogApi({
-            projects: [
-              {
-                id: FIXTURE.projectId,
-                projectKey: FIXTURE.projectKey,
-                name: 'Example project',
-                textFormattingRule: 'markdown',
-              },
-            ],
-            users: [CHATBOT_USER_REF],
-            me: CHATBOT_USER_REF,
-            ...pullRequestSeed(),
-          }),
-          calls.get(host) as string[]
-        ),
-      ])
-    );
-    const adapter = onPort(
-      createBacklogAdapter({
-        installations: [FIXTURE.host, FIXTURE.otherHost].map((host) => ({
-          host,
-          apiKey: 'test-api-key',
-          botUserId: FIXTURE.bot.id,
-          botUserName: FIXTURE.bot.name,
-          webhookSecret: FIXTURE.webhookSecret,
-        })),
-      }),
-      (installation) => ports.get(installation.host) as BacklogApi
-    );
-    const threadOn = (host: string): string =>
-      `backlog:${host}:${FIXTURE.projectId}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}`;
-
-    await adapter.fetchThread(threadOn(FIXTURE.host));
-    await adapter.fetchThread(threadOn(FIXTURE.otherHost));
-    await adapter.fetchChannelInfo(
-      `backlog:${FIXTURE.host}:${FIXTURE.projectId}`
-    );
-    for (const recorded of calls.values()) {
-      recorded.length = 0;
-    }
-
-    await adapter.fetchThread(threadOn(FIXTURE.host));
-    await adapter.fetchThread(threadOn(FIXTURE.otherHost));
-
-    expect(calls.get(FIXTURE.host)).toContain('getGitRepository');
-    expect(calls.get(FIXTURE.otherHost)).not.toContain('getGitRepository');
-  });
-});
-
-describe('BacklogAdapter.markAsRead (§7.8)', () => {
-  /**
-   * One entry of the bot's own notification feed. `comment` and
-   * `pullRequestComment` both default to `null` and every test below names
-   * the one it means: which of the two carries the comment id is the whole
-   * subject of §7.8's matching rule, so a default for either would be a
-   * default for the variable under test.
-   */
-  function botNotification(
-    overrides: Partial<BacklogNotification> & { id: number }
-  ): BacklogNotification {
-    return {
-      alreadyRead: false,
-      resourceAlreadyRead: false,
-      project: {
-        id: FIXTURE.projectId,
+    await expect(adapter.fetchChannelInfo(channelId)).resolves.toEqual({
+      id: channelId,
+      name: 'Example project',
+      isDM: false,
+      metadata: {
+        host: FIXTURE.host,
+        projectId: FIXTURE.projectId,
         projectKey: FIXTURE.projectKey,
-        name: 'Example project',
-      },
-      issue: null,
-      comment: null,
-      pullRequest: null,
-      pullRequestComment: null,
-      sender: ALICE_USER_REF,
-      created: new Date('2026-01-01T00:00:00Z'),
-      ...overrides,
-    };
-  }
-
-  /**
-   * `pageCount * 100` notifications, newest-first by id, with the target
-   * comment attached to the **oldest** one so it can only be reached after
-   * every earlier page of 100 has been exhausted.
-   */
-  function feedEndingWith(
-    pageCount: number,
-    target: Pick<BacklogNotification, 'comment' | 'pullRequestComment'>
-  ): BacklogNotification[] {
-    const total = pageCount * 100;
-    return Array.from({ length: total }, (_, index) => {
-      const notificationId = total - index;
-      return botNotification(
-        notificationId === 1
-          ? { id: 1, ...target }
-          : { id: notificationId, comment: { id: 1000 + notificationId } }
-      );
-    });
-  }
-
-  const issueCommentMessageId = (commentId: number) =>
-    encodeMessageId({
-      host: FIXTURE.host,
-      subject: ISSUE_SUBJECT,
-      part: 'comment',
-      commentId,
-    });
-  const pullRequestCommentMessageId = (commentId: number) =>
-    encodeMessageId({
-      host: FIXTURE.host,
-      subject: PULL_REQUEST_SUBJECT,
-      part: 'comment',
-      commentId,
-    });
-
-  it('marking read finds the notification on the third page', async () => {
-    const targetCommentId = 5;
-    const { adapter, api } = egressAdapter({
-      seed: {
-        notifications: feedEndingWith(3, {
-          comment: { id: targetCommentId },
-          pullRequestComment: null,
-        }),
+        textFormattingRule: 'backlog',
       },
     });
-
-    await adapter.markAsRead(
-      EGRESS_THREAD_ID,
-      issueCommentMessageId(targetCommentId)
-    );
-
-    expect(api.state.recordedInputs).toContainEqual({
-      method: 'markNotificationAsRead',
-      id: 1,
-    });
-  });
-
-  it('marking a pull request comment read finds the notification on the third page', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: {
-        ...pullRequestSeed([{ id: PULL_REQUEST_COMMENT_ID }]),
-        notifications: feedEndingWith(3, {
-          comment: null,
-          pullRequestComment: { id: PULL_REQUEST_COMMENT_ID },
-        }),
-      },
-    });
-
-    await adapter.markAsRead(
-      PULL_REQUEST_THREAD_ID,
-      pullRequestCommentMessageId(PULL_REQUEST_COMMENT_ID)
-    );
-
-    expect(api.state.recordedInputs).toContainEqual({
-      method: 'markNotificationAsRead',
-      id: 1,
-    });
-  });
-
-  it('a pull request comment beyond three pages of notifications is left unmarked', async () => {
-    const calls: string[] = [];
-    const logger = createMockLogger();
-    const { adapter, api } = egressAdapter({
-      logger,
-      wrapApi: (port) => recordPortCalls(port, calls),
-      seed: {
-        ...pullRequestSeed([{ id: PULL_REQUEST_COMMENT_ID }]),
-        notifications: feedEndingWith(4, {
-          comment: null,
-          pullRequestComment: { id: PULL_REQUEST_COMMENT_ID },
-        }),
-      },
-    });
-
-    await adapter.markAsRead(
-      PULL_REQUEST_THREAD_ID,
-      pullRequestCommentMessageId(PULL_REQUEST_COMMENT_ID)
-    );
-
-    expect(calls.filter((call) => call === 'listNotifications')).toHaveLength(
-      3
-    );
-    expect(api.state.recordedInputs).toEqual([]);
-    expect(logger.info).toHaveBeenCalledWith(
-      'markAsRead: no matching notification found within 3 pages',
-      expect.objectContaining({ commentId: PULL_REQUEST_COMMENT_ID })
-    );
-  });
-
-  it('marking a pull request comment read matches the pull request notification, not an issue comment with the same id', async () => {
-    const sharedCommentId = PULL_REQUEST_COMMENT_ID;
-    const { adapter, api } = egressAdapter({
-      seed: {
-        ...pullRequestSeed([{ id: sharedCommentId }]),
-        // Newest first, so the issue notification is the one examined first:
-        // matching on the number alone would mark notification 2.
-        notifications: [
-          botNotification({ id: 2, comment: { id: sharedCommentId } }),
-          botNotification({
-            id: 1,
-            pullRequestComment: { id: sharedCommentId },
-          }),
-        ],
-      },
-    });
-
-    await adapter.markAsRead(
-      PULL_REQUEST_THREAD_ID,
-      pullRequestCommentMessageId(sharedCommentId)
-    );
-
-    expect(api.state.recordedInputs).toEqual([
-      { method: 'markNotificationAsRead', id: 1 },
-    ]);
-  });
-
-  it('marking an issue comment read matches the issue notification, not a pull request comment with the same id', async () => {
-    const sharedCommentId = PULL_REQUEST_COMMENT_ID;
-    const { adapter, api } = egressAdapter({
-      seed: {
-        ...pullRequestSeed([{ id: sharedCommentId }]),
-        notifications: [
-          botNotification({
-            id: 2,
-            pullRequestComment: { id: sharedCommentId },
-          }),
-          botNotification({ id: 1, comment: { id: sharedCommentId } }),
-        ],
-      },
-    });
-
-    await adapter.markAsRead(
-      EGRESS_THREAD_ID,
-      issueCommentMessageId(sharedCommentId)
-    );
-
-    expect(api.state.recordedInputs).toEqual([
-      { method: 'markNotificationAsRead', id: 1 },
-    ]);
-  });
-
-  it('marking an already-read notification makes no update call', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: {
-        notifications: [
-          botNotification({
-            id: 1,
-            resourceAlreadyRead: true,
-            comment: { id: 7 },
-          }),
-        ],
-      },
-    });
-
-    await adapter.markAsRead(EGRESS_THREAD_ID, issueCommentMessageId(7));
-
-    expect(
-      api.state.recordedInputs.filter(
-        (input) => input.method === 'markNotificationAsRead'
-      )
-    ).toHaveLength(0);
-  });
-
-  it('marking an already-read pull request notification makes no update call', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: {
-        ...pullRequestSeed([{ id: PULL_REQUEST_COMMENT_ID }]),
-        notifications: [
-          botNotification({
-            id: 1,
-            resourceAlreadyRead: true,
-            pullRequestComment: { id: PULL_REQUEST_COMMENT_ID },
-          }),
-        ],
-      },
-    });
-
-    await adapter.markAsRead(
-      PULL_REQUEST_THREAD_ID,
-      pullRequestCommentMessageId(PULL_REQUEST_COMMENT_ID)
-    );
-
-    expect(api.state.recordedInputs).toEqual([]);
-  });
-
-  it('an inbox-cleared notification whose resource is still unread still gets marked', async () => {
-    // `alreadyRead` is the badge flag the reset-unread-count endpoint sets on
-    // every notification; `resourceAlreadyRead` is what `markAsRead`'s own
-    // endpoint sets on this one. A seed with the former true and the latter
-    // false proves the short-circuit no longer keys off the wrong flag
-    // (measured 2026-09-06, `.claude/rules/backlog-api-facts.md`).
-    const { adapter, api } = egressAdapter({
-      seed: {
-        notifications: [
-          botNotification({
-            id: 1,
-            alreadyRead: true,
-            resourceAlreadyRead: false,
-            comment: { id: 7 },
-          }),
-        ],
-      },
-    });
-
-    await adapter.markAsRead(EGRESS_THREAD_ID, issueCommentMessageId(7));
-
-    expect(api.state.recordedInputs).toContainEqual({
-      method: 'markNotificationAsRead',
-      id: 1,
-    });
-  });
-
-  it('marking a comment read through the wrong kind of thread is rejected', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: {
-        ...pullRequestSeed([{ id: PULL_REQUEST_COMMENT_ID }]),
-        notifications: [
-          botNotification({
-            id: 1,
-            comment: { id: PULL_REQUEST_COMMENT_ID },
-          }),
-        ],
-      },
-    });
-
-    await expect(
-      adapter.markAsRead(
-        EGRESS_THREAD_ID,
-        pullRequestCommentMessageId(PULL_REQUEST_COMMENT_ID)
-      )
-    ).rejects.toThrow(ValidationError);
-    expect(api.state.recordedInputs).toEqual([]);
-  });
-
-  it('the issue body id makes no notification call', async () => {
-    const calls: string[] = [];
-    const { adapter } = egressAdapter({
-      wrapApi: (port) => recordPortCalls(port, calls),
-    });
-
-    await adapter.markAsRead(
-      EGRESS_THREAD_ID,
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: ISSUE_SUBJECT,
-        part: 'root',
-      })
-    );
-
-    expect(calls).toEqual([]);
-  });
-
-  it('a pull request message id naming no comment makes no notification call', async () => {
-    const calls: string[] = [];
-    const { adapter } = egressAdapter({
-      seed: pullRequestSeed(),
-      wrapApi: (port) => recordPortCalls(port, calls),
-    });
-
-    await adapter.markAsRead(
-      PULL_REQUEST_THREAD_ID,
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: PULL_REQUEST_SUBJECT,
-        part: 'root',
-      })
-    );
-    await adapter.markAsRead(
-      PULL_REQUEST_THREAD_ID,
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: PULL_REQUEST_SUBJECT,
-        part: 'update',
-        created: '2026-01-01T00:00:00Z',
-      })
-    );
-
-    expect(calls).toEqual([]);
   });
 });
 
@@ -3976,7 +3434,7 @@ describe('BacklogAdapter.renderFormatted (§9.1)', () => {
     expect(rendered).toBe("''bold''");
   });
 
-  it('without a target renders Markdown and warns once', () => {
+  it('without a target renders Markdown', () => {
     const adapter = new BacklogAdapter(validConfig());
     const rendered = adapter.renderFormatted({
       type: 'root',
@@ -4007,12 +3465,8 @@ describe('BacklogAdapter.renderFormatted (§9.1)', () => {
     expect(rendered).toBe("''bold''");
   });
 
-  it('rendering for an unparseable target warns and falls back to markdown', async () => {
-    const logger = createMockLogger();
-    const { adapter } = egressAdapter({
-      textFormattingRule: 'backlog',
-      logger,
-    });
+  it('rendering for a target that is neither a thread nor a channel id renders markdown', async () => {
+    const { adapter } = egressAdapter({ textFormattingRule: 'backlog' });
     await adapter.postMessage(EGRESS_THREAD_ID, {
       markdown: 'prime the cache',
     });
@@ -4020,10 +3474,6 @@ describe('BacklogAdapter.renderFormatted (§9.1)', () => {
     const rendered = adapter.renderFormatted(BOLD_CONTENT, 'not-an-id');
 
     expect(rendered).toBe('**bold**');
-    expect(logger.warn).toHaveBeenCalledWith(
-      'textFormattingRule uncached; assuming markdown',
-      { target: 'not-an-id' }
-    );
   });
 });
 

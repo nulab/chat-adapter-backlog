@@ -5,7 +5,6 @@ import type {
   BacklogGitRepository,
   BacklogIssue,
   BacklogIssueComment,
-  BacklogNotification,
   BacklogPullRequest,
   BacklogPullRequestAttachment,
   BacklogStar,
@@ -51,7 +50,6 @@ export interface FakeBacklogServer {
       number: number;
       attachment: BacklogPullRequestAttachment;
     }[];
-    notifications: BacklogNotification[];
     uploads: BacklogUploadedFile[];
     stars: BacklogStar[];
   };
@@ -72,15 +70,12 @@ const {
   bob,
   baseProject,
   baseIssue,
-  baseIssueTypes,
-  basePriorities,
   baseComment,
   statusChangeLog,
   baseGitRepository,
   basePullRequest,
   basePullRequestComment,
   basePullRequestAttachment,
-  baseNotifications,
 } = conformanceFixture;
 
 function defaultRateLimitHeaders(): Record<string, string> {
@@ -275,7 +270,6 @@ export function createFakeBacklogServer(
         attachment: basePullRequestAttachment(),
       },
     ],
-    notifications: baseNotifications(),
     uploads: [],
     stars: [],
   };
@@ -289,8 +283,6 @@ export function createFakeBacklogServer(
 
   const project = baseProject();
   const users = [alice, bob, bot];
-  const issueTypes = baseIssueTypes();
-  const priorities = basePriorities();
 
   const fetchImpl: typeof globalThis.fetch = async (input, init) => {
     const url = new URL(typeof input === 'string' ? input : input.toString());
@@ -428,57 +420,6 @@ export function createFakeBacklogServer(
       );
     }
 
-    // POST /issues (create)
-    if (
-      method === 'POST' &&
-      segments[0] === 'issues' &&
-      segments.length === 1
-    ) {
-      const params = await readParams(init);
-      // An unresolvable `issueTypeId` or `priorityId` is a 400 code 7, not a
-      // created issue carrying a made-up type name: Add Issue requires both
-      // (`.claude/rules/backlog-api-facts.md` "Writes") and an id outside the
-      // project's own lists is `InvalidRequestError`. `src/egress.ts` reads
-      // exactly this failure to refresh its cached defaults, so a fake that
-      // accepted anything left that path untested.
-      //
-      // The two messages are stand-ins. `error.unknownParameter : statusId`
-      // was measured for a rejected **parameter name**
-      // (`.claude/rules/backlog-pull-request-facts.md` "Writes the API cannot
-      // make"); what a real space says about an unresolvable id *value* has
-      // not been measured. Nothing asserts either string.
-      const issueType = issueTypes.find(
-        (t) => t.id === Number(params['issueTypeId'])
-      );
-      if (issueType === undefined) {
-        throw new RouteError(400, 7, 'error.unknownParameter : issueTypeId');
-      }
-      const priority = priorities.find(
-        (p) => p.id === Number(params['priorityId'])
-      );
-      if (priority === undefined) {
-        throw new RouteError(400, 7, 'error.unknownParameter : priorityId');
-      }
-      const id = nextId++;
-      const now = new Date();
-      const issue: BacklogIssue = {
-        id,
-        projectId: Number(params['projectId']),
-        issueKey: `PROJECT-${id}`,
-        summary: String(params['summary'] ?? ''),
-        description: String(params['description'] ?? ''),
-        issueType,
-        priority,
-        status: { id: 1, name: 'Open' },
-        assignee: null,
-        createdUser: bot,
-        created: now,
-        updated: now,
-      };
-      state.issues.push(issue);
-      return respond(201, toWireIssue(issue));
-    }
-
     // POST /space/attachment (multipart, one "file" part)
     if (
       method === 'POST' &&
@@ -591,14 +532,6 @@ export function createFakeBacklogServer(
       if (projectIdOrKey !== projectId)
         throw new RouteError(404, 6, 'No such project');
       return respond(200, project);
-    }
-
-    if (
-      segments[0] === 'projects' &&
-      segments[2] === 'issueTypes' &&
-      method === 'GET'
-    ) {
-      return respond(200, issueTypes);
     }
 
     // /projects/:p/git/repositories[/:r[/pullRequests[/:n[/comments[/:cid]
@@ -774,10 +707,6 @@ export function createFakeBacklogServer(
       }
     }
 
-    if (segments[0] === 'priorities' && method === 'GET') {
-      return respond(200, priorities);
-    }
-
     if (
       segments[0] === 'users' &&
       segments[1] === 'myself' &&
@@ -834,43 +763,6 @@ export function createFakeBacklogServer(
         const index = comment.stars.findIndex((s) => s.id === starId);
         if (index !== -1) comment.stars.splice(index, 1);
       }
-      return respond(204, undefined);
-    }
-
-    if (
-      segments[0] === 'notifications' &&
-      segments.length === 1 &&
-      method === 'GET'
-    ) {
-      const params = url.searchParams;
-      const count = Number(params.get('count') ?? '20');
-      const maxId = params.has('maxId')
-        ? Number(params.get('maxId'))
-        : undefined;
-      const withinBounds = state.notifications.filter(
-        (n) => maxId === undefined || n.id < maxId
-      );
-      const sorted = [...withinBounds].sort((a, b) => b.id - a.id);
-      return respond(
-        200,
-        sorted.slice(0, count).map((n) => ({
-          ...n,
-          sender: toWireUser(n.sender),
-          created: n.created.toISOString(),
-        }))
-      );
-    }
-
-    if (
-      segments[0] === 'notifications' &&
-      segments[2] === 'markAsRead' &&
-      method === 'POST'
-    ) {
-      const id = Number(segments[1]);
-      const notification = state.notifications.find((n) => n.id === id);
-      if (notification === undefined)
-        throw new RouteError(404, 6, 'No such notification');
-      notification.resourceAlreadyRead = true;
       return respond(204, undefined);
     }
 

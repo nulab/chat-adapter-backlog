@@ -15,7 +15,6 @@ import type {
   AddCommentInput,
   BacklogApi,
   BacklogComment,
-  BacklogNotification,
   BacklogPullRequest,
   BacklogPullRequestAttachment,
   ListCommentsOptions,
@@ -157,7 +156,6 @@ export function createPullRequestSubjectClient(
 
   return {
     ref,
-    capabilities: { deleteComment: false },
 
     async fetchRoot(): Promise<SubjectRoot> {
       return rootOf(await api.getPullRequest(pullRequestRef));
@@ -296,49 +294,17 @@ export function createPullRequestSubjectClient(
       root: SubjectRoot,
       names: SubjectNames
     ): Record<string, unknown> {
-      const pullRequest = pullRequestOf(root);
       const url = webUrl(names);
-      const closeAt =
-        pullRequest.closeAt === null ? null : pullRequest.closeAt.toISOString();
-      const mergeAt =
-        pullRequest.mergeAt === null ? null : pullRequest.mergeAt.toISOString();
       return {
         kind: 'pullRequest',
         host,
         projectId: context.projectId,
         repositoryId: ref.repositoryId,
-        // Spread rather than assigned: a `repositoryName: undefined` key would
-        // read to a consumer as "this pull request has no repository name",
-        // while §7.3 says an unresolved name simply omits it.
-        ...(names.repositoryName === undefined
-          ? {}
-          : { repositoryName: names.repositoryName }),
         number: ref.number,
-        id: pullRequest.id,
-        summary: pullRequest.summary,
-        description: pullRequest.description,
-        status: pullRequest.status,
-        assignee:
-          pullRequest.assignee === null
-            ? null
-            : { id: pullRequest.assignee.id, name: pullRequest.assignee.name },
-        base: pullRequest.base,
-        branch: pullRequest.branch,
-        issue:
-          pullRequest.issue === null
-            ? null
-            : {
-                id: pullRequest.issue.id,
-                issueKey: pullRequest.issue.issueKey,
-              },
-        baseCommit: pullRequest.baseCommit,
-        branchCommit: pullRequest.branchCommit,
-        mergeCommit: pullRequest.mergeCommit,
-        closeAt,
-        mergeAt,
-        createdUserId: pullRequest.createdUser.id,
-        created: pullRequest.created.toISOString(),
-        updated: pullRequest.updated.toISOString(),
+        summary: root.title,
+        status: root.status,
+        // Omitted rather than `undefined` when a name could not be resolved:
+        // a present-but-undefined key does not survive JSON.
         ...(url === undefined ? {} : { url }),
       };
     },
@@ -362,11 +328,5 @@ export function createPullRequestSubjectClient(
     },
 
     repositoryIdForName: ref.repositoryId,
-
-    notificationCommentId(
-      notification: BacklogNotification
-    ): number | undefined {
-      return notification.pullRequestComment?.id;
-    },
   };
 }

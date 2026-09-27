@@ -15,18 +15,12 @@ import {
 import { toRawChanges, toRawComment, toRawIssue } from './subject/raw';
 import { parseAttachmentPath } from './subject/url';
 
-import type {
-  BacklogApi,
-  BacklogComment,
-  BacklogIssue,
-  TextFormattingRule,
-} from './client/port';
+import type { BacklogApi, BacklogComment, BacklogIssue } from './client/port';
 import type {
   SubjectClient,
   SubjectNames,
   SubjectRoot,
 } from './subject/client';
-import type { AttachmentLocation } from './subject/url';
 import type {
   BacklogRawMessage,
   BacklogSubjectRef,
@@ -463,39 +457,22 @@ export interface FetchChannelInfoInput {
   api: BacklogApi;
 }
 
-/**
- * `fetchChannelInfo` (docs/specs/adapter.md §7.5). Returns the project's
- * `projectKey` and `textFormattingRule` alongside the `ChannelInfo` (not just
- * inside `metadata`, whose type is `Record<string, unknown>`) so the caller
- * (`adapter.ts`) can replace its §9.1 project cache entry — the one
- * documented way to pick up a changed project setting without restarting,
- * since that cache is otherwise permanent (D14) — without a runtime cast. The
- * project key is in that cache because a pull request's web URL needs it and
- * its own object does not carry it (§7.3).
- */
-export async function fetchChannelInfo(input: FetchChannelInfoInput): Promise<{
-  info: ChannelInfo;
-  projectKey: string;
-  textFormattingRule: TextFormattingRule;
-}> {
+export async function fetchChannelInfo(
+  input: FetchChannelInfoInput
+): Promise<ChannelInfo> {
   const { channelId, api } = input;
   const { host, projectId } = decodeChannelId(channelId);
   const project = await api.getProject(projectId);
-
   return {
-    info: {
-      id: channelId,
-      name: project.name,
-      isDM: false,
-      metadata: {
-        host,
-        projectId,
-        projectKey: project.projectKey,
-        textFormattingRule: project.textFormattingRule,
-      },
+    id: channelId,
+    name: project.name,
+    isDM: false,
+    metadata: {
+      host,
+      projectId,
+      projectKey: project.projectKey,
+      textFormattingRule: project.textFormattingRule,
     },
-    projectKey: project.projectKey,
-    textFormattingRule: project.textFormattingRule,
   };
 }
 
@@ -637,135 +614,10 @@ export async function getUser(input: GetUserInput): Promise<UserInfo | null> {
   }
 }
 
-export interface MarkAsReadInput {
-  threadId: string;
-  messageId: string;
-  message: Message<BacklogRawMessage> | undefined;
-  api: BacklogApi;
-  subject: SubjectClient;
-  logger: {
-    debug: (message: string, ...args: unknown[]) => void;
-    info: (message: string, ...args: unknown[]) => void;
-  };
-}
-
-const MARK_AS_READ_PAGE_SIZE = 100;
-const MARK_AS_READ_MAX_PAGES = 3;
-
-/**
- * Comment id **and subject** `markAsRead` looks for, from `threadId` and
- * `messageId` and — when a `message` is given — cross-checked against
- * `message.raw` (docs/specs/adapter.md §7.8 "comment id and kind from
- * `messageId` (or `message.raw` when given — they must agree)"). `:r`/`:u:`
- * ids have no notification-worthy comment and return `undefined`, which the
- * caller turns into a no-call debug log.
- *
- * The subject is compared as well as the number, in both directions, because
- * an issue comment id and a pull-request comment id come from different
- * sequences and may collide (measured 2026-09-06,
- * `.claude/rules/backlog-pull-request-facts.md`): a numeric match alone would
- * let a notification about another subject's comment be marked read, and
- * which field carries it (`comment.id` or `pullRequestComment.id`) is chosen
- * by the thread's subject client.
- */
-function commentIdForMarkAsRead(
-  threadId: string,
-  messageId: string,
-  message: Message<BacklogRawMessage> | undefined
-): number | undefined {
-  const thread = decodeThreadId(threadId);
-  const decoded = decodeMessageId(messageId);
-  if (
-    decoded.host !== thread.host ||
-    !addressesSameSubject(thread, decoded.subject)
-  ) {
-    throw new ValidationError(
-      'backlog',
-      `messageId "${messageId}" does not name a message in thread "${threadId}"`
-    );
-  }
-  if (decoded.part !== 'comment') {
-    return undefined;
-  }
-  if (message !== undefined && message.raw.kind === 'comment') {
-    if (
-      message.raw.comment.id !== decoded.commentId ||
-      !addressesSameSubject(thread, message.raw.subject)
-    ) {
-      throw new ValidationError(
-        'backlog',
-        `messageId "${messageId}" and message.raw disagree on which comment to mark read`
-      );
-    }
-  }
-  return decoded.commentId;
-}
-
-/**
- * `markAsRead` (docs/specs/adapter.md §7.8): notifications are the **bot
- * user's own** feed, paged newest-first at most 3 times
- * (`GET /notifications?count=100[&maxId=]`) looking for the entry about this
- * comment. Which field that is belongs to the subject
- * (`subject.notificationCommentId`): an issue's comment id is read from
- * `comment.id` and a pull request's from `pullRequestComment.id`, never the
- * other way round, because the two id sequences are distinct and may overlap
- * (measured 2026-09-06).
- *
- * Capped at 3 pages (300 notifications) rather than paging until exhausted
- * because this is meant to be called per-message, not swept unboundedly — an
- * old comment that has scrolled off the bot's most recent 300 notifications
- * is treated the same as "no notification exists for this comment", which is
- * the common case for a bot that was not itself notified.
- */
-export async function markAsRead(input: MarkAsReadInput): Promise<void> {
-  const { threadId, messageId, message, api, subject, logger } = input;
-  const commentId = commentIdForMarkAsRead(threadId, messageId, message);
-  if (commentId === undefined) {
-    logger.debug('markAsRead: not a comment id, nothing to mark', {
-      messageId,
-    });
-    return;
-  }
-
-  let maxId: number | undefined;
-  for (let page = 0; page < MARK_AS_READ_MAX_PAGES; page += 1) {
-    const options =
-      maxId === undefined
-        ? { count: MARK_AS_READ_PAGE_SIZE }
-        : { count: MARK_AS_READ_PAGE_SIZE, maxId };
-    const notifications = await api.listNotifications(options);
-    if (notifications.length === 0) {
-      break;
-    }
-
-    const found = notifications.find(
-      (notification) =>
-        subject.notificationCommentId(notification) === commentId
-    );
-    if (found !== undefined) {
-      if (!found.resourceAlreadyRead) {
-        await api.markNotificationAsRead(found.id);
-      }
-      return;
-    }
-
-    const last = notifications[notifications.length - 1];
-    if (last === undefined) {
-      break;
-    }
-    maxId = last.id;
-  }
-
-  logger.info('markAsRead: no matching notification found within 3 pages', {
-    messageId,
-    commentId,
-  });
-}
-
 export interface RehydrateAttachmentInput {
   attachment: Attachment;
   configuredHosts: ReadonlySet<string>;
-  download: (host: string, location: AttachmentLocation) => Promise<Buffer>;
+  apiFor: (host: string) => BacklogApi;
 }
 
 /**
@@ -781,7 +633,7 @@ export interface RehydrateAttachmentInput {
 export function rehydrateAttachment(
   input: RehydrateAttachmentInput
 ): Attachment {
-  const { attachment, configuredHosts, download } = input;
+  const { attachment, configuredHosts, apiFor } = input;
   if (attachment.url === undefined) {
     return attachment;
   }
@@ -796,14 +648,11 @@ export function rehydrateAttachment(
   if (!configuredHosts.has(parsed.hostname)) {
     return attachment;
   }
-  const location = parseAttachmentPath(parsed.pathname);
-  if (location === null) {
+  const download = parseAttachmentPath(parsed.pathname);
+  if (download === null) {
     return attachment;
   }
-  const host = parsed.hostname;
+  const api = apiFor(parsed.hostname);
 
-  return {
-    ...attachment,
-    fetchData: () => download(host, location),
-  };
+  return { ...attachment, fetchData: () => download(api) };
 }

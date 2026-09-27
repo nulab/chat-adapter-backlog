@@ -11,7 +11,6 @@ import { createInMemoryBacklogApi } from './in-memory.js';
 import type { InMemoryBacklogSeed } from './in-memory.js';
 
 const {
-  projectId,
   issueId,
   otherIssueId,
   repositoryId,
@@ -25,8 +24,6 @@ const {
   bob,
   baseProject,
   baseIssue,
-  baseIssueTypes,
-  basePriorities,
   baseComment,
   statusChangeLog,
   baseGitRepository,
@@ -34,7 +31,6 @@ const {
   basePullRequestComment,
   basePullRequestAttachment,
   pullRequestRef,
-  baseNotifications,
 } = conformanceFixture;
 
 const pullRequestCommentsKey = `${repositoryId}:${pullRequestNumber}`;
@@ -59,11 +55,6 @@ function seed(): InMemoryBacklogSeed {
       }),
       baseComment({ id: 4, issueId: otherIssueId }),
     ],
-    issueTypes: { [projectId]: baseIssueTypes() },
-    // Seeded rather than left to the factory's default, which happens to hold
-    // the same three: a `createIssue` conformance test names priority 2 by id.
-    priorities: basePriorities(),
-    notifications: baseNotifications(),
     repositories: [
       baseGitRepository(),
       baseGitRepository({ id: otherRepositoryId, name: 'other-repo' }),
@@ -133,13 +124,8 @@ describe('createInMemoryBacklogApi', () => {
 
   it('allocates new ids starting above every seeded id, issues included', async () => {
     const api = createInMemoryBacklogApi(seed());
-    const created = await api.createIssue({
-      projectId,
-      summary: 'New',
-      issueTypeId: 1,
-      priorityId: 3,
-    });
-    expect(created.id).toBeGreaterThan(otherIssueId);
+    const added = await api.addComment(issueId, { content: 'New' });
+    expect(added.id).toBeGreaterThan(otherIssueId);
   });
 
   it('allocates new ids starting above every seeded id, pull-request comments included', async () => {
@@ -153,14 +139,9 @@ describe('createInMemoryBacklogApi', () => {
   it('seeding does not alias the caller-supplied seed objects', async () => {
     const mySeed = seed();
     const api = createInMemoryBacklogApi(mySeed);
-    await api.createIssue({
-      projectId,
-      summary: 'New',
-      issueTypeId: 1,
-      priorityId: 3,
-    });
+    await api.addComment(issueId, { content: 'New' });
     await api.addPullRequestComment(pullRequestRef(), { content: 'New' });
-    expect(mySeed.issues).toHaveLength(2);
+    expect(mySeed.comments).toHaveLength(4);
     expect(mySeed.pullRequestComments?.[pullRequestCommentsKey]).toHaveLength(
       pullRequestCommentIds.length
     );

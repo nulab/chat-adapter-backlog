@@ -62,13 +62,12 @@ git repository as a channel (D-PR1), and listing pull requests through
 | Space | (installation) | `host` — a full hostname such as `example.backlog.com`, `example.backlog.jp`, `example.backlogtool.com` | Never a slug; the domain differs per space (`.claude/rules/backlog-api-facts.md` "Hosts"). |
 | Project | Channel | `backlog:<host>:<projectId>` | Numeric project id. Both kinds of thread belong to the project; a git repository is not a channel (D-PR1). |
 | Issue | Thread | `backlog:<host>:<projectId>:issue:<issueId>` | Numeric issue id, never the issue key: renaming a project key rewrites every issue key (measured, `.claude/rules/backlog-webhook-facts.md`). |
-| Pull request | Thread | `backlog:<host>:<projectId>:pr:<repositoryId>:<number>` | Numeric repository id, never the name (`repoIdOrName` accepts either; names can change); `number` is the per-repository number every pull-request endpoint is keyed by. The global pull-request `id` addresses no endpoint and appears only in raw data and metadata (`.claude/rules/backlog-pull-request-facts.md`). |
+| Pull request | Thread | `backlog:<host>:<projectId>:pr:<repositoryId>:<number>` | Numeric repository id, never the name (`repoIdOrName` accepts either; names can change); `number` is the per-repository number every pull-request endpoint is keyed by. The global pull-request `id` addresses no endpoint and appears only in raw data (`.claude/rules/backlog-pull-request-facts.md`). |
 | Issue body / pull-request body | Root message of the thread | `<host>:issue:<issueId>:r` / `<host>:pr:<repositoryId>:<number>:r` | `text` = `summary + "\n\n" + description`, trimmed, for both kinds. |
 | Comment | Message | `<host>:<subject>:c<commentId>` | Includes Backlog's auto-generated changelog comments (status, assignee, description, attachment changes). The kind segment keeps issue and pull-request comment ids distinct: the two are drawn from different sequences and may overlap (measured). |
 | Update without a comment | Message with empty text | `<host>:<subject>:u:<created>` | `created` is the webhook's top-level ISO timestamp verbatim; it contains `:`. |
 | User | User | `<host>:<userId>` | Numeric user id, host-qualified because user ids are per space. |
 | Star on a comment | Reaction | — | One kind only; emoji name is ignored. `commentId` or `pullRequestCommentId` by kind. |
-| Notification (お知らせ) | Read receipt | — | `markAsRead` marks the bot user's own notification for the comment, matched by kind. |
 
 The `host` appears in message and user ids because the core's dedupe key is
 `dedupe:<adapter.name>:<message.id>` with no thread component (verified in
@@ -162,8 +161,8 @@ type it reaches — `BacklogRawIssue`, `BacklogRawComment`,
 `BacklogActivity*` shapes and the five activity variants they are built from,
 since a consumer that receives a value must be able to name its type;
 `BacklogMessageId`, `BacklogMessagePart` and `BacklogUserId`, which the two
-decoders return; `BacklogPostableExtras` and `BacklogChannelPostableExtras`,
-without which the Backlog-only fields of §3.4 cannot be typed at all;
+decoders return; `BacklogPostableExtras`, without which the Backlog-only
+field of §3.4 cannot be typed at all;
 and `Backlog` — `backlog-js`'s own client class,
 re-exported so a consumer can name what `client(host)` returns without
 depending on `backlog-js` itself.
@@ -378,8 +377,8 @@ Backlog has already published it in every rewritten comment body (D19).
 ### 3.4 Postable extras
 
 Consumers intersect these with a Chat SDK postable through an annotated
-variable (`const reply: PostableMarkdown & BacklogPostableExtras = { markdown, notifiedUserId: [1] }; await thread.post(reply);`,
-and `BacklogChannelPostableExtras` for `channel.post`). An object literal
+variable (`const reply: PostableMarkdown & BacklogPostableExtras = { markdown, notifiedUserId: [1] }; await thread.post(reply);`).
+An object literal
 passed inline — `satisfies` included — stays fresh and fails `post()`'s
 excess-property check, because `post()`'s parameter type names no extras.
 Extras are read with a strict schema: a present-but-mistyped extra is a
@@ -387,10 +386,7 @@ Extras are read with a strict schema: a present-but-mistyped extra is a
 
 | Extra | Applies to | Type | Effect |
 | --- | --- | --- | --- |
-| `notifiedUserId` | `postMessage`, `postChannelMessage` | `number[]` (positive ints) | Backlog `notifiedUserId[]`. Invalid or non-member ids are silently dropped **by Backlog** (201, no notification; measured 2026-08-18) — the adapter does not pre-validate them. |
-| `issueTypeId` | `postChannelMessage` | `number` | Overrides the cached default (§6.7). |
-| `priorityId` | `postChannelMessage` | `number` | Overrides the cached default. |
-| `assigneeId` | `postChannelMessage` | `number` | Backlog `assigneeId`. |
+| `notifiedUserId` | `postMessage` | `number[]` (positive ints) | Backlog `notifiedUserId[]`. Invalid or non-member ids are silently dropped **by Backlog** (201, no notification; measured 2026-08-18) — the adapter does not pre-validate them. |
 
 `editMessage` accepts no extras and no files; Backlog's Update Comment takes
 `content` only
@@ -411,8 +407,7 @@ type BacklogRawMessage =
 
 `parseMessage` accepts **all five** variants. The last three are the ones the
 adapter produces itself — `fetchMessages`, `fetchMessage`, `listThreads`,
-`postMessage`, `editMessage` and `postChannelMessage` put them on the messages
-they return — and `parseMessage(message.raw)` rebuilds such a message with **no
+`postMessage` and `editMessage` put them on the messages they return — and `parseMessage(message.raw)` rebuilds such a message with **no
 API call**, reproducing its `id`, `threadId`, `text`, `formatted`, `author`,
 `metadata.dateSent`, `metadata.edited` and `raw`. That is what makes a
 `Message` recoverable from the `raw` alone, which is all the core serialises
@@ -485,8 +480,8 @@ and 27 optional members (verified against the shipped `.d.ts`).
 the test kit calls it. Every member accepts an issue thread or a pull-request
 thread; the pull-request form is identical unless §6 or §7 says otherwise. Only
 one member fails on a pull-request thread — `deleteMessage` (D-PR3) — and
-`listThreads` and `postChannelMessage` are issue-scoped because they take
-channel ids (D-PR7, §6.7); each is stated where it differs.
+`listThreads` is issue-scoped because it takes a channel id (D-PR7); each is
+stated where it differs.
 
 ### 4.1 Required members
 
@@ -500,7 +495,7 @@ channel ids (D-PR7, §6.7); each is stated where it differs.
 | `channelIdFromThreadId` | implemented | First three segments: `backlog:<host>:<projectId>`. | `createThread`, lock key, history |
 | `parseMessage(raw)` | implemented | Synchronous `BacklogRawMessage → Message`, for all five variants: a `webhook` or `bulkUpdate` raw is re-parsed against its schema, and the three the adapter produced itself round-trip back into the message they came from (§3.5). Converter chosen from the **cached** formatting rule of `raw`'s project, Markdown with a `warn` when uncached (§9.1). | never; the webhook factory calls it |
 | `renderFormatted(content, target?)` | implemented | Renders mdast with the converter for `target` (thread or channel id) when its rule is cached; otherwise GFM Markdown ⚑. | never |
-| `postMessage(threadId, message)` | implemented | Adds a comment (§6.1). | `thread.post`, object/ephemeral fallbacks, `channel.post` fallback (not taken: `postChannelMessage` exists) |
+| `postMessage(threadId, message)` | implemented | Adds a comment (§6.1). A channel id — what the core passes for `channel.post` without `postChannelMessage` — is a `ValidationError` (D24). | `thread.post`, object/ephemeral fallbacks, `channel.post` fallback |
 | `editMessage(threadId, messageId, message)` | implemented | Updates comment content (§6.2). | `SentMessage.edit` |
 | `deleteMessage(threadId, messageId)` | implemented | Deletes the comment (§6.3); on a pull-request thread fails with `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call — Backlog has no such endpoint (D-PR3). | `SentMessage.delete` |
 | `addReaction` / `removeReaction` | partial | One star; emoji ignored (§6.5). | `SentMessage.addReaction` etc. |
@@ -516,12 +511,12 @@ channel ids (D-PR7, §6.7); each is stated where it differs.
 | `isDM(threadId)` | implemented | Always `false`. |
 | `fetchMessage(threadId, messageId)` | implemented | §7.2. |
 | `fetchSubject(raw)` | implemented | §7.4; the parent issue (`type: "issue"`) or pull request (`type: "pull_request"`) as `MessageSubject`. |
-| `fetchChannelInfo(channelId)` | implemented | §7.5; also refreshes the formatting-rule cache. |
+| `fetchChannelInfo(channelId)` | implemented | §7.5. |
 | `listThreads(channelId, options?)` | implemented | §7.6; offset cursor; **issues only** (D-PR7). |
-| `postChannelMessage(channelId, message)` | implemented | Creates an issue (§6.7). |
 | `getUser(userId)` | implemented | §7.7. |
-| `markAsRead(threadId, messageId, message?)` | implemented | §7.8. |
 | `rehydrateAttachment(attachment)` | implemented | §6.6. |
+| `postChannelMessage` | absent | Core falls back to `postMessage(channelId)`, which throws `ValidationError`; an issue is created through `client(host).postIssue` (D24). |
+| `markAsRead` | absent | Core throws `NotImplementedError(…, "read-receipts")` (D24). |
 | `endTyping` | absent | Core skips. |
 | `disconnect` | absent | Nothing to close. |
 | `openDM`, `postEphemeral` | absent | `chat.openDM` throws `NOT_SUPPORTED`; ephemeral returns `null`. Backlog has no DMs (no endpoint in the API index). |
@@ -597,8 +592,8 @@ On success the adapter calls
 and attaches a `.catch` that logs `error` `inbound processing failed`
 `{host, threadId, messageId}` — the core registers the task with
 `options.waitUntil` itself. The response does not await the factory.
-Failures inside the factory (formatting-rule lookup, converter) are downgraded
-per §9.2 so a message is delivered rather than lost.
+A formatting-rule lookup that fails inside the factory falls back to Markdown
+(§9.1), so the message is delivered rather than lost.
 
 ### 5.2 Payload schema
 
@@ -1076,18 +1071,11 @@ answers 400 with error code 6 `Undefined resource` (measured 2026-09-06) — and
 Consume the iterable to completion, concatenating `string` chunks and
 `{ type: "markdown_text" }` chunks; ignore `task_update`/`plan_update` chunks.
 Then exactly one `postMessage(threadId, { markdown: buffered })` and return its
-result. Rationale is rate-limit protection (D4). `options.signal` aborting ends
-consumption and posts what was buffered so far — `" "` when that is nothing, the
-same as an empty stream (§4.2, §15 question 7): the contract `stream()` keeps
-whatever ends it is a `SentMessage` the caller can edit or delete, and posting
-nothing would mean resolving to `null` after consumption, which question 7
-rejected.
-
-Consumption is raced against the signal rather than read with `for await`,
-which can only re-check the signal once the next chunk arrives. A source that
-has stopped producing — a model that stopped generating, a socket that hung —
-would otherwise leave an aborted `stream()` waiting forever and post nothing at
-all.
+result. Rationale is rate-limit protection (D4). The adapter does not watch
+`options.signal`: the core hands `stream()` an iterable that already ends when
+its signal aborts (`takeUntilAborted` in `ThreadImpl.handleStream`), so an
+abort posts what was buffered so far — `" "` when that is nothing, the same as
+an empty stream (§4.2, §15 question 7).
 
 ### 6.5 Reactions
 
@@ -1151,45 +1139,10 @@ per subject module: `parseAttachmentPath` has to try them in order and knows no
 kind, so a third kind is one more entry in its table, not a new branch, and a
 builder cannot drift from the pattern that reads it back.
 
-### 6.7 `postChannelMessage(channelId, message)` — issue creation
-
-Backlog requires `projectId`, `summary`, `issueTypeId`, `priorityId`
-([Add Issue](https://developer.nulab.com/docs/backlog/api/2/add-issue/)).
-
-- **Summary** = plain text of the first mdast block (headings included),
-  whitespace collapsed; for `string`/`{ raw }` postables the first non-blank
-  line. Summary is plain text regardless of project rule (Backlog does not
-  render markup in summaries). Empty summary → `ValidationError` ⚑.
-- **Description** = remaining blocks rendered with the project converter.
-- **A card** is rendered once by `converter.renderPostable` (§6.1 step 2), and
-  the rendered text is split on its first newline: first line → summary, the
-  rest → description. The first line carries the title's bold markup, so it is
-  put back through `extractPlainText` to satisfy the plain-text rule above —
-  `**Deploy failed**` and `''Deploy failed''` both become `Deploy failed`. The
-  description keeps the project's markup like any other description, field
-  labels included, so a card's fields read `**Env**: prod` / `''Env'': prod`
-  there. A **caller-supplied** `fallbackText` is parsed the same way, which is
-  the cost of one rule for both: its first line is plain text to the caller but
-  markup to the parser, so a leading list or heading marker is consumed —
-  `- bullet summary`, `1. First step` and (on Markdown) `# Heading summary` all
-  become the text after the marker. Backlog would not have rendered the marker
-  in a summary field either way.
-- **Defaults**: `issueTypeId` = first of
-  [Get Issue Type List](https://developer.nulab.com/docs/backlog/api/2/get-issue-type-list/);
-  `priorityId` = the middle element of
-  [Get Priority List](https://developer.nulab.com/docs/backlog/api/2/get-priority-list/)
-  (space-wide `High, Normal, Low` → `Normal`). Both cached per project / per
-  host after first use. If Backlog answers a create that used cached defaults
-  with a `ValidationError` (code 7), refresh both caches and retry **once**;
-  never retry for other errors or when the caller supplied the ids. Empty
-  issue-type or priority lists → `ValidationError`.
-- Files uploaded as in §6.1; `assigneeId`, `notifiedUserId` passed through.
-- Returns `{ id: <host>:issue:<issueId>:r, threadId: backlog:<host>:<projectId>:issue:<issueId>, raw: { kind: "issue", … } }`.
-
-### 6.8 Unsupported egress
+### 6.7 Unsupported egress
 
 `openDM`, `postEphemeral`, `openModal`, `scheduleMessage`, `reply`,
-`postObject`/`editObject`, editing the issue or pull-request body
+`postObject`/`editObject`, `channel.post` (D24), editing the issue or pull-request body
 (`editMessage(:r)` is a `ValidationError`), deleting a pull-request comment
 (§6.3), emoji reactions (no API; UI-only per the support article cited in
 `.claude/rules/backlog-api-facts.md`), and changing a pull request's status
@@ -1281,7 +1234,7 @@ be built, so the three `null` answers above still spend nothing.
 
 Issue thread: one Get Issue. Returns
 `{ id, channelId: backlog:<host>:<projectId>, channelName: <projectKey from issueKey up to its last "-">, isDM: false, metadata }`
-with `metadata = { kind: "issue", host, issueId, issueKey, projectId, summary, description, status: { id, name }, assignee: { id, name } | null, issueType: { id, name }, priority: { id, name }, createdUserId, created, updated, url: https://<host>/view/<issueKey> }`.
+with `metadata = { kind: "issue", host, projectId, issueId, issueKey, summary, status: { id, name }, url: https://<host>/view/<issueKey> }`.
 
 Pull-request thread: one Get Pull Request, plus the two names its web URL
 needs and the object lacks — `projectKey` and the repository name
@@ -1291,22 +1244,16 @@ cache (§9.1, which stores `projectKey` beside `textFormattingRule` from the
 same Get Project) and a `host:repositoryId → name` cache populated from
 `content.repository.name` on every pull-request webhook and, on a miss, by one
 [Get Git Repository](https://developer.nulab.com/docs/backlog/api/2/get-git-repository/)
-(read bucket; cached until a `fetchChannelInfo` on any channel of that host
-clears every name under it, §7.5).
+(read bucket; cached for the process's lifetime).
 A name lookup that fails is not cached, logs `warn`, and yields a `ThreadInfo`
 without `url` rather than a failed read. Returns
 `{ id, channelId, channelName: <projectKey>, isDM: false, metadata }` with
-`metadata = { kind: "pullRequest", host, projectId, repositoryId, repositoryName?, number, id, summary, description, status: { id, name }, assignee: { id, name } | null, base, branch, issue: { id, issueKey } | null, baseCommit, branchCommit, mergeCommit, closeAt, mergeAt, createdUserId, created, updated, url?: https://<host>/git/<projectKey>/<repositoryName>/pullRequests/<number> }`.
+`metadata = { kind: "pullRequest", host, projectId, repositoryId, number, summary, status: { id, name }, url?: https://<host>/git/<projectKey>/<repositoryName>/pullRequests/<number> }`.
 Statuses are `1 Open`, `2 Closed`, `3 Merged` (measured 2026-09-06).
 
-Every timestamp in `metadata` — `created`, `updated`, and a pull request's
-`closeAt`/`mergeAt` — is an **ISO string**, not the `Date` the port returns
-(decided 2026-09-08). `ThreadInfo.metadata` is `Record<string, unknown>`, so a
-`Date` in it is invisible to the compiler, and a consumer that puts a
-`ThreadInfo` through JSON — a queue, a cache, a tool result — gets a string
-back while its code still reads it as a `Date`. It is the same reason the
-raw-message shapes carry ISO strings (§3.5), and the two should not disagree
-about how an instant is written.
+`metadata` names the thread and nothing more (D24): every other field of the
+issue or pull request is on `fetchSubject().raw`, which is where a consumer
+that wants it reads it, so two copies of the object never disagree.
 
 ### 7.4 `fetchSubject(raw)`
 
@@ -1323,18 +1270,8 @@ lazily from `message.subject` and turns errors into `null`.
 ### 7.5 `fetchChannelInfo(channelId)`
 
 [Get Project](https://developer.nulab.com/docs/backlog/api/2/get-project/) →
-`{ id: channelId, name: project.name, isDM: false, metadata: { host, projectId, projectKey, textFormattingRule, archived } }`
-and **replaces** this channel's project-cache entry (formatting rule and
-`projectKey`), **drops** its `postChannelMessage` defaults, and **drops every
-repository name cached for the host** — the documented way to pick up a changed
-setting without restarting, since every one of those caches is otherwise
-permanent (⚑ D14 cache policy). The repository names go by host prefix rather
-than by this channel's project because their key is `` `${host}:<repositoryId>` ``
-and carries no project: a repository id is already unique within a space, so a
-project-scoped key would let one repository sit under two keys and leave a
-stale name alive under whichever one a clear missed. Over-clearing costs one
-`read`-bucket Get Git Repository per dropped name, once, and only after a
-`fetchChannelInfo` somebody asked for.
+`{ id: channelId, name: project.name, isDM: false, metadata: { host, projectId, projectKey, textFormattingRule } }`.
+It reads; it touches no cache (D14).
 
 ### 7.6 `listThreads(channelId, { limit?, cursor? })`
 
@@ -1361,33 +1298,6 @@ page is full, so a trailing empty page is possible and documented.
 adapter (the core infers adapters from id shape and does not know
 `<host>:<id>`); README says to call `adapter.getUser()` directly.
 
-### 7.8 `markAsRead(threadId, messageId, message?)`
-
-Notifications are the **bot user's** feed
-([Get Notification](https://developer.nulab.com/docs/backlog/api/2/get-notification/));
-each entry carries `comment?.id` for comment-originated notifications
-(measured 2026-08-20) and, for pull requests, `pullRequestComment?.id` and
-`pullRequest?` ([Get Notification](https://developer.nulab.com/docs/backlog/api/2/get-notification/);
-reasons 10–13; the fields exist on every item, a populated one is unmeasured).
-Algorithm: comment id and kind from `messageId` (or `message.raw` when given —
-they must agree); `:r`/`:u:` → return without a call (debug log). Page
-`GET /notifications?count=100[&maxId=]` newest-first, at most 3 pages, until
-an entry matches: `comment.id === commentId` for an issue thread,
-`pullRequestComment.id === commentId` for a pull-request thread — never the
-other field, because the two comment id sequences are distinct and may overlap
-(measured 2026-09-06). Found and `resourceAlreadyRead` → no call. Found and
-not `resourceAlreadyRead` →
-[Read Notification](https://developer.nulab.com/docs/backlog/api/2/read-notification/)
-`POST /notifications/:id/markAsRead`. Not found → `info` log and return.
-`alreadyRead` is a different flag — the inbox-badge count, cleared only by
-[Reset Unread Notification Count](https://developer.nulab.com/docs/backlog/api/2/count-notification/)
-(`POST /notifications/markAsRead`) — and the short-circuit must not read it: a
-notification `markAsRead` itself marked stays `alreadyRead: false` forever, so
-keying off that flag would repeat the `POST` on every call (measured
-2026-09-06).
-Cost is 1–3 reads plus at most one update per call; README says not to call it
-per comment unconditionally.
-
 ## 8. Backlog client port
 
 ### 8.1 Interface
@@ -1402,9 +1312,6 @@ types), throws only §3.6 classes, and is implemented twice (§8.2, §8.3).
 | `getUser(userId)` | `GET /users/:id` | read |
 | `getMyself()` | `GET /users/myself` — the user the credential acts as; the bot identity when it is not configured (§3.2, D23) | read |
 | `listIssues(projectId, { count, offset? })` | `GET /issues?projectId[]=` | **search** |
-| `createIssue({ projectId, summary, issueTypeId, priorityId, description?, assigneeId?, notifiedUserId?, attachmentId? })` | `POST /issues` | update |
-| `listIssueTypes(projectId)` | `GET /projects/:id/issueTypes` | read |
-| `listPriorities()` | `GET /priorities` | read |
 | `listComments(issueId, { count, order, minId?, maxId? })` | `GET /issues/:id/comments` | read |
 | `getComment(issueId, commentId)` | `GET /issues/:id/comments/:cid` | read |
 | `addComment(issueId, { content, notifiedUserId?, attachmentId? })` | `POST /issues/:id/comments` | update |
@@ -1412,8 +1319,6 @@ types), throws only §3.6 classes, and is implemented twice (§8.2, §8.3).
 | `deleteComment(issueId, commentId)` | `DELETE /issues/:id/comments/:cid` | update |
 | `addStar(target)` — `target = { commentId }` or `{ pullRequestCommentId }` | `POST /stars` | update |
 | `deleteStar(starId)` | `DELETE /stars/:id` | update |
-| `listNotifications({ count, maxId? })` | `GET /notifications` | read |
-| `markNotificationAsRead(id)` | `POST /notifications/:id/markAsRead` | update |
 | `uploadAttachment(filename, data, mimeType?)` | `POST /space/attachment` (multipart) | update |
 | `downloadAttachment(issueId, attachmentId)` | `GET /issues/:id/attachments/:aid` | read |
 | `listGitRepositories(projectId)` | `GET /projects/:id/git/repositories` | read |
@@ -1507,29 +1412,19 @@ outlive the request timeout.
 `createInMemoryBacklogApi(seed?)` backs this repository's own tests and is
 not exported (§3.1): a consumer tests its handlers with `@chat-adapter/tests`
 and mocks `client(host)`, as it would with any first-party adapter. Seed:
-`projects`, `issues`, `comments`, `users`, `issueTypes` per project,
-`priorities` (default `High/Normal/Low` with ids 2/3/4, matching the
-documented example), `notifications`, `repositories`, `pullRequests`,
+`projects`, `issues`, `comments`, `users`, `repositories`, `pullRequests`,
 `pullRequestComments` (keyed by `{ repositoryId, number }`), `me` (the bot
 user), `now()`. It exposes
-`state` (issues, comments, stars, uploads, recorded inputs, and the seeded
-`issueTypes` and `priorities`) for assertions,
+`state` (issues, comments, stars, uploads and recorded inputs) for assertions,
 allocates ids from a single counter initialised above every seeded id (issues
 included), applies exclusive `minId`/`maxId`, sorts by `order`, mirrors
 `deleteStar` in `state`, and throws the same error classes as §8.2 — not only
-for a missing resource, but for the three refusals a write can meet on a real
-space: an `issueTypeId` or `priorityId` outside the seeded lists is a
-`ValidationError` rather than an issue carrying a fabricated type name, an
-empty comment body is a `ValidationError` on add and on update (a single space
+for a missing resource, but for the two refusals a write can meet on a real
+space: an empty comment body is a `ValidationError` on add and on update (a single space
 is a body — §4.2 `stream` posts one), and updating or deleting a comment whose
 `createdUser` is not `me` is a `PermissionError`. `uploadAttachment` keeps the
 bytes it was handed: `size` reports their length, `recordedInputs` carries a
 copy, and a download of that id returns them.
-
-`state.issueTypes` and `state.priorities` are the lists `createIssue`
-validates against, so removing an entry is how a test models a project whose
-settings changed under a cached default (§6.7) — no stub of the port's own
-method required.
 
 ### 8.4 429 retry (D5)
 
@@ -1636,14 +1531,8 @@ Guaranteed by the suite, on both implementations:
   update for pull requests, which have no delete at all;
 - list paging with `count`/`order`/`minId`/`maxId` and exclusive bounds; issue
   list paging with `count`/`offset`;
-- a created issue appears with the bot as creator and carries the issue type
-  and priority it named, resolved to their names; an `issueTypeId` or
-  `priorityId` the space does not have is a `ValidationError`;
-- issue types and priorities readable;
 - stars carry `presenter` and are removable by star id; deleting a missing
   star is a 404;
-- notifications list newest-first with `comment.id`, exclusive `maxId`,
-  markable as read;
 - an upload returns `{ id, name, size }` with `size` the byte length of the
   file it was given — the only place this interface makes the bytes
   observable, so it is what separates a client that sent the file from one
@@ -1653,8 +1542,7 @@ Guaranteed by the suite, on both implementations:
   `addPullRequestComment` accepts `notifiedUserId`/`attachmentId`; a
   one-element window returns exactly the named comment;
   `addStar({ pullRequestCommentId })` stars the pull-request comment and
-  `addStar({ commentId })` an issue comment; a notification carries
-  `pullRequestComment.id`; a pull-request attachment downloads, carrying as
+  `addStar({ commentId })` an issue comment; a pull-request attachment downloads, carrying as
   many bytes as its listing reported.
 
 Left to the wrapper's tests, because only the wire client has anything to
@@ -1713,30 +1601,29 @@ holding both fields the single Get Project returns, because a pull request's
 web URL needs the `projectKey` and its REST object does not carry one (§7.3):
 
 - Populated by the first outbound/inbound operation on a channel (one Get
-  Project) and by `fetchChannelInfo`, which **replaces** the entry.
-- ⚑ Default policy: cache forever; `fetchChannelInfo(channelId)` is the
-  documented way to pick up a changed project setting without a restart.
+  Project).
+- ⚑ Default policy: cache for the process's lifetime (D14); a changed project
+  setting is picked up on restart.
 - Lookup failure (`PermissionError`, `NetworkError`, …) → `warn`
-  `textFormattingRule lookup failed; assuming markdown` and Markdown for that
-  call only; nothing is cached.
-- A `textFormattingRule` that is neither of the two documented values is
-  Markdown as well, so the two ways one can arrive agree.
-  `src/client/schemas.ts` validates the field against a closed enum, so a rule
-  Backlog adds later arrives as a lookup failure and takes the row above;
-  widening that enum without teaching the converters the new rule must land on
-  Markdown too, never on Backlog notation.
+  `project lookup failed`, then Markdown for that call only; nothing is cached.
+- A `textFormattingRule` Backlog adds later fails the closed enum in
+  `src/client/schemas.ts`, so it arrives as a lookup failure and takes the row
+  above. The converters are keyed by `TextFormattingRule`, so widening that
+  type does not compile until the new rule has a converter.
 - `renderFormatted(content, target?)` and `parseMessage(raw)` are synchronous
-  and consult only the cache; uncached → Markdown plus one `warn`. The webhook
-  factory awaits the lookup before calling `parseMessage`, so the webhook path
-  always honours the rule.
+  and consult only the cache; uncached → Markdown plus one `warn`
+  `textFormattingRule uncached; assuming markdown`. A `target` that is neither
+  a thread id nor a channel id, or no `target`, renders Markdown without one.
+  The webhook factory awaits the lookup before calling `parseMessage`, so the
+  webhook path always honours the rule.
 
-### 9.2 Fallback
+### 9.2 No conversion fallback
 
-Every converter the adapter uses is wrapped: if `toAst(text)` throws, log
-`warn` `format conversion failed; falling back to plain text` `{host, projectId}`
-and return `root([paragraph([text(raw)])])` so the message is delivered with
-`text` intact. `fromAst` failures propagate (a post that cannot be rendered
-must fail, not silently post garbage).
+The converters are used unwrapped. Neither `toAst` has a throwing path — the
+notation parser treats any unrecognised markup as text, and `parseMarkdown`
+accepts any string — so a wrapper turning a `toAst` throw into a plain
+paragraph would guard nothing. A `fromAst` failure propagates: a post that
+cannot be rendered must fail, not silently post something else.
 
 ### 9.3 Markdown projects
 
@@ -2067,8 +1954,7 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   → `ValidationError`; an unconfigured host → `ResourceNotFoundError`; and the
   round trip on each of the three the adapter produces — a comment and an
   issue root from `fetchMessages`, a pull-request root from `fetchMessage`,
-  the comment `postMessage` returned and the issue `postChannelMessage`
-  created — asserted over `id`, `threadId`, `text`, `formatted`, `author`,
+  and the comment `postMessage` returned — asserted over `id`, `threadId`, `text`, `formatted`, `author`,
   `metadata.dateSent`, `metadata.edited` and `raw` at once, plus the one
   documented loss (an issue comment's `attachments`).
 - **format**: every row of §9.4 and §9.5; single-line `{code}x{/code}`;
@@ -2078,30 +1964,22 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   separated by several spaces — a `----` adjacent to a list with and without a
   trailing space, and a CRLF line ending; an unterminated
   `''`/`'''`/`%%`/`[[`; a `|` inside a table cell's link; a `text` node whose
-  own value holds notation markers, emitted unescaped per §9.7; `toAst`
-  throwing →
-  plain paragraph + warn; rule cache primed by webhook path, replaced by
-  `fetchChannelInfo`, lookup failure not cached; `renderFormatted`/
+  own value holds notation markers, emitted unescaped per §9.7; rule cache
+  primed by webhook path, lookup failure not cached; `renderFormatted`/
   `parseMessage` honour a cached `backlog` rule and warn when uncached; a card
   fallback under **both** rules over a card carrying **every** member of
   `CardChild` (`text`, `image`, `divider`, `actions`, `section`, `fields`,
   `link`, `table`, `chart`), with `image` asserted to render as nothing on
   purpose — a fixture short of one member cannot catch that child being
   dropped, which is how `link` and `divider` went missing once already.
-- **egress**: `postMessage` markdown/raw/card/files/`notifiedUserId`; a card
-  posted under **both** formatting rules (asterisks on `markdown`, `''` and no
-  asterisk on `backlog`), a caller's `fallbackText` posted verbatim, and its
-  first line stripped of a leading list or heading marker when it becomes a
-  summary; mistyped extra → `ValidationError`; an `ArrayBuffer` and a `Blob`
+- **egress**: `postMessage` markdown/raw/card/files/`notifiedUserId`; a
+  caller's `fallbackText` posted verbatim; a channel id → `ValidationError`
+  with nothing created; mistyped extra → `ValidationError`; an `ArrayBuffer` and a `Blob`
   upload like a `Buffer`; unsupported `file.data` → `ValidationError` named
   `backlog` with that file not uploaded; `editMessage` with files → error;
   `:r`/`:u:` rejected for edit/delete/star; `stream` buffers into one comment
-  and never calls `editMessage`, returns on abort even from a source that has
-  stopped producing (driven by a controllable iterator, not a timeout) and
-  leaves no listener on the signal; reactions add (idempotent), remove own only,
-  no-op without a star; `postChannelMessage` summary/description split,
-  plain-text summary, defaults, explicit ids, single retry on code 7 with
-  refreshed defaults, no retry otherwise, empty summary error.
+  and never calls `editMessage`; reactions add (idempotent), remove own only,
+  no-op without a star.
 - **reads**: §7.1 guarantees as a property-style sweep over
   `(limit ∈ {1,2,3,5,50,100}) × (comments ∈ {0,1,4,7,150}) × direction`
   asserting page size, chronology, union-once and `nextCursor` values;
@@ -2110,8 +1988,7 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   `fetchMessages` and `fetchMessage` both set `formatted` through the
   project's rule; `fetchThread`, `fetchSubject`,
   `fetchChannelInfo`, `listThreads` (offset, trailing empty page, clamp),
-  `getUser` (round trip, bot, bare number rejected, null on 404),
-  `markAsRead` (first page, third page, cap reached, already read, `:r`).
+  `getUser` (round trip, bot, bare number rejected, null on 404).
 - **client**: §8.6 conformance over both implementations; retry timing
   with fake timers, a 429 retried at most once and a refused
   wait surfacing as `AdapterRateLimitError` with `retryAfter` computed from
@@ -2156,9 +2033,7 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   `fetchMessage(:c)` uses a one-element window and is `null` on an empty page;
   `fetchThread`/`fetchSubject` carry `kind`/`type` for both kinds and omit
   `url` when a name lookup fails; the repository name from a webhook spares
-  the next `fetchThread` a Get Git Repository; `markAsRead` matches
-  `pullRequestComment.id` and ignores an issue notification with the same
-  numeric id; `rehydrateAttachment` accepts both URL shapes; a dispatch on a
+  the next `fetchThread` a Get Git Repository; `rehydrateAttachment` accepts both URL shapes; a dispatch on a
   subject's kind exists only in `src/subject/client.ts` and the id codec
   `src/ids.ts` (`src/subject/containment.test.ts` greps `src/` for the line
   shapes its header enumerates and fails on a third module — a tripwire over
@@ -2210,12 +2085,12 @@ for one scratch space is worse than requiring the two to share it.
   pull request linked to an issue is still its own thread (D-PR6), a git
   repository is not a channel (D-PR1); plus weaker webhook authenticity,
   durable state adapter recommendation, `streamingUpdateIntervalMs` irrelevant
-  because `stream` is buffered, `chat.getUser` vs `adapter.getUser`, read
-  receipts are not automatic, `recentMessages` vs `messages` cost); id formats
+  because `stream` is buffered, `chat.getUser` vs `adapter.getUser`,
+  `channel.post` unsupported, `recentMessages` vs `messages` cost); id formats
   for **both** kinds (§2), including that a pull-request thread id carries the
   repository id and the per-repository number and never the global
-  pull-request id; mentions (§5.4); issue creation (§6.7); stars (`commentId`
-  or `pullRequestCommentId`); read receipts; history paging (§7.1);
+  pull-request id; mentions (§5.4); stars (`commentId`
+  or `pullRequestCommentId`); history paging (§7.1);
   `message.subject.type` being `"issue"` or `"pull_request"` (D-PR8); raw API
   and errors (§3.6, §8.5), with `client(host)` named as the `backlog-js`
   client for everything the `Adapter` interface does not cover — a
@@ -2295,9 +2170,7 @@ for one scratch space is worse than requiring the two to share it.
   `nativeClient yes`, `customApiEndpoint yes`, `fetchMessages yes`,
   `fetchSingleMessage yes`, `fetchThreadInfo yes`, `fetchChannelMessages no`,
   `listThreads {partial, "Issues only"}` (D-PR7), `fetchChannelInfo yes`,
-  `postChannelMessage {yes, "Creates an issue"}` — a pull request cannot be
-  created from Chat either (`base`/`branch` have no postable shape).
-  `deleteMessage` appears once, as the
+  `postChannelMessage no` (D24). `deleteMessage` appears once, as the
   partial above; the issue-only matrix's `deleteMessage yes` is gone, not kept
   beside it.
 
@@ -2318,13 +2191,14 @@ for one scratch space is worse than requiring the two to share it.
 | D11 | Two-step uploads; inbound `fetchData` through the port; `rehydrateAttachment` via API URL | Backlog attachments require auth to download; a URL is the only serialisable handle that survives queue round trips. | Public URLs (do not exist); `fetchMetadata` blobs. |
 | D12 | `:r`/`:u:` cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Backlog can edit an issue body, but `editMessage` semantics ("edit what I posted") do not fit rewriting a human's issue; `:u:` has no fetchable resource. | Mapping `editMessage(:r)` to Update Issue. |
 | D13 | Optional set as in §4.2; `listThreads` uses Backlog's default order | Each implemented member has a one-to-one endpoint; each unsupported one has no counterpart. Sorting or filtering in the adapter would hide the search-bucket cost. | "Open issues first" (an extra filter, surprising to callers). |
-| D14 ⚑ | Per-project rule, cached forever, refreshed by `fetchChannelInfo`; plain-text fallback; sync members use the cache | Correctness on notation projects is not optional (a third of projects on a measured space); a TTL adds a read per project per interval for a setting that rarely changes. | TTL cache; Markdown-only converter. |
+| D14 ⚑ | Per-project rule, cached for the process's lifetime; sync members use the cache | Correctness on notation projects is not optional (a third of projects on a measured space); a TTL adds a read per project per interval for a setting that rarely changes, and no consumer has asked to refresh one without a restart. | TTL cache; `fetchChannelInfo` replacing the entry and clearing the repository names (built, then removed: a read member rewriting caches is a side effect no caller can see, for a need nobody named); Markdown-only converter. |
 | D15 | `chat` peer `^4.40.0`; `@chat-adapter/shared` dep `^4.40.0`; `backlog-js` `^0.20.1`; `zod` `^4`; `engines.node >=20`. The package is versioned on its own semver line from `0.1.0` (DEVELOPMENT.md "Versioning"). | The docs prescribe the peer range for external packages; the exact pin only works inside Vercel's fixed-version monorepo. `4.40.0` is the version whose contract was verified, so it is the floor of the range. An exact pin would make a consumer on `chat@4.41` install a second copy of the core and fail its `instanceof` checks. | Exact pins (breaks consumers on 4.41). |
 | D16 | Layout `src/{adapter,ids,types,index}.ts`, `src/webhook/*`, `src/client/*`, `src/format/*`, `src/test/fixtures/*` | Directories mirror the PR scopes `adapter`/`webhook`/`client`/`format`, so a change's scope is its path. | Flat `src/`. |
 | D17 | Measurements live in `.claude/rules/*.md`, referenced here | One place to re-measure; this spec states consequences, not evidence. | Duplicating measurements here. |
 | D18 | `processMessageUpdated` unsupported | Comment edits emit no webhook (measured 2026-09-03; pull-request comment edits likewise, 2026-09-06); there is nothing to deliver. | Polling for edits (search-bucket cost, no cursor finer than a day). |
-| D19 | The space is taken from `?host=` alone; the payload is **not** cross-checked against it | No body field identifies the space, and the one candidate for a consistency check cannot carry it: `project.projectKey` would have to be compared against the configured host's own project, but `projectCache` holds `projectKey` for the process's lifetime (D14), so after a project-key rename a check that rejected would drop **every** event until a `fetchChannelInfo` refreshed it — trading a misconfiguration nobody has made for silent data loss on a supported operation. A check that only warned would also land inside the dispatched factory, after the 200 (§5.1), so it could never become a 401, and the misregistration already leaves a trace there: `ensureProject` fails on a project the host does not have and logs `textFormattingRule lookup failed`. Naming the trap where the URL is registered beats a heuristic that cannot reject and cannot report. | Rejecting on a `projectKey` mismatch (drops everything after a rename); warning on one (a second meaning for the project lookup, no new information); a `spaceId` config field to compare (no payload field to compare it with). |
+| D19 | The space is taken from `?host=` alone; the payload is **not** cross-checked against it | No body field identifies the space, and the one candidate for a consistency check cannot carry it: `project.projectKey` would have to be compared against the configured host's own project, but `projectCache` holds `projectKey` for the process's lifetime (D14), so after a project-key rename a check that rejected would drop **every** event until the process restarted — trading a misconfiguration nobody has made for silent data loss on a supported operation. A check that only warned would also land inside the dispatched factory, after the 200 (§5.1), so it could never become a 401, and the misregistration already leaves a trace there: `ensureProject` fails on a project the host does not have and logs `textFormattingRule lookup failed`. Naming the trap where the URL is registered beats a heuristic that cannot reject and cannot report. | Rejecting on a `projectKey` mismatch (drops everything after a rename); warning on one (a second meaning for the project lookup, no new information); a `spaceId` config field to compare (no payload field to compare it with). |
 | D22 | Type 14 fans out: one delivery becomes one `chat.processMessage` per `content.link[]` entry, always, with no adapter option to turn it off | The comments are real. A bulk update writes a comment per issue with a changelog, `link[].comment.id` is that comment, and `fetchMessages` hands it back — so ignoring 14 makes push and pull disagree in the direction of having missed a status change, silently. The fan-out's cost is real too (one webhook, N threads, and N API calls if a handler makes one per message, out of a per-minute bucket), which is why the way out is leaving 14 out of `activityTypeIds[]`: registration already is the switch (D-PR4), and not subscribing stops the delivery instead of discarding it after arrival. A one-issue batch takes the same path: a single issue updated from the issue list is a type 14 too (measured 2026-09-06), so there is no size at which the fan-out is skipped. The batch's `notifications[]` is carried whole on every message and split between none of them: it holds one reason-1 entry per issue when the batch changed the assignee, but an entry names no issue and repeats the same user, so any per-issue meaning would come from the array's order alone. One delivery carrying several indistinguishable entries is what makes 14 different here; other types carry the array too. | Ignoring 14 (loses events that exist); a `bulkFanout` config flag (duplicates the subscription, and the copy that arrives is still paid for); one summary message into the first issue's thread (invents a message with no id and picks a thread arbitrarily); capping the batch (silently drops the tail of a transaction Backlog reported in full); treating a single-entry `link[]` as a type 2 (a handler would read a different `raw.kind` for the same operation depending on how many issues were ticked); pairing `notifications[i]` with `link[i]` (an ordering guarantee Backlog never gave, wrong the moment a redelivery or a future field reorders either array); dropping `notifications` from `raw.payload` (loses a fact the delivery carried, to prevent a misreading a comment can prevent). |
+| D24 | No `postChannelMessage` and no `markAsRead`; `ThreadInfo.metadata` names the thread and no more | No consumer needs either member, and `@chat-adapter/github` and `@chat-adapter/linear` implement neither. Creating an issue from a chat message had to guess an issue type and a priority and retry once on a stale guess; a caller who wants an issue calls `client(host).postIssue` with the values it means. A read receipt cost up to three reads of the bot's notification feed per call. A full copy of the issue or pull request in `metadata` duplicated `fetchSubject().raw`. | Keeping them because Backlog makes them possible; `channel.post` creating an issue with guessed defaults. |
 | D23 | The bot identity is optional configuration: whichever of `botUserId`/`botUserName` is missing comes from `GET /users/myself`, eagerly in `initialize` for every installation missing one, with a failed lookup logged and retried on demand, never rethrown; a webhook whose identity cannot be learned is 503 | Zero-config construction needed five variables where the credential already names the bot; both first-party analogues discover it at startup (`@chat-adapter/github` `users.getAuthenticated`, `@chat-adapter/linear` `viewer`). Eager makes `userName` right before the first mention is matched, which a synchronous getter cannot fetch on demand. The core never retries a rejected `initialize`, so rethrowing would wedge the whole `Chat` on one transient failure; a missing id silently disables the self-message check, so the webhook path refuses to dispatch rather than continue as Linear does. Both halves configured is kept as the way to spend no request. | Keeping both required (five variables for zero-config); lazy only, on the first webhook per host (`userName` stays empty for a multi-installation adapter until its first host happens to receive one); warn-and-continue on the webhook path (the bot answers itself); rejecting `initialize` (one outage wedges every adapter until restart). |
 | D-PR1 | The channel of a pull-request thread is its **project** | Webhooks carry `project.id`; the formatting rule is per project; `channelIdFromThreadId` stays "first three segments". | The repository as channel (N+1 channels per project, no formatting rule of its own). |
 | D-PR2 | Kind-explicit ids for **both** kinds; one nested `subject: BacklogSubjectRef` shared by thread ids, message ids, raws and the subject layer | Backlog addresses issues and pull requests through different endpoint families with different coordinates and separate comment id sequences; the GitHub adapter's "PR is the unmarked default" is back-compat debt its maintainers annotate as such. | Flat `{ kind, issueId?, repositoryId?, number? }`; keeping issues unmarked. |
@@ -2372,13 +2246,13 @@ open list.
 | # | Decision | Verdict | Evidence |
 | --- | --- | --- | --- |
 | 1 | D1 config shape: single-space fields with env fallbacks **and** `installations[]` | **confirmed** — both shapes, mutually exclusive, a host-keyed map inside | The constructor rejects the two shapes together, an empty `installations[]`, two installations on one host, and both credential environment variables set together (`src/adapter.ts`) — while an explicit credential ignores the other's leftover variable rather than failing, which is #90's fix and not an oversight; `src/adapter.test.ts` "installations and single-space fields together are rejected", "two installations on the same host are rejected", "constructs from environment variables when config is empty", "rejects both credentials in the environment, naming the variables", "an explicit apiKey ignores an access token left in the environment" (#10, tightened by #88 and #90) |
-| 2 | D14 formatting-rule cache policy | **confirmed** — cache forever, no TTL; `fetchChannelInfo` replaces the entry | `BacklogAdapter.fetchChannelInfo` replaces the `projectCache` entry, drops the channel's cached issue defaults and clears every repository name cached for the host; `src/adapter.test.ts` "fetching channel info replaces the cached formatting rule", "clearing channel info forgets the host’s repository names" — the source spells that apostrophe `\u2019`, so grep for `repository names` (#16, #24) |
-| 3 | `renderFormatted(content, target?)` second parameter | **confirmed** — accepted, and used: a cached rule for the target's channel picks the converter, otherwise Markdown plus one `warn` | `BacklogAdapter.renderFormatted` and `channelIdOfTarget` (`src/adapter.ts`); `src/adapter.test.ts` "without a target renders Markdown and warns once", "rendering for an unparseable target warns and falls back to markdown" (#10, #83) |
+| 2 | D14 formatting-rule cache policy | **changed** — cache for the process's lifetime, no TTL; `fetchChannelInfo` no longer replaces the entry (D14, D24) | `ensureProject` in `src/adapter.ts` is the only writer of `projectCache`; `BacklogAdapter.fetchChannelInfo` reads and returns (#16, #24) |
+| 3 | `renderFormatted(content, target?)` second parameter | **confirmed** — accepted, and used: a cached rule for the target's channel picks the converter, otherwise Markdown, with one `warn` when the target names a channel whose rule is uncached | `BacklogAdapter.renderFormatted` and `channelOfTarget` (`src/adapter.ts`); `src/adapter.test.ts` "without a target renders Markdown", "rendering for a target that is neither a thread nor a channel id renders markdown" (#10, #83) |
 | 4 | Webhook before `initialize()` (§5.1 row 10) | **confirmed** — 503 `Adapter not initialized` | `BacklogAdapter.handleWebhook`; `src/adapter.test.ts` "a webhook before initialize() has run gets 503" (#12) |
 | 5 | Non-POST webhook request | **confirmed** — 405 `Method not allowed` | `src/webhook/verify.ts`; `src/webhook/verify.test.ts` "a non-POST request is rejected with 405" (#12) |
 | 6 | `maxWebhookBodyBytes` knob | **confirmed** — kept, 5 MiB default, 413 | `DEFAULT_MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024` (`src/adapter.ts`), checked against `Content-Length` and again while reading (`src/webhook/verify.ts`); `src/webhook/verify.test.ts` covers both paths, `src/adapter.test.ts` "rejects a maxWebhookBodyBytes of %s" (#12, buffering order fixed by #81) |
-| 7 | Empty stream posts `" "` | **confirmed**, and widened to an abort that buffered nothing — see §15.2 | `BacklogAdapter.stream` posts `" "` whenever the buffer is empty (#84) |
-| 8 | Empty summary in `postChannelMessage` | **confirmed** — `ValidationError`, no placeholder | `createChannelIssue` in `src/egress.ts` throws before the port call; `src/adapter.test.ts` "an empty summary is a validation error" (#16) |
+| 7 | Empty stream posts `" "` | **confirmed**, and widened to an abort that buffered nothing — see §15.2 | `BacklogAdapter.stream` posts `" "` whenever the buffer is empty (#84); the core ends the iterable on abort, so the adapter no longer watches the signal |
+| 8 | Empty summary in `postChannelMessage` | **moot** — `postChannelMessage` was removed (D24) | — |
 | 9 | Type-4 deletion in the first release | **confirmed** — shipped; see §15.2 | `DISPATCHED_ACTIVITY_TYPES` includes 4 and dispatches `chat.processMessageDeleted` unconditionally (`src/webhook/payload.ts`) (#12) |
 | 10 | Retry defaults | **changed** — one retry and a 60 s ceiling, as confirmed, but no longer overridable: the `rateLimit` config option was removed (D5) | `MAX_RETRIES` / `MAX_WAIT_MS` in `src/client/rate-limit.ts`; `src/client/rate-limit.test.ts` "retries the first 429 when its reset is within a minute", "gives up without waiting when the reset is more than a minute away", "gives up on the second 429 even with an imminent reset" (#9, bounded further by #71, made internal by #111) |
 | 11 | Live-suite variables | **changed** — four, not three: `BACKLOG_LIVE_PULL_REQUEST=<repositoryId>:<number>` joined `BACKLOG_HOST`, `BACKLOG_API_KEY`, `BACKLOG_LIVE_ISSUE_ID` | `src/test/live.test.ts` reads all four and skips the pull-request half independently of the issue half, because a pull request needs a Git-enabled project and two coordinates an issue id cannot carry (#15, #24). The suite itself has still never been run — §15.4 |
@@ -2503,7 +2377,7 @@ named PR amends, which is where it must be read from.
 | The d.ts pass under TypeScript 7 | **confirmed** — as it stands | attw at the `esm-only` profile, publint and `scripts/check-published-types.mjs` all pass on the current output; the follow-up #95 named — asserting that the built `.d.ts` still *declares* the package's entry points — is described in that PR and not yet filed (§15.4) |
 | What `parseMessage` accepts | **changed** — all five raw shapes, the ones the adapter itself produces included | §4.1 (#91, issue #49) |
 | `webhookSecret` minimum length | **changed** — under 16 bytes is a hard `ValidationError`, not a warning | §3.2 config table, §11 (#81) |
-| An unknown `textFormattingRule` | **confirmed** — treated as Markdown, as §9.2 already specified | §9.2 (#83) |
+| An unknown `textFormattingRule` | **confirmed** — a lookup failure, so Markdown (§9.1) | §9.1 (#83) |
 | What `src/subject/containment.test.ts` proves | **changed** — it is a tripwire, not a proof: it matches only a receiver it can name | The test's own header lists what it cannot see, and CLAUDE.md says the same (#83) |
 | Card fallback text | **changed** — rendered in the project's own notation rather than always Markdown | §9.4 (#85) |
 | Backlog-notation escaping in user text | **not implemented, and carved out** — documented as a limitation | §9.7 (#86). The escape syntax exists; applying it needs a measurement on a notation project, so it is issue **#92**, waiting on the same space as #52 |
@@ -2545,8 +2419,9 @@ test doubles can catch drift) and the two measurements below.
 
 **30. Two pull-request measurements stay open — not a blocker.** A populated
 `pullRequest` / `pullRequestComment` in the bot's own notification feed, and
-redelivery of pull-request activities. Neither gates behaviour — `markAsRead`
-matches by kind either way, and redelivery is documentation — and both need
+redelivery of pull-request activities. Neither gates behaviour — nothing reads
+the notification feed since `markAsRead` was removed (D24), and redelivery is
+documentation — and both need
 the same space as the live suite.
 
 **31. Catalog listing: community or vendor-official — not a blocker.** Prepared

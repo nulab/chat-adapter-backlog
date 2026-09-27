@@ -19,9 +19,6 @@ import {
   issueCommentSchema,
   issueListSchema,
   issueSchema,
-  issueTypeListSchema,
-  notificationListSchema,
-  priorityListSchema,
   projectSchema,
   pullRequestAttachmentListSchema,
   pullRequestListSchema,
@@ -42,18 +39,13 @@ import type {
   BacklogGitRepository,
   BacklogIssue,
   BacklogIssueComment,
-  BacklogIssueType,
-  BacklogNotification,
-  BacklogPriority,
   BacklogProject,
   BacklogPullRequest,
   BacklogPullRequestAttachment,
   BacklogUploadedFile,
   BacklogUserRef,
-  CreateIssueInput,
   ListCommentsOptions,
   ListIssuesOptions,
-  ListNotificationsOptions,
   ListPullRequestsOptions,
   MaybeAsync,
   PullRequestRef,
@@ -546,47 +538,6 @@ export function createBacklogJsTransport(
       });
     },
 
-    async createIssue(input: CreateIssueInput) {
-      const params: Record<string, unknown> = {
-        projectId: input.projectId,
-        summary: input.summary,
-        issueTypeId: input.issueTypeId,
-        priorityId: input.priorityId,
-      };
-      if (input.description !== undefined)
-        params['description'] = input.description;
-      if (input.assigneeId !== undefined)
-        params['assigneeId'] = input.assigneeId;
-      if (input.notifiedUserId !== undefined)
-        params['notifiedUserId'] = input.notifiedUserId;
-      if (input.attachmentId !== undefined)
-        params['attachmentId'] = input.attachmentId;
-      return requestJson<BacklogIssue>('createIssue', issueSchema, {
-        method: 'POST',
-        path: 'issues',
-        params,
-      });
-    },
-
-    async listIssueTypes(projectId) {
-      return requestJson<BacklogIssueType[]>(
-        'listIssueTypes',
-        issueTypeListSchema,
-        {
-          method: 'GET',
-          path: `projects/${projectId}/issueTypes`,
-        }
-      );
-    },
-
-    async listPriorities() {
-      return requestJson<BacklogPriority[]>(
-        'listPriorities',
-        priorityListSchema,
-        { method: 'GET', path: 'priorities' }
-      );
-    },
-
     async listComments(issueId, options: ListCommentsOptions) {
       return requestJson<BacklogIssueComment[]>(
         'listComments',
@@ -795,27 +746,6 @@ export function createBacklogJsTransport(
     async deleteStar(starId) {
       await call(
         { method: 'DELETE', path: `stars/${starId}` },
-        async () => undefined
-      );
-    },
-
-    async listNotifications(options: ListNotificationsOptions) {
-      const params: Record<string, unknown> = { count: options.count };
-      if (options.maxId !== undefined) params['maxId'] = options.maxId;
-      return requestJson<BacklogNotification[]>(
-        'listNotifications',
-        notificationListSchema,
-        {
-          method: 'GET',
-          path: 'notifications',
-          params,
-        }
-      );
-    },
-
-    async markNotificationAsRead(id) {
-      await call(
-        { method: 'POST', path: `notifications/${id}/markAsRead` },
         async () => undefined
       );
     },

@@ -17,7 +17,6 @@ import {
   decodeUserId,
   type Backlog,
   type BacklogAdapter,
-  type BacklogChannelPostableExtras,
   type BacklogPostableExtras,
 } from '@nulab/chat-adapter-backlog';
 import { Chat, type PostableMarkdown } from 'chat';
@@ -65,16 +64,6 @@ export function POST(
   waitUntil: (task: Promise<unknown>) => void
 ): Promise<Response> {
   return chat.webhooks.backlog(request, { waitUntil });
-}
-
-export async function fileIssue(): Promise<void> {
-  const issue: PostableMarkdown & BacklogChannelPostableExtras = {
-    markdown: '# Deploy fails on staging\n\nReproduces on every push to main.',
-    issueTypeId: 12,
-    priorityId: 3,
-    assigneeId: 100,
-  };
-  await chat.channel(`backlog:${HOST}:500`).post(issue);
 }
 
 export async function reachBacklogDirectly(): Promise<{

@@ -1,7 +1,4 @@
-import { getEventListeners } from 'node:events';
-
 import { ValidationError } from '@chat-adapter/shared';
-import { createMockLogger } from '@chat-adapter/tests';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -12,18 +9,17 @@ import {
   postComment,
   removeReaction,
   requireCommentInThread,
-  resolveSummaryAndDescription,
   uploadFiles,
 } from './egress';
 import { createInMemoryBacklogApi } from './client/in-memory';
-import { converterFor } from './format/fallback';
+import { BacklogMarkdownConverter } from './format/markdown';
 import { encodeMessageId } from './ids';
 import { subjectClientFor } from './subject/client';
 import type { InMemoryBacklogApi } from './client/in-memory';
 import type { BacklogComment } from './client/port';
 import type { SubjectClient } from './subject/client';
 import type { BacklogPostableExtras, BacklogSubjectRef } from './types';
-import type { CardElement, PostableMarkdown } from 'chat';
+import type { PostableMarkdown } from 'chat';
 
 const HOST = 'example.backlog.com';
 const PROJECT_ID = 500;
@@ -126,35 +122,8 @@ function subjectOf(
 }
 
 function markdownConverter() {
-  return converterFor('markdown', createMockLogger(), {
-    host: HOST,
-    projectId: PROJECT_ID,
-  });
+  return new BacklogMarkdownConverter();
 }
-
-function notationConverter() {
-  return converterFor('backlog', createMockLogger(), {
-    host: HOST,
-    projectId: PROJECT_ID,
-  });
-}
-
-/** A card bold in both places a card puts bold: title and field label. */
-const CARD: CardElement = {
-  type: 'card',
-  title: 'Deploy failed',
-  subtitle: 'staging',
-  children: [
-    { type: 'text', content: 'The deploy job exited 1.' },
-    {
-      type: 'fields',
-      children: [
-        { type: 'field', label: 'Environment', value: 'production' },
-        { type: 'field', label: 'Attempt', value: '3' },
-      ],
-    },
-  ],
-};
 
 function pullRequestComment(
   overrides: Partial<BacklogComment> = {}
@@ -396,151 +365,6 @@ describe('postComment', () => {
       toBuffer: () => Promise.reject(new Error('no files expected')),
     });
     expect(message).toEqual(snapshot);
-  });
-
-  it('a card comment on a Markdown project is bold with asterisks', async () => {
-    const backlogApi = api();
-
-    await postComment({
-      host: HOST,
-      projectId: PROJECT_ID,
-      subject: subjectOf(backlogApi, ISSUE),
-      api: backlogApi,
-      converter: markdownConverter(),
-      message: CARD,
-      toBuffer: () => Promise.reject(new Error('no files expected')),
-    });
-
-    expect(backlogApi.state.recordedInputs).toContainEqual({
-      method: 'addComment',
-      issueId: ISSUE_ID,
-      input: {
-        content: [
-          '**Deploy failed**',
-          'staging',
-          'The deploy job exited 1.',
-          '**Environment**: production',
-          '**Attempt**: 3',
-        ].join('\n'),
-      },
-    });
-  });
-
-  it("a card comment on a notation project uses '' and no asterisks", async () => {
-    const backlogApi = api();
-
-    await postComment({
-      host: HOST,
-      projectId: PROJECT_ID,
-      subject: subjectOf(backlogApi, ISSUE),
-      api: backlogApi,
-      converter: notationConverter(),
-      message: CARD,
-      toBuffer: () => Promise.reject(new Error('no files expected')),
-    });
-
-    const [posted] = backlogApi.state.recordedInputs;
-    expect(posted).toEqual({
-      method: 'addComment',
-      issueId: ISSUE_ID,
-      input: {
-        content: [
-          "''Deploy failed''",
-          'staging',
-          'The deploy job exited 1.',
-          "''Environment'': production",
-          "''Attempt'': 3",
-        ].join('\n'),
-      },
-    });
-    expect(JSON.stringify(posted)).not.toContain('*');
-  });
-
-  it('a caller-supplied fallback text is posted verbatim', async () => {
-    for (const converter of [markdownConverter(), notationConverter()]) {
-      const backlogApi = api();
-
-      await postComment({
-        host: HOST,
-        projectId: PROJECT_ID,
-        subject: subjectOf(backlogApi, ISSUE),
-        api: backlogApi,
-        converter,
-        message: { card: CARD, fallbackText: 'Deploy failed on staging' },
-        toBuffer: () => Promise.reject(new Error('no files expected')),
-      });
-
-      expect(backlogApi.state.recordedInputs).toContainEqual({
-        method: 'addComment',
-        issueId: ISSUE_ID,
-        input: { content: 'Deploy failed on staging' },
-      });
-    }
-  });
-});
-
-describe('resolveSummaryAndDescription', () => {
-  it("a card's summary is the plain-text title under either rule", () => {
-    for (const converter of [markdownConverter(), notationConverter()]) {
-      expect(resolveSummaryAndDescription(CARD, converter).summary).toBe(
-        'Deploy failed'
-      );
-    }
-  });
-
-  it("a card's description is rendered in the project's own markup", () => {
-    expect(resolveSummaryAndDescription(CARD, markdownConverter())).toEqual({
-      summary: 'Deploy failed',
-      description: [
-        'staging',
-        'The deploy job exited 1.',
-        '**Environment**: production',
-        '**Attempt**: 3',
-      ].join('\n'),
-    });
-
-    expect(resolveSummaryAndDescription(CARD, notationConverter())).toEqual({
-      summary: 'Deploy failed',
-      description: [
-        'staging',
-        'The deploy job exited 1.',
-        "''Environment'': production",
-        "''Attempt'': 3",
-      ].join('\n'),
-    });
-  });
-
-  it("a caller-supplied fallback text's first line is the summary", () => {
-    expect(
-      resolveSummaryAndDescription(
-        { card: CARD, fallbackText: 'Deploy failed\nstaging, attempt 3' },
-        notationConverter()
-      )
-    ).toEqual({ summary: 'Deploy failed', description: 'staging, attempt 3' });
-  });
-
-  it("a first line's own list or heading marker is not kept in the summary", () => {
-    const markers: Array<[string, string]> = [
-      ['1. First step', 'First step'],
-      ['# Heading summary', 'Heading summary'],
-      ['- bullet summary', 'bullet summary'],
-    ];
-
-    for (const [firstLine, summary] of markers) {
-      expect(
-        resolveSummaryAndDescription(
-          { card: CARD, fallbackText: `${firstLine}\nbody` },
-          markdownConverter()
-        )
-      ).toEqual({ summary, description: 'body' });
-    }
-
-    expect(
-      resolveSummaryAndDescription(
-        { card: CARD, fallbackText: '- bullet summary\nbody' },
-        notationConverter()
-      )
-    ).toEqual({ summary: 'bullet summary', description: 'body' });
   });
 });
 
@@ -866,7 +690,7 @@ describe('removeReaction', () => {
 });
 
 describe('bufferStream', () => {
-  it('a streamed reply is posted once and never edited', async () => {
+  it('concatenates text and markdown chunks and drops task updates', async () => {
     async function* chunks() {
       yield 'Hello';
       yield { type: 'markdown_text' as const, text: ', world' };
@@ -877,7 +701,7 @@ describe('bufferStream', () => {
         status: 'complete' as const,
       };
     }
-    const buffered = await bufferStream(chunks(), undefined);
+    const buffered = await bufferStream(chunks());
     expect(buffered).toBe('Hello, world');
   });
 
@@ -885,138 +709,10 @@ describe('bufferStream', () => {
     async function* chunks(): AsyncIterable<string> {
       // no chunks
     }
-    const buffered = await bufferStream(chunks(), undefined);
+    const buffered = await bufferStream(chunks());
     expect(buffered).toBe('');
   });
-
-  it('an aborted signal ends consumption and keeps what was buffered', async () => {
-    const controller = new AbortController();
-    async function* chunks() {
-      yield 'first';
-      controller.abort();
-      yield 'never seen';
-    }
-    const buffered = await bufferStream(chunks(), controller.signal);
-    expect(buffered).toBe('first');
-  });
-
-  it('a signal aborted before the call reads no chunk at all', async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const source = stallingStream();
-
-    expect(await bufferStream(source.stream, controller.signal)).toBe('');
-    expect(source.pulls).toBe(0);
-  });
-
-  it('a source that stops producing still returns when the caller aborts', async () => {
-    const controller = new AbortController();
-    const source = stallingStream();
-
-    const buffered = bufferStream(source.stream, controller.signal);
-    await source.stalled;
-    controller.abort();
-
-    expect(await buffered).toBe('');
-  });
-
-  it('a source that stalls mid-stream keeps the text that arrived first', async () => {
-    const controller = new AbortController();
-    const source = stallingStream(['half a ', 'sentence']);
-
-    const buffered = bufferStream(source.stream, controller.signal);
-    await source.stalled;
-    controller.abort();
-
-    expect(await buffered).toBe('half a sentence');
-  });
-
-  it('a stalled source is told to clean up when the caller aborts', async () => {
-    const controller = new AbortController();
-    const source = stallingStream();
-
-    const buffered = bufferStream(source.stream, controller.signal);
-    await source.stalled;
-    controller.abort();
-    await buffered;
-
-    expect(source.returned).toBe(true);
-  });
-
-  it('no abort listener outlives the call', async () => {
-    const controller = new AbortController();
-    async function* chunks() {
-      yield 'done';
-    }
-    await bufferStream(chunks(), controller.signal);
-
-    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
-  });
-
-  it('no abort listener outlives a call that was aborted', async () => {
-    const controller = new AbortController();
-    const source = stallingStream();
-
-    const buffered = bufferStream(source.stream, controller.signal);
-    await source.stalled;
-    controller.abort();
-    await buffered;
-
-    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
-  });
 });
-
-/**
- * A stream that yields `chunks` and then stalls forever. `stalled` settles
- * once the stall has been reached, so a test aborts at a point ordered by the
- * stream itself rather than by a timer — a timer would let the pre-fix
- * `for await` pass too, just later.
- */
-function stallingStream(chunks: string[] = []): {
-  stream: AsyncIterable<string>;
-  stalled: Promise<void>;
-  readonly pulls: number;
-  readonly returned: boolean;
-} {
-  let reachedStall!: () => void;
-  const stalled = new Promise<void>((resolve) => {
-    reachedStall = resolve;
-  });
-  const state = { pulls: 0, returned: false };
-  const stream: AsyncIterable<string> = {
-    [Symbol.asyncIterator]: () => ({
-      next: () => {
-        const chunk = chunks[state.pulls];
-        state.pulls += 1;
-        if (chunk === undefined) {
-          reachedStall();
-          return new Promise<IteratorResult<string>>(() => undefined);
-        }
-        return Promise.resolve<IteratorResult<string>>({
-          done: false,
-          value: chunk,
-        });
-      },
-      return: () => {
-        state.returned = true;
-        return Promise.resolve<IteratorResult<string>>({
-          done: true,
-          value: undefined,
-        });
-      },
-    }),
-  };
-  return {
-    stream,
-    stalled,
-    get pulls() {
-      return state.pulls;
-    },
-    get returned() {
-      return state.returned;
-    },
-  };
-}
 
 describe('uploadFiles', () => {
   it('abandons no upload but stops issuing new ones after a failure', async () => {

@@ -14,7 +14,6 @@ import type {
   BacklogApi,
   BacklogComment,
   BacklogIssue,
-  BacklogNotification,
   ListCommentsOptions,
   StarTarget,
 } from '../client/port';
@@ -100,7 +99,6 @@ export function createIssueSubjectClient(
 
   return {
     ref,
-    capabilities: { deleteComment: true },
 
     async fetchRoot(): Promise<SubjectRoot> {
       return rootOf(await api.getIssue(issueId));
@@ -217,21 +215,11 @@ export function createIssueSubjectClient(
       return {
         kind: 'issue',
         host,
+        projectId: context.projectId,
         issueId,
         issueKey: issue.issueKey,
-        projectId: context.projectId,
         summary: issue.summary,
-        description: issue.description,
         status: issue.status,
-        assignee:
-          issue.assignee === null
-            ? null
-            : { id: issue.assignee.id, name: issue.assignee.name },
-        issueType: issue.issueType,
-        priority: issue.priority,
-        createdUserId: issue.createdUser.id,
-        created: issue.created.toISOString(),
-        updated: issue.updated.toISOString(),
         url: issueWebUrl(host, issue.issueKey),
       };
     },
@@ -252,11 +240,5 @@ export function createIssueSubjectClient(
     },
 
     repositoryIdForName: undefined,
-
-    notificationCommentId(
-      notification: BacklogNotification
-    ): number | undefined {
-      return notification.comment?.id;
-    },
   };
 }

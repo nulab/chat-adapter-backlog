@@ -9,7 +9,6 @@ import {
   fetchMessages,
   fetchSubject,
   fetchThread,
-  markAsRead,
   rehydrateAttachment,
 } from './reads';
 import { subjectClientFor } from './subject/client';
@@ -25,7 +24,7 @@ import type {
 } from './client/port';
 import type { MessageBuilders } from './reads';
 import type { SubjectClient } from './subject/client';
-import type { BacklogRawMessage, BacklogSubjectRef } from './types';
+import type { BacklogSubjectRef } from './types';
 import type {
   Attachment,
   FetchDirection,
@@ -679,69 +678,20 @@ describe('fetchSubject', () => {
   });
 });
 
-describe('markAsRead', () => {
-  const silentLogger = { debug: () => undefined, info: () => undefined };
-
-  it('a message whose raw names another subject is rejected', async () => {
-    const api = apiWith(1);
-    const commentId = 1;
-
-    // The two ids agree on the comment **number** and disagree on the
-    // subject: pull-request and issue comment ids are separate sequences and
-    // may collide (measured 2026-09-06).
-    const raw: BacklogRawMessage = {
-      kind: 'comment',
-      host: HOST,
-      projectId: PROJECT_ID,
-      subject: PULL_REQUEST_REF,
-      comment: {
-        id: commentId,
-        content: 'Any progress?',
-        createdUser: { id: ALICE.id, name: ALICE.name, userId: ALICE.userId },
-        created: ROOT_CREATED.toISOString(),
-        updated: ROOT_CREATED.toISOString(),
-        changeLog: [],
-        stars: [],
-      },
-      changes: [],
-    };
-
-    await expect(
-      markAsRead({
-        threadId: THREAD_ID,
-        messageId: ISSUE_FIXTURE.commentMessageId(commentId),
-        message: new MessageCtor({
-          id: ISSUE_FIXTURE.commentMessageId(commentId),
-          threadId: THREAD_ID,
-          text: 'Any progress?',
-          raw,
-          formatted: { type: 'root', children: [] },
-          author: {
-            userId: `${HOST}:${ALICE.id}`,
-            userName: 'alice',
-            fullName: ALICE.name,
-            isMe: false,
-            isBot: false,
-          },
-          metadata: { dateSent: ROOT_CREATED, edited: false },
-          attachments: [],
-          isMention: false,
-        }),
-        api,
-        subject: subjectOf(api, ISSUE_REF),
-        logger: silentLogger,
-      })
-    ).rejects.toThrow(ValidationError);
-  });
-});
-
 describe('rehydrateAttachment', () => {
   const configuredHosts = new Set([HOST]);
   const pullRequestAttachmentUrl = (host: string) =>
     `https://${host}/api/v2/projects/${PROJECT_ID}/git/repositories/${REPOSITORY_ID}/pullRequests/${PULL_REQUEST_NUMBER}/attachments/4242`;
 
   it('a serialised pull request attachment regains fetchData for a configured host', async () => {
-    const downloaded: { host: string; attachmentId: number }[] = [];
+    const downloadPullRequestAttachment = vi.fn().mockResolvedValue({
+      filename: 'trace.log',
+      contentType: 'text/plain',
+      data: Buffer.from('trace'),
+    });
+    const apiFor = vi.fn(
+      () => ({ downloadPullRequestAttachment }) as unknown as BacklogApi
+    );
     const rehydrated = rehydrateAttachment({
       attachment: {
         type: 'file',
@@ -749,15 +699,20 @@ describe('rehydrateAttachment', () => {
         url: pullRequestAttachmentUrl(HOST),
       },
       configuredHosts,
-      download: (host, location) => {
-        downloaded.push({ host, attachmentId: location.attachmentId });
-        return Promise.resolve(Buffer.from('trace'));
-      },
+      apiFor,
     });
 
     const data = await rehydrated.fetchData?.();
     expect(data?.toString()).toBe('trace');
-    expect(downloaded).toEqual([{ host: HOST, attachmentId: 4242 }]);
+    expect(apiFor).toHaveBeenCalledWith(HOST);
+    expect(downloadPullRequestAttachment).toHaveBeenCalledWith(
+      {
+        projectId: PROJECT_ID,
+        repositoryId: REPOSITORY_ID,
+        number: PULL_REQUEST_NUMBER,
+      },
+      4242
+    );
   });
 
   it('a pull request attachment url on a foreign host is returned unchanged', () => {
@@ -770,7 +725,9 @@ describe('rehydrateAttachment', () => {
       rehydrateAttachment({
         attachment,
         configuredHosts,
-        download: () => Promise.reject(new Error('no download expected')),
+        apiFor: () => {
+          throw new Error('no download expected');
+        },
       })
     ).toEqual(attachment);
   });

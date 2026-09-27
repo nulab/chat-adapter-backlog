@@ -169,8 +169,7 @@ core's `@<id>` pattern would be wrong for every space but one.
 ## Platform setup
 
 1. **Create a bot user** in the space and add it to every project it should
-   answer in. It needs permission to comment, and to create issues if you use
-   `channel.post()`.
+   answer in. It needs permission to comment.
 2. **Issue an API key** as that user: **Personal Settings → API**. If the
    section is missing, an administrator must enable API access for the space.
 3. **Optionally, pin its identity.** `GET /api/v2/users/myself` with that key
@@ -298,12 +297,6 @@ appears wherever the id grammar's subject does: `fetchThread().metadata.kind`,
 the `raw.subject.kind` of a comment's raw message, and the `raw.kind` of a root
 message's. Only `subject.type` follows the ecosystem.
 
-Every timestamp in `fetchThread().metadata` — `created`, `updated` and a pull
-request's `closeAt`/`mergeAt` — is an **ISO string**, the same as in
-`message.raw`. A value read out of `metadata` is typed `unknown`, so a `Date`
-there would be invisible to the compiler and would quietly become a string the
-first time a `ThreadInfo` went through JSON.
-
 What a pull-request thread cannot do — delete a comment, get listed by
 `listThreads`, be merged, closed or created — is in the table below.
 
@@ -319,10 +312,10 @@ What a pull-request thread cannot do — delete a comment, get listed by
 | Mentions | yes — the webhook's notification list, a text match, or assignment to the bot |
 | Reactions | partial — one Backlog star; the emoji is ignored (see below) |
 | Streaming | partial — buffered, posted once (see below) |
-| Issue creation via `channel.post()` | yes |
+| Issue creation via `channel.post()` | **no** — call `client(host).postIssue()` (see below) |
 | Pull-request creation, merge or close | **no** — Backlog exposes no API (see below) |
 | Thread listing | partial — issues only (see below) |
-| User lookup, read receipts, parent subject | yes — both kinds |
+| User lookup, parent subject | yes — both kinds |
 | Message-deleted events | partial — issue deletion only; nothing deletes a pull request |
 | Message-updated events | **no** — see below |
 | DMs, ephemeral messages, modals, buttons, slash commands, scheduling, nested replies, typing indicators | no — Backlog has no counterpart |
@@ -343,8 +336,10 @@ Limitations worth knowing before you build on this:
 - **A pull request cannot be closed or merged from Chat.** Backlog exposes no
   API for a status change. Merge in git or in the UI; the change then arrives
   as a type-19 activity like any other update.
-- **A pull request cannot be created from Chat either.** `channel.post()`
-  creates an issue, and only an issue.
+- **`channel.post()` rejects with `ValidationError`.** A channel is a
+  project, and a project id is not a thread. Create an issue with
+  `client(host).postIssue(...)`; nothing creates a pull request, because
+  Backlog exposes no API for it.
 - **Creating a pull request with `notifiedUserId[]` adds a system comment no
   activity announces**, so `fetchMessages` returns one message the webhook
   stream never delivered. A consumer reconciling the two will see the
@@ -412,11 +407,6 @@ Limitations worth knowing before you build on this:
 - **`chat.getUser()` cannot route to this adapter** — the core infers the
   adapter from the id shape and does not recognise `<host>:<id>`. Call
   `adapter.getUser()` directly.
-- **Read receipts are not automatic.** `markAsRead` costs one to three reads
-  plus at most one update, because it pages the bot's notification feed looking
-  for the comment. Do not call it for every comment. It sets that
-  notification's `resourceAlreadyRead` and never touches `alreadyRead` (the
-  unread-count badge, cleared only by resetting the whole feed).
 - **`thread.messages` is not free.** Each page is one comment-list call for
   either kind; `listThreads` draws on Backlog's **search** limit (lower than
   `read`).
@@ -452,8 +442,8 @@ Ids are **numeric, never issue keys**: renaming a project key rewrites every
 issue key under it, while the numeric ids never change. `issueKey` appears only
 in metadata and URLs. A pull request is likewise addressed by its numeric
 repository id and its per-repository `number` — never the repository name,
-which can change, and never its space-wide `id`, which appears only in metadata
-and raw data.
+which can change, and never its space-wide `id`, which appears only in raw
+data.
 
 The host is part of message and user ids because Backlog comment ids are unique
 only within one space. A pull request's channel is its **project**, not its
@@ -548,31 +538,6 @@ annotation catches both at compile time.
 
 `notifiedUserId` is independent: it notifies without leaving a visible `@name`.
 Backlog silently drops ids that are not project members.
-
-## Creating an issue
-
-`channel.post()` creates an issue, and only an issue — Backlog exposes no API
-that opens a pull request, so there is no counterpart on the pull-request side.
-The first block becomes the summary as plain text (Backlog renders no markup in
-summaries), the rest becomes the description:
-
-```ts
-import type { PostableMarkdown } from 'chat';
-import type { BacklogChannelPostableExtras } from '@nulab/chat-adapter-backlog';
-
-const issue: PostableMarkdown & BacklogChannelPostableExtras = {
-  markdown: '# Deploy fails on staging\n\nReproduces on every push to main.',
-  issueTypeId: 12,   // optional; defaults to the project's first type
-  priorityId: 3,     // optional; defaults to the middle priority
-  assigneeId: 100,   // optional
-};
-const channel = chat.channel('backlog:example.backlog.com:500');
-await channel.post(issue);
-```
-
-The extras go through an annotated variable for the same two reasons as under
-**Mentions**: `post()` rejects them as a literal, and only the annotation
-type-checks them.
 
 ## Errors
 

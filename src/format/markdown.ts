@@ -39,9 +39,9 @@ export class BacklogMarkdownConverter extends BaseFormatConverter {
    * card walks that `renderPostable` reaches — has no `link` or `divider`
    * case and returns `null` for both, so a `CardLink`'s URL and a divider
    * vanish from a card's fallback text. `@chat-adapter/shared`'s
-   * `cardToFallbackText`, which `postChannelMessage` reached before cards
-   * were routed through the project's converter, rendered both — so leaving
-   * them to `super` here would lose content, not markup
+   * `cardToFallbackText`, which cards reached before they were routed through
+   * the project's converter, rendered both — so leaving them to `super` here
+   * would lose content, not markup
    * (docs/specs/adapter.md §6.1).
    *
    * `stringifyMarkdown` is not used for either: it emits a thematic break as

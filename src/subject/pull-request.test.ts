@@ -8,7 +8,6 @@ import type {
   BacklogApi,
   BacklogComment,
   BacklogIssue,
-  BacklogNotification,
   BacklogPullRequest,
   BacklogUserRef,
 } from '../client/port';
@@ -334,7 +333,6 @@ describe('the pull request subject client', () => {
       message: 'Backlog has no endpoint to delete a pull request comment',
     });
     expect(calls).toEqual([]);
-    expect(subject.capabilities.deleteComment).toBe(false);
   });
 
   it('the subject of a serialised pull request root is read without a call', () => {
@@ -640,7 +638,7 @@ describe('the pull request subject client', () => {
     ).toBe(PROJECT_KEY);
   });
 
-  it('a pull request thread carries the fields §7.3 lists, under its own kind', () => {
+  it('a pull request thread carries its ids, summary, status and url, under its own kind', () => {
     const { subject } = clientWith();
 
     expect(
@@ -653,48 +651,14 @@ describe('the pull request subject client', () => {
       host: HOST,
       projectId: PROJECT_ID,
       repositoryId: REPOSITORY_ID,
-      repositoryName: REPOSITORY_NAME,
       number: PULL_REQUEST_NUMBER,
-      id: PULL_REQUEST_ID,
       summary: 'Retry the login request once',
-      description: 'Retries a failed login once before giving up',
       status: { id: 1, name: 'Open' },
-      assignee: { id: ALICE.id, name: ALICE.name },
-      base: 'main',
-      branch: 'feature/login-retry',
-      issue: { id: 8001, issueKey: 'PROJECT-42' },
-      baseCommit: 'aaa',
-      branchCommit: 'bbb',
-      mergeCommit: null,
-      closeAt: null,
-      mergeAt: null,
-      createdUserId: BOB.id,
-      created: PULL_REQUEST.created.toISOString(),
-      updated: PULL_REQUEST.updated.toISOString(),
       url: 'https://example.backlog.com/git/PROJECT/example-repo/pullRequests/12',
     });
   });
 
-  it('writes metadata timestamps as ISO strings, so a JSON round trip is identity', () => {
-    const { subject } = clientWith();
-
-    const metadata = subject.threadMetadata(
-      rootOf({
-        ...PULL_REQUEST,
-        mergeAt: new Date('2026-09-03T09:00:00.000Z'),
-        closeAt: new Date('2026-09-03T09:00:00.000Z'),
-      }),
-      { projectKey: PROJECT_KEY, repositoryName: REPOSITORY_NAME }
-    );
-
-    expect(metadata['created']).toBe('2026-09-01T10:00:00.000Z');
-    expect(metadata['updated']).toBe('2026-09-02T11:30:00.000Z');
-    expect(metadata['closeAt']).toBe('2026-09-03T09:00:00.000Z');
-    expect(metadata['mergeAt']).toBe('2026-09-03T09:00:00.000Z');
-    expect(JSON.parse(JSON.stringify(metadata))).toEqual(metadata);
-  });
-
-  it('a thread whose repository name is unknown omits the name and the url rather than guessing', () => {
+  it('a thread whose repository name is unknown omits the url rather than guessing', () => {
     const { subject } = clientWith();
 
     const metadata = subject.threadMetadata(rootOf(), {
@@ -702,7 +666,6 @@ describe('the pull request subject client', () => {
       repositoryName: undefined,
     });
 
-    expect(metadata).not.toHaveProperty('repositoryName');
     expect(metadata).not.toHaveProperty('url');
     expect(metadata['number']).toBe(PULL_REQUEST_NUMBER);
   });
@@ -721,22 +684,6 @@ describe('the pull request subject client', () => {
     const { subject } = clientWith();
 
     expect(subject.repositoryIdForName).toBe(REPOSITORY_ID);
-  });
-
-  it('a read receipt on a pull request matches the pull request comment id, never an issue comment sharing it', () => {
-    const { subject } = clientWith();
-    const notification = {
-      comment: { id: COMMENT_ID },
-      pullRequestComment: { id: COMMENT_ID + 1 },
-    } as unknown as BacklogNotification;
-
-    expect(subject.notificationCommentId(notification)).toBe(COMMENT_ID + 1);
-    expect(
-      subject.notificationCommentId({
-        ...notification,
-        pullRequestComment: null,
-      } as unknown as BacklogNotification)
-    ).toBeUndefined();
   });
 });
 
