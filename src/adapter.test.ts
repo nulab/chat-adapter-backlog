@@ -996,6 +996,29 @@ describe('BacklogAdapter.fetchMessages / fetchMessage / fetchThread', () => {
       expect.objectContaining({ repositoryId: FIXTURE.repositoryId })
     );
   });
+
+  it('a pull request thread whose project cannot be read is described without a url', async () => {
+    const logger = createMockLogger();
+    const { adapter, backlog } = egressAdapter({ logger });
+    vi.spyOn(backlog.client, 'getPullRequest').mockResolvedValue(
+      pullRequest() as never
+    );
+    vi.spyOn(backlog.client, 'getGitRepository').mockResolvedValue(
+      gitRepository({ name: FIXTURE.repositoryName })
+    );
+    backlog.getProject.mockRejectedValue(
+      new ResourceNotFoundError('backlog', 'project')
+    );
+
+    const thread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
+
+    expect(thread.metadata).toMatchObject({ kind: 'pullRequest' });
+    expect(thread.metadata).not.toHaveProperty('url');
+    expect(logger.warn).toHaveBeenCalledWith(
+      'project key lookup failed; url omitted',
+      expect.objectContaining({ projectId: FIXTURE.projectId })
+    );
+  });
 });
 
 describe('BacklogAdapter read budget', () => {

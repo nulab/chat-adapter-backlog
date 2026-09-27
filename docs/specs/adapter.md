@@ -3,7 +3,7 @@
 What a consumer of the Backlog adapter for Chat SDK (`chat@4.40.0`) can
 observe, and the decisions that shaped it (§12). The tests are written from
 this document; when code and spec disagree, one of them is wrong. Code cites a
-decision by its id (`D14`), never by section number.
+decision by its id (`D23`), never by section number.
 
 Measured Backlog behaviour appears here only as far as it changes what the
 adapter does. The measurements, with dates and payload excerpts, are in
@@ -836,8 +836,7 @@ A card renders as Markdown fallback text:
 | emoji placeholder (`{{emoji:tada}}`) | as written |
 | `divider`, `image`, `actions` | nothing |
 
-A single-column table's dash row turns the line above into a setext heading
-(D26).
+A single-column table's dash row turns the line above into a setext heading.
 
 ## 10. Logging
 
