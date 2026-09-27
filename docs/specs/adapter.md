@@ -182,8 +182,9 @@ Not exported: the port (`BacklogApi`) and its domain types, the in-memory port
 `mentionPattern`, the format converters (§9 — rendering is the adapter's
 `renderFormatted`), `ResolvedInstallation` and `ResolvedCredential`, the
 internal subject layer (`SubjectClient`, `subjectClientFor`) that selects
-the issue or pull-request endpoint family for a thread (D-PR2), the port's `backlog-js` wrapper
-factory, zod schemas, the plain-text fallback converter and fixtures.
+the issue or pull-request endpoint family for a thread (D-PR2), the port's
+`backlog-js` wrapper factory, zod schemas, the plain-text fallback converter
+and fixtures.
 
 Nothing from `zod` appears in an exported type, and `chat` and `backlog-js`
 are the only modules `dist/index.d.ts` may import. `scripts/check-published-types.mjs`
@@ -979,9 +980,9 @@ that notifies without a visible mention.
 
 Every egress member decodes `threadId`, resolves the installation, and uses the
 port for that host through the subject client the thread id's `subject`
-selects (issue endpoints or pull-request endpoints, D-PR2). The behaviour below is the same for
-both kinds unless a subsection says otherwise. Non-comment message ids (`:r`,
-`:u:`) are rejected with
+selects (issue endpoints or pull-request endpoints, D-PR2). The behaviour
+below is the same for both kinds unless a subsection says otherwise.
+Non-comment message ids (`:r`, `:u:`) are rejected with
 `ValidationError("backlog", "<id> is not a comment and cannot be edited, deleted or starred")`
 (D12).
 
@@ -2188,7 +2189,8 @@ for one scratch space is worse than requiring the two to share it.
   one-line description; an npm-version badge and a license badge; a **Status**
   section stating the release cadence and pre-1.0 semver (`0.1.0` first, a
   breaking change is a minor while the major is `0`), the contract coverage of
-  §4, and the catalog-listing choice (§15.4 item 31); installation (`pnpm add @nulab/chat-adapter-backlog chat`);
+  §4, and the catalog-listing choice (§15.4 item 31); installation
+  (`pnpm add @nulab/chat-adapter-backlog chat`);
   quick start (shape A with explicit fields); environment-variable table (the
   six `BACKLOG_*` variables, required/optional); configuration reference (§3.2
   table); platform setup (create bot user, add to project, issue API key,
@@ -2240,10 +2242,9 @@ for one scratch space is worse than requiring the two to share it.
   model since it was measured (2026-09-06): the activity API form plus
   `assignee`, `base`, `branch` and `diff`
   (`.claude/rules/backlog-pull-request-facts.md`).
-- **DEVELOPMENT.md**: credentials table gains `BACKLOG_BOT_USER_ID`,
-  `BACKLOG_BOT_USER_NAME`, `BACKLOG_WEBHOOK_SECRET`, `BACKLOG_ACCESS_TOKEN`,
-  `BACKLOG_LIVE_ISSUE_ID`; `.env.example` likewise; live-suite section names
-  the exact calls it makes.
+- **`.env.example`** explains every variable the adapter and the live suite
+  read, and README "Environment variables" is the consumer-facing table;
+  DEVELOPMENT.md points at both. The calls the live suite makes are §12.3.
 - **CLAUDE.md**: "State of the repo" rewritten once the placeholder is gone;
   the layout paragraph naming `src/subject/*` and saying that kind-specific
   behaviour lives there and nowhere else, with the two-module containment rule
@@ -2295,7 +2296,8 @@ for one scratch space is worse than requiring the two to share it.
   `fetchSingleMessage yes`, `fetchThreadInfo yes`, `fetchChannelMessages no`,
   `listThreads {partial, "Issues only"}` (D-PR7), `fetchChannelInfo yes`,
   `postChannelMessage {yes, "Creates an issue"}` — a pull request cannot be
-  created from Chat either (`base`/`branch` have no postable shape). `deleteMessage` appears once, as the
+  created from Chat either (`base`/`branch` have no postable shape).
+  `deleteMessage` appears once, as the
   partial above; the issue-only matrix's `deleteMessage yes` is gone, not kept
   beside it.
 
@@ -2397,8 +2399,8 @@ open list.
 | 26 | D-PR9 root message part tag | **confirmed** — `r` for both kinds | `src/ids.ts` encodes and parses `r`; `src/ids.test.ts` and the `threadIdContract` roundtrip cover it (#22) |
 | 27 | D15 version line | **confirmed 2026-09-07** — the package's own semver, starting at `0.1.0`; #17, which had it track `chat`'s line, is superseded | #58; DEVELOPMENT.md "Versioning". The dependency **ranges** are the other half of D15 and are unchanged (§14) |
 | 28 | Repository visibility at publish time | **confirmed 2026-09-09** — the repository is public at publish time; the first publish authenticates with a token and later ones with Trusted Publishing | A maintainer decision rather than a code one, so its evidence is a prerequisite the maintainer supplies, not a module: recorded in §15.4, which carries the two npm rules it rests on — provenance requires a public source repository, and Trusted Publishing cannot be configured for a package that does not exist yet. DEVELOPMENT.md's "The first release, step by step" carries it as the checklist a releaser follows, with the token secret named `NPM_TOKEN` on the `production` environment |
-| 29 | Whether done criterion 3 stands: the live suite must run against a real space before `0.1.0` | **open — blocks `0.1.0`** | §15.4. The suite exists and self-skips (row 11); the run itself is issue #52 |
-| 30 | M9 and M12, the two pull-request questions left unmeasured | **open — does not block `0.1.0`** | §15.4. No code reads either |
+| 29 | Whether the live suite must run once against a real space, with the result recorded in the release PR, before `0.1.0` | **open — blocks `0.1.0`** | §15.4. The suite exists and self-skips (row 11); the run itself is issue #52 |
+| 30 | Pull-request notifications in the bot's own feed, and pull-request redelivery: left unmeasured | **open — does not block `0.1.0`** | §15.4. No code reads either |
 | 31 | Catalog listing: community or vendor-official | **open — does not block `0.1.0`** | §15.4. §13 holds the feature-matrix values a listing needs |
 
 ### 15.2 The four questions whose answer needed an argument
@@ -2528,9 +2530,10 @@ stop a release: the first blocks `0.1.0`, the last two do not. A closing
 paragraph names what the same review carved into follow-up issues instead,
 because those are work, not decisions.
 
-**29. The live suite has never been run — the one remaining `0.1.0` blocker.** A release
-criterion requires it to have run at least once against a real space, with the result
-in the release PR, and §12.3 is written for that run. It needs credentials
+**29. The live suite has never been run — the one remaining `0.1.0` blocker.**
+The release criterion: before `0.1.0`, the live suite runs at least once
+against a real space and the result is recorded in the release PR. §12.3 is
+written for that run. It needs credentials
 and a Git-enabled project on a development space (**#52**). Recommendation:
 keep the criterion. The suite is the only thing that ever executes the port
 against Backlog's real wire shapes, and #19 (`fix(client): use the wire
@@ -2540,14 +2543,15 @@ should be taken in the same session rather than opened separately: the
 remaining item of **#51** (a schema fixture recorded from a real body, so the
 test doubles can catch drift) and the two measurements below.
 
-**30. M9 and M12 stay unmeasured — not a blocker.** M9
-is a populated `pullRequest` / `pullRequestComment` in the bot's own
-notification feed, M12 is redelivery. Neither gates behaviour — `markAsRead`
+**30. Two pull-request measurements stay open — not a blocker.** A populated
+`pullRequest` / `pullRequestComment` in the bot's own notification feed, and
+redelivery of pull-request activities. Neither gates behaviour — `markAsRead`
 matches by kind either way, and redelivery is documentation — and both need
 the same space as the live suite.
 
 **31. Catalog listing: community or vendor-official — not a blocker.** Prepared
-but never chosen (§13 holds the feature-matrix values). Community listing needs a docs page and
+but never chosen (§13 holds the feature-matrix values). Community listing
+needs a docs page and
 allowlist entries in `vercel/chat`; vendor-official additionally needs
 catalog and scaffold entries, a changeset, product docs and an announcement.
 Recommendation: publish `0.1.0` first and list it as community, because the

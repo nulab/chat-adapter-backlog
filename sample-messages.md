@@ -2,10 +2,11 @@
 
 One anonymised payload per activity type the adapter recognises, in the shape
 a real delivery carries. Generated from the fixtures in
-`src/test/fixtures/webhooks.ts` by `scripts/generate-sample-messages.mts`, so
-regenerate it rather than editing it by hand. What Backlog delivers, and where
-a delivery differs from the activities API, is recorded with its measurements
-in `.claude/rules/backlog-webhook-facts.md` and
+`src/test/fixtures/webhooks.ts` by `src/test/sample-messages.test.ts`;
+regenerate it with `pnpm exec vitest run src/test/sample-messages.test.ts -u`
+rather than editing it by hand. What Backlog delivers, and where a delivery
+differs from the activities API, is recorded with its measurements in
+`.claude/rules/backlog-webhook-facts.md` and
 `.claude/rules/backlog-pull-request-facts.md`.
 
 Vocabulary throughout: host `example.backlog.com`, bot `Chatbot` (id 999),

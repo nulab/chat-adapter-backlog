@@ -31,29 +31,23 @@ Node or none at all (CLAUDE.md, Quality gates).
   base64-decode `npm view pnpm@<version> dist.integrity` to cross-check. The
   Node pnpm provisions ships without corepack or npm, so this needs a Node from
   outside the repository.
-- **Bumping Node.** Edit `devEngines.runtime.version` for a new major, and
-  move `@types/node` with it. Patches and minors arrive on the next unfrozen
-  `pnpm install` as a lockfile change.
-- **Another Node for one run.** `pnpm install --no-runtime` leaves the pinned
-  runtime out; then run the tool with a bare `node`, not `pnpm run`, which
-  would link the runtime back (`.github/workflows/ci.yml`, job `test`). A
-  plain `pnpm install` restores it.
+- **Bumping Node, or running another Node once**: CLAUDE.md "Quality gates".
 - `npm install` in this repository is unsupported: it ignores
   `pnpm-lock.yaml`, provisions no runtime and leaves a `package-lock.json`
   that must not be committed.
 
 ## Scripts
 
-| Script              | Command                   | When to use it                                                                                          |
-| ------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `pnpm build`        | `tsdown`                  | Produce `dist/`. Also runs `publint`, `attw` and `scripts/check-published-types.mjs`, and fails on any. |
-| `pnpm test`         | `vitest run`              | Run the suite once. Needs no credentials.                                                               |
-| `pnpm test:watch`   | `vitest`                  | Watch mode while writing tests.                                                                         |
-| `pnpm lint`         | `oxlint --max-warnings 0` | Lint the whole tree, `examples/` included. Warnings fail.                                               |
-| `pnpm lint:fix`     | `oxlint --fix`            | Apply the auto-fixable lint results.                                                                    |
-| `pnpm format`       | `oxfmt <paths>`           | Format `src`, `examples` and the two config files.                                                      |
-| `pnpm format:check` | `oxfmt --check <paths>`   | The same paths, without writing. This is what CI runs.                                                  |
-| `pnpm typecheck`    | `tsc --noEmit`            | Type check. `tsconfig.json` never emits; tsdown builds.                                                 |
+| Script              | Command                                            | When to use it                                                            |
+| ------------------- | -------------------------------------------------- | ------------------------------------------------------------------------- |
+| `pnpm build`        | `tsdown && node scripts/check-published-types.mjs` | Produce `dist/`. Fails on a `publint`, `attw` or published-types problem. |
+| `pnpm test`         | `vitest run`                                       | Run the suite once. Needs no credentials.                                 |
+| `pnpm test:watch`   | `vitest`                                           | Watch mode while writing tests.                                           |
+| `pnpm lint`         | `oxlint --max-warnings 0`                          | Lint the whole tree, `examples/` included. Warnings fail.                 |
+| `pnpm lint:fix`     | `oxlint --fix`                                     | Apply the auto-fixable lint results.                                      |
+| `pnpm format`       | `oxfmt <paths>`                                    | Format `src`, `examples` and the two config files.                        |
+| `pnpm format:check` | `oxfmt --check <paths>`                            | The same paths, without writing. This is what CI runs.                    |
+| `pnpm typecheck`    | `tsc --noEmit`                                     | Type check. `tsconfig.json` never emits; tsdown builds.                   |
 
 The five gates CI enforces, and what each one catches, are in CLAUDE.md
 "Quality gates". Root-level JSON, YAML and Markdown are formatted by the
@@ -67,8 +61,8 @@ scripts.
 (`lefthook.yml`):
 
 - **oxlint** — `oxlint --fix` on staged `*.{js,ts,jsx,tsx}`, then re-stages
-  what it fixed. It ends with `|| true`, so an error it cannot fix does **not**
-  block the commit; it blocks CI instead. Run `pnpm lint` yourself.
+  what it fixed. It never blocks a commit (CLAUDE.md "Quality gates"), so run
+  `pnpm lint` yourself.
 - **oxfmt** — formats staged `*.{js,ts,jsx,tsx,json,css,html,yaml,yml}`
   (excluding `pnpm-lock.yaml`) and re-stages the result.
 
@@ -100,8 +94,8 @@ plan and far smaller on a free one (`.claude/rules/backlog-api-facts.md`).
 ```ts
 const liveCredentialsPresent = Boolean(
   process.env.BACKLOG_HOST &&
-    process.env.BACKLOG_API_KEY &&
-    process.env.BACKLOG_LIVE_ISSUE_ID,
+  process.env.BACKLOG_API_KEY &&
+  process.env.BACKLOG_LIVE_ISSUE_ID
 );
 
 describe.skipIf(!liveCredentialsPresent)('live Backlog space', () => {
@@ -126,12 +120,10 @@ real key, and never put it in a URL query string
 
 ## Supply-chain settings
 
-- `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320` (three days) and
-  `.npmrc` sets `min-release-age=3` for npm, so a release younger than that
-  does not resolve. Wait it out; if a fresh version is genuinely needed, say
-  so in the PR rather than lowering the threshold.
-- `allowBuilds: { lefthook: true }` is the only dependency allowed to run
-  install scripts; an unlisted one fails the install.
+- The three-day release quarantine and `allowBuilds` are CLAUDE.md "Quality
+  gates". `.npmrc`'s `min-release-age=3` applies the same quarantine to npm.
+  If a fresh version is genuinely needed, say so in the PR rather than
+  lowering the threshold.
 - The Node runtime is a lockfile dependency with a checksum per platform, like
   any other.
 - Dependabot (`.github/dependabot.yml`) opens weekly grouped npm and GitHub
@@ -144,12 +136,12 @@ real key, and never put it in a URL query string
 whatever its base, and as a reusable workflow called by the release. Why each
 step is shaped as it is lives in the comments beside it.
 
-| Job         | What it does                                                                                                                                                                                                                        |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lint`      | `pnpm lint`, then `pnpm format:check`.                                                                                                                                                                                              |
-| `typecheck` | `pnpm typecheck`.                                                                                                                                                                                                                   |
+| Job         | What it does                                                                                                                                                                                                                                         |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lint`      | `pnpm lint`, then `pnpm format:check`.                                                                                                                                                                                                               |
+| `typecheck` | `pnpm typecheck`.                                                                                                                                                                                                                                    |
 | `consumer`  | `pnpm build` and `pnpm pack`; installs the tarball with npm outside the repository; runs `scripts/consumer-smoke/smoke.mjs` on Node 20; type checks `documented-usage.ts` and every `examples/*` against the tarball (CLAUDE.md, State of the repo). |
-| `test`      | The suite on Node 20, 22, 24 and 26, each asserted to be the Node that actually ran.                                                                                                                                                |
+| `test`      | The suite on Node 20, 22, 24 and 26, each asserted to be the Node that actually ran.                                                                                                                                                                 |
 
 Installs are `--frozen-lockfile`, so commit `pnpm-lock.yaml` with any
 `package.json` change. An example is checked by hand the way its README says:
@@ -160,11 +152,11 @@ Installs are `--frozen-lockfile`, so commit `pnpm-lock.yaml` with any
 `.github/workflows/release.yml`, dispatched by hand. Why each step is written
 as it is lives in the comments beside it; this section is how to operate it.
 
-| Input                   | Default | Meaning                                                                                                 |
-| ----------------------- | ------- | ------------------------------------------------------------------------------------------------------- |
-| `newversion`            | `patch` | `patch` / `minor` / `major`, applied to the latest `v*` tag.                                            |
+| Input                   | Default | Meaning                                                                                                  |
+| ----------------------- | ------- | -------------------------------------------------------------------------------------------------------- |
+| `newversion`            | `patch` | `patch` / `minor` / `major`, applied to the latest `v*` tag.                                             |
 | `dry-run`               | `true`  | Build and pack, upload the tarball as the `package` artifact, and stop. Nothing reaches npm or the repo. |
-| `allow-released-commit` | `false` | Let a new run converge on a version tag on `main`'s tip that another run created. Recovery only.        |
+| `allow-released-commit` | `false` | Let a new run converge on a version tag on `main`'s tip that another run created. Recovery only.         |
 
 The run is CI, then `pack` (fix the version, build, pack; read-only), then
 `publish` (skipped on a dry run; the `production` environment): npm publish
@@ -228,15 +220,19 @@ any of the settings below.
 4. **Store a temporary token as its `NPM_TOKEN` secret**: a granular token,
    read-write on `@nulab`, shortest expiry, with **Bypass 2FA** — without it a
    non-interactive publish stops with `EOTP`
-   ([requiring 2FA](https://docs.npmjs.com/requiring-2fa-for-package-publishing-and-settings-modification)).
-   If the `nulab` organization enforces 2FA so that option is unavailable, the
-   fallbacks are a throwaway `0.0.1` published by hand to bootstrap trusted
-   publishing, or `0.1.0` published by hand without provenance. npm plans to
-   remove publishing with such tokens in January 2027.
-5. **Dispatch with `minor`, `dry-run` on.** The summary must say
+   ([requiring 2FA](https://docs.npmjs.com/requiring-2fa-for-package-publishing-and-settings-modification));
+   on `EOTP`, rotate the secret to a token that has it and re-run. If the
+   `nulab` organization enforces 2FA so that option is unavailable, the
+   fallbacks are a placeholder `0.0.1` published by hand to bootstrap trusted
+   publishing — it is `latest` until `0.1.0` lands, and a published version
+   number can never be reused — or `0.1.0` published by hand without
+   provenance. npm plans to remove publishing with such tokens in January 2027.
+5. **Dispatch from `main` with `minor`, `dry-run` on.** The summary must say
    `@nulab/chat-adapter-backlog@0.1.0`, and the packed file list must hold only
-   `dist/`, `package.json`, `README.md` and `LICENSE`.
-6. **Dispatch with `minor`, `dry-run` off.**
+   `dist/`, `package.json`, `README.md` and `LICENSE`. A dry run needs neither
+   the environment nor the token, so it can also go first.
+6. **Dispatch from `main` with `minor`, `dry-run` off.** `publish` refuses any
+   other ref.
 7. **Configure trusted publishing on npmjs.com** — repository
    `nulab/chat-adapter-backlog`, workflow `release.yml`, environment
    `production`, spelled exactly; a mismatch surfaces as a misleading 404 at
