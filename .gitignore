@@ -14,10 +14,6 @@ node_modules/
 # Build output
 dist/
 
-# Test coverage
-coverage
-*.lcov
-
 # TypeScript build artifacts
 *.tsbuildinfo
 

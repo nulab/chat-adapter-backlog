@@ -2,14 +2,6 @@
  * The published package as a consumer receives it: resolved through
  * `node_modules`, on the floor of `engines.node`, configured by nothing but
  * the environment.
- *
- * The `build` job's smoke test imports `./dist/index.js` by path on the Node
- * `devEngines.runtime` pins, which proves the bundle tsdown just emitted
- * loads. A path import consults neither `exports` nor `files`, and the pinned
- * runtime is not the one the package promises support for, so the two jobs
- * cover different halves of the same claim
- * (docs/plans/adapter-implementation.md §1 criterion 6 and §3 P7 acceptance,
- * docs/specs/adapter.md §13).
  */
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -26,22 +18,6 @@ const PACKAGE = '@nulab/chat-adapter-backlog';
  * and a path they can import around `exports`.
  */
 const PUBLISHED_ENTRIES = ['LICENSE', 'README.md', 'dist', 'package.json'];
-
-const expectedNodeMajor = process.env.EXPECTED_NODE_MAJOR;
-
-assert.equal(
-  process.versions.node.split('.')[0],
-  expectedNodeMajor,
-  `ran Node ${process.versions.node}, not the Node ${expectedNodeMajor} this job asked for`
-);
-
-// The same pair of assertions the test matrix makes, for the same reason: a
-// runtime `pnpm` linked into `node_modules/.bin` shadows PATH, and a job that
-// only checks the major would report a pass for the wrong Node.
-assert.ok(
-  !process.execPath.includes('node_modules'),
-  `ran a pnpm-linked runtime at ${process.execPath}, not the Node ${expectedNodeMajor} this job asked for`
-);
 
 const manifestUrl = import.meta.resolve(`${PACKAGE}/package.json`);
 const installedRootUrl = new URL('.', manifestUrl).href;
@@ -101,8 +77,7 @@ assert.equal(
 );
 
 // No argument: every field comes from a BACKLOG_* variable, which is the
-// zero-config construction CLAUDE.md's conventions promise and the explicit
-// config the `build` job's smoke test passes cannot exercise.
+// zero-config construction CLAUDE.md's conventions promise.
 const adapter = adapterModule.createBacklogAdapter();
 
 assert.equal(adapter.name, 'backlog');

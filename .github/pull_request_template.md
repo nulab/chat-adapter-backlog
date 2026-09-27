@@ -14,7 +14,7 @@ not recover from it.
 Beyond the five gates CI runs
 (`pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build`),
 say what you actually exercised: a real Backlog space (which endpoints, which
-plan), a local consumer via `pnpm dev`, or nothing but the default suite.
+plan), a local consumer of `pnpm pack`'s tarball, or nothing but the default suite.
 
 `pnpm test` runs with no credentials and no network, so a green suite says
 nothing about live behavior. If the opt-in live suite ran, say so.
@@ -31,8 +31,8 @@ nothing about live behavior. If the opt-in live suite ran, say so.
       have no category and belong in "Other Changes" unlabeled.
 - [ ] `package.json` changed: `pnpm-lock.yaml` is committed with it, because CI
       installs with `--frozen-lockfile`.
-- [ ] The public entry's exports changed: the smoke test in
-      `.github/workflows/ci.yml` changed in this PR too.
+- [ ] The public entry's exports changed: `scripts/consumer-smoke/smoke.mjs`
+      changed in this PR too.
 - [ ] `exports`, `files`, `engines` or the build config changed: `pnpm build`
       ran locally, since publint and attw run only there.
 

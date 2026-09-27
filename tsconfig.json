@@ -18,15 +18,12 @@
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
 
-    // Nothing here emits -- tsdown builds, and the `typecheck` script is
-    // `tsc --noEmit`. `declarationMap` is inert for the build: every entry in
-    // tsdown.config.ts sets `dts.sourcemap` itself, which always wins over
-    // rolldown-plugin-dts's fallback to this field -- see tsdown.config.ts
-    // for what actually decides a published `.d.ts`'s `sourceMappingURL`.
+    // No `declarationMap`: rolldown-plugin-dts falls back to it for
+    // `dts.sourcemap`, and a `.d.ts.map` could only point at `src/`, which
+    // `files` does not ship.
     "declaration": true,
-    "declarationMap": true,
     "noEmit": true
   },
   "include": ["src/**/*", "tsdown.config.ts", "vitest.config.ts"],
-  "exclude": ["node_modules", "dist", "coverage"]
+  "exclude": ["node_modules", "dist"]
 }

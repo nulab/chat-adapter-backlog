@@ -20,5 +20,5 @@
       }
     }
   ],
-  "ignorePatterns": ["dist", "coverage", "node_modules"]
+  "ignorePatterns": ["dist", "node_modules"]
 }
