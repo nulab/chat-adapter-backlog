@@ -77,8 +77,8 @@ written here is CLAUDE.md "Test strategy".
 ### Opt-in live suite
 
 `src/test/live.test.ts` talks to a real Backlog space and skips itself unless
-its variables are set; what it calls and the write budget it keeps are
-docs/specs/adapter.md §12.3. Two things to know before setting them:
+its variables are set; what it calls and the write budget it keeps are in that
+file's header. Two things to know before setting them:
 
 - `BACKLOG_LIVE_ISSUE_ID` names an issue the suite comments on. Use a scratch
   issue.

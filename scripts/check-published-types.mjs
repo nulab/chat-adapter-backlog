@@ -30,9 +30,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
  * `chat` is the peer dependency the `Adapter` interface and `Logger` come
  * from, so a consumer already has it.
  *
- * `backlog-js` is here on purpose and is the one exception §3.1 records:
- * `BacklogAdapter.client()` returns its `Backlog` client, so that a
- * consumer needing an endpoint the port does not name gets the adapter's own
+ * `backlog-js` is here on purpose and is the one exception the spec records
+ * (D-API1): `BacklogAdapter.client()` returns its `Backlog` client, so that a
+ * consumer needing an endpoint the adapter does not cover gets its own
  * 429 retry and error mapping instead of standing up a second client beside
  * it. The price is exactly what this script otherwise
  * prevents — a `backlog-js` major becomes a semver-major here — and it is
@@ -41,8 +41,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
  *
  * Nothing else is installed on a consumer's behalf: `zod` and
  * `@chat-adapter/shared` are this package's own dependencies, hoisted
- * wherever the consumer's package manager decided, and §3.1 promises neither
- * appears in an exported type.
+ * wherever the consumer's package manager decided, and the spec promises
+ * neither appears in an exported type.
  */
 const ALLOWED_SPECIFIERS = new Set(['chat', 'backlog-js']);
 
@@ -88,9 +88,9 @@ if (leaked.length > 0) {
       `but a consumer only installs ${[...ALLOWED_SPECIFIERS].map((s) => `"${s}"`).join(', ')}.\n` +
       'An exported type is reaching an implementation type. Declare the ' +
       'public shape by hand in src/types.ts and keep the schema aligned with ' +
-      'it (docs/specs/adapter.md §3.1). If the module really belongs in the ' +
-      'published contract, add it to ALLOWED_SPECIFIERS here and to §3.1 in ' +
-      'the same commit.'
+      'it (docs/specs/adapter.md D-API1). If the module really belongs in the ' +
+      'published contract, add it to ALLOWED_SPECIFIERS here and to the ' +
+      "spec's exports in the same commit."
   );
 }
 
@@ -123,6 +123,6 @@ if (unnameable.length > 0) {
     `${entry} declares ${unnameable.join(', ')} without exporting them, so ` +
       'a consumer receives values of those types but cannot name them. ' +
       'Export them from src/index.ts, or stop an exported type from ' +
-      'referencing them (docs/specs/adapter.md §3.1).'
+      'referencing them (docs/specs/adapter.md D-API1).'
   );
 }

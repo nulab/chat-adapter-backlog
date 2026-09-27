@@ -9,18 +9,10 @@ an agent replies by commenting.
 
 ## Status
 
-Releases on its own cadence, starting at `0.1.0`, and still pre-1.0: while the
-major is `0`, a breaking change to the public surface ships as a minor release.
-
-Feature-complete against the adapter contract of `chat@4.40.0`: all 17 required
-members are present, plus 10 of the 27 optional ones. A few of them go as far
-as Backlog allows and no further — a reaction is a star, and there is no typing
-indicator to show. What each member does, and every place Backlog itself stops
-short, is the matrix under **Features and limitations**.
-
-Not listed in Chat SDK's adapter catalog yet — as neither a community nor a
-vendor-official adapter. That listing is a separate decision and changes
-nothing about installing or using the package.
+Pre-1.0, starting at `0.1.0`: while the major is `0`, a breaking change ships as
+a minor release. All 17 required members of `chat@4.40.0`'s adapter contract
+are implemented, plus 8 of the 27 optional ones; **Features and limitations**
+says where Backlog stops short. Not yet listed in Chat SDK's adapter catalog.
 
 ## Installation
 
@@ -28,10 +20,9 @@ nothing about installing or using the package.
 pnpm add @nulab/chat-adapter-backlog chat @chat-adapter/state-memory @vercel/functions
 ```
 
-`chat` is a peer dependency at `^4.40.0` — a caret range, so upgrading the core
-does not require a matching adapter release. Node 20 or newer. The other two
+`chat` is a peer dependency at `^4.40.0`. Node 20 or newer. The other two
 packages are only what **Quick start** uses: swap in a durable state adapter
-and your runtime's own `waitUntil` as needed.
+and your runtime's own `waitUntil`.
 
 ## Quick start
 
@@ -66,25 +57,19 @@ export async function POST(request: Request) {
 }
 ```
 
-The memory state forgets subscriptions on restart — fine for a first run, not
-for production (see **Delivery is at-least-once** below). `waitUntil` is what
-keeps a serverless invocation alive after the 200: the handler runs in the
-background, and without it nothing holds the function open, so the runtime may
-freeze it before the reply is posted. On a long-lived Node server nothing
-freezes, so `waitUntil` can be omitted; on another serverless platform, pass
-that runtime's own.
+The webhook answers 200 before the handler runs; `waitUntil` keeps a
+serverless invocation alive until it finishes. A long-lived Node server can omit
+it. The memory state forgets subscriptions on restart, so use a durable one in
+production.
 
-Every field falls back to an environment variable, so
-`createBacklogAdapter()` with no argument works when the environment is set.
-
-For a whole bot rather than a fragment — a Vercel project with the webhook
-wired up, environment variables and a handler that does something useful — see
-[examples/](https://github.com/nulab/chat-adapter-backlog/tree/main/examples).
+Every field falls back to an environment variable, so `createBacklogAdapter()`
+with no argument works when the environment is set. For a whole deployable bot,
+see [examples/](https://github.com/nulab/chat-adapter-backlog/tree/main/examples).
 
 ## Environment variables
 
-A fallback applies only when the field is absent from the config object. An
-explicit empty string is a validation error, not a request to fall back.
+A fallback applies only when the field is absent from the config object; an
+explicit empty string is a validation error.
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
@@ -92,163 +77,118 @@ explicit empty string is a validation error, not a request to fall back.
 | `BACKLOG_API_KEY` | one of the two | Personal API key, sent in the `Backlog-API-Key` header. |
 | `BACKLOG_ACCESS_TOKEN` | one of the two | OAuth 2.0 bearer token instead of a key. |
 | `BACKLOG_BOT_USER_ID` | recommended | Numeric id of the bot user. Read from `GET /api/v2/users/myself` when unset or blank — see **Bot identity**. |
-| `BACKLOG_BOT_USER_NAME` | for mentions | The bot's display name, as Backlog renders it in a comment. Needed for a typed `@name` to count — see **Bot identity**. |
+| `BACKLOG_BOT_USER_NAME` | for mentions | The bot's display name, needed for a typed `@name` to count — see **Bot identity**. |
 | `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter. At least 16 bytes. |
 
 ## Configuration
 
 | Option | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `host` | `string` | — | Full hostname. Backlog spaces also live on `backlog.jp` and legacy `backlogtool.com`, so this is never a subdomain slug. |
-| `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | — | Exactly one. The function form is resolved on **every** call and never cached, so an expiring token can be refreshed without reconstructing the adapter. |
-| `botUserId` | `number` | `GET /users/myself` | Positive integer, at most `Number.MAX_SAFE_INTEGER` — it is encoded into user ids. Recognises the adapter's own messages and assignment to the bot. |
-| `botUserName` | `string` | `GET /users/myself` when `botUserId` is also unset | Non-empty. Mentions arrive as resolved text, so this is what a typed `@name` is matched against. Also `adapter.userName`. |
-| `webhookSecret` | `string` | — | Required unless `webhookVerifier` is set, and `BACKLOG_WEBHOOK_SECRET` is not read beside one. **At least 16 bytes**, checked when the adapter is constructed — it is the only thing standing between the URL and your projects, so a short one is refused rather than warned about. |
-| `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check entirely — for a reverse-proxy assertion, mTLS or an IP allowlist. |
+| `host` | `string` | — | Full hostname: spaces also live on `backlog.jp` and `backlogtool.com`. |
+| `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | — | Exactly one. The function form is resolved on **every** request and never cached, so an expiring token can be refreshed without reconstructing the adapter. |
+| `botUserId` | `number` | `GET /users/myself` | Recognises the bot's own messages and assignment to it. |
+| `botUserName` | `string` | `GET /users/myself` when `botUserId` is also unset | What a typed `@name` is matched against. Also `adapter.userName`. |
+| `webhookSecret` | `string` | — | Required unless `webhookVerifier` is set. **At least 16 bytes**, checked at construction. |
+| `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check — for an IP allowlist, mTLS or a reverse-proxy assertion. |
 | `logger` | `Logger` | `ConsoleLogger("info")` | Replaced by `chat.getLogger("backlog")` in `initialize`. |
 
-One adapter serves one Backlog space: an API key belongs to one space, so a
-second space is a second adapter under its own `Chat` and webhook URL. An
-option the adapter does not know, such as a leftover `installations`, is a
-`ValidationError` rather than silently ignored.
+One adapter serves one Backlog space: a second space is a second adapter under
+its own webhook URL. An unknown option is a `ValidationError`.
 
 ### Bot identity
 
-The adapter needs the bot's user id to recognise its own comments and
-assignments, and asks `GET /api/v2/users/myself` — the user the API key or
-token acts as — for it once, when `initialize` runs (on the first webhook, or
-`chat.initialize()`), only if `botUserId` is unset. That lookup also fills a
-missing `botUserName`. Set `BACKLOG_BOT_USER_ID` and no request is ever made,
-which matters where every cold start runs `initialize` again.
+With `botUserId` unset, `initialize` asks `GET /api/v2/users/myself` — the user
+the key or token acts as — once, and fills a missing `botUserName` too. Set
+`BACKLOG_BOT_USER_ID` and no request is ever made, which matters where every
+cold start runs `initialize` again.
 
-`botUserName` is what the adapter matches a hand-typed `@name` in comment text
-against, and what it compares an assignment reported only in a replayed
-activity's `changes[]` with (Backlog names the assignee there by display
-name). Leave it out beside a configured id and `initialize` logs one warning:
-those two rules are off, while notifications and the assignee id still count.
+Without `botUserName` beside a configured id, `initialize` logs one warning: a
+typed `@name` no longer counts as a mention, while notifications and
+assignments still do. `adapter.userName` is then `""`, and the Chat SDK core
+falls back to `new Chat({ userName })` for its own `@<name>` match. **Always give
+`new Chat({ userName })` a non-empty value**: with both empty, every stray `@`
+in a comment becomes a mention.
 
-The Chat SDK core runs its own `@<name>` match on top, with the adapter's
-`userName` or, when that is `""`, `new Chat({ userName })`. The `Adapter`
-interface types `userName` as a string, so `""` is how the adapter says it has
-no name, and the core falls back on it exactly as it would on `undefined`.
-**Always give `new Chat({ userName })` a non-empty value**: with both empty the
-core's pattern is `@` followed by nothing, and every stray `@` in a comment
-becomes a mention. A bot that answers mentions should set
-`BACKLOG_BOT_USER_NAME` and pass it there; one that answers none can pass any
-fixed name.
-
-- **A failed lookup does not fail `initialize`.** It is logged as a warning
-  and retried by the next webhook or call that needs it. A webhook whose bot
-  identity still cannot be learned is answered **503** and not dispatched:
-  without the id the adapter cannot tell the bot's own comments apart, and a
-  bot that answers itself answers forever.
+A failed lookup does not fail `initialize`; the next webhook or call that needs
+the id asks again. A webhook whose bot identity still cannot be learned is
+answered **503** and not dispatched, because without the id the bot cannot tell
+its own comments apart.
 
 ## Platform setup
 
-1. **Create a bot user** in the space and add it to every project it should
-   answer in. It needs permission to comment.
+1. **Create a bot user** in the space and add it, with permission to comment,
+   to every project it should answer in.
 2. **Issue an API key** as that user: **Personal Settings → API**. If the
-   section is missing, an administrator must enable API access for the space.
+   section is missing, an administrator must enable API access.
 3. **Pin its id.** `GET /api/v2/users/myself` with that key reports `id` —
-   that is `BACKLOG_BOT_USER_ID`, not the login name — and `name`, the
-   optional `BACKLOG_BOT_USER_NAME`. Leave the id out and the adapter reads it
-   on every cold start (see **Bot identity**).
-4. **Generate a webhook secret**: `openssl rand -hex 32`. Anything under 16
-   bytes is rejected at construction.
+   `BACKLOG_BOT_USER_ID`, not the login name — and `name`, the
+   `BACKLOG_BOT_USER_NAME`.
+4. **Generate a webhook secret**: `openssl rand -hex 32`.
 5. **Register a webhook per project** (Project Settings → Integrations →
-   Webhook, or
-   [Add Webhook](https://developer.nulab.com/docs/backlog/api/2/add-webhook/)):
+   Webhook, or [Add Webhook](https://developer.nulab.com/docs/backlog/api/2/add-webhook/)),
+   only in the space this deployment is configured for:
 
    ```
    https://<your-app>/api/webhooks/backlog?token=<secret>
    ```
 
-   Register it only in the space this deployment is configured for. Another
-   space's webhook pointed here is accepted silently and read with this
-   space's credentials — **Webhook authenticity** below says what that does.
-
    Select activity types **1, 2, 3** (issue created, updated, commented),
    **14** (issues updated in bulk) and **18, 19, 20** (pull request added,
-   updated, commented), plus **4** if you want issue-deletion events. Leave
-   **21** unchecked: the adapter ignores it, and merging or closing a pull
-   request arrives as a type-19 update anyway. **Never `allEvent`** — the full
-   range runs to 49 and would deliver git push, wiki and document activity this
-   adapter has no meaning for.
+   updated, commented), plus **4** for issue-deletion events. Leave **21**
+   unchecked — merging or closing a pull request arrives as a type 19 — and
+   **never select `allEvent`**, which delivers git, wiki and document activity
+   the adapter has no meaning for.
 
-   These checkboxes are the on/off switch per kind, and the only one — there is
-   no config option for it. Subscribe to 1, 2, 3 alone and no pull request
-   reaches a handler; subscribe to 18, 19, 20 alone and no issue does.
+   These checkboxes are the only on/off switch per kind: subscribe to 1, 2, 3
+   alone and no pull request reaches a handler.
 
-   **Type 14 is the one that costs more than it looks.** When someone updates
-   issues in bulk from the issue list, Backlog sends a *single* webhook for the
-   whole batch and no per-issue event at all — so without 14 a bulk status
-   change reaches no handler, while the comment it wrote on each issue is still
-   there for `thread.messages()` to find. That holds even for a batch of
-   **one**: an update made from the issue list is a type 14 whether it ticked
-   one issue or fifty, so leaving 14 unregistered loses single-issue updates
-   too, as long as they were made from that screen. With 14 registered, the adapter
-   unpacks that delivery into one message per issue, each in its own thread. A
-   batch of fifty issues is fifty handler runs from one request, and if your
-   handler calls the Backlog API each time, fifty calls against a per-minute
-   limit. If that is more than your deployment can absorb, leave 14
-   unregistered — that is the switch, and it is better than one in the adapter
-   because nothing is delivered in the first place.
+   **Type 14 costs more than it looks.** An update made from the issue list is
+   a single type-14 webhook for the whole batch — even a batch of one — and
+   Backlog sends no per-issue event for it, so without 14 those updates reach no
+   handler. With 14, the adapter unpacks the delivery into one message per
+   issue: fifty issues are fifty handler runs, and fifty API calls if the
+   handler makes one each. If that is more than your deployment can absorb,
+   leave 14 unregistered.
 
 ## Webhook authenticity — read this
 
 **Backlog cannot sign webhooks.** [Add Webhook](https://developer.nulab.com/docs/backlog/api/2/add-webhook/)
 accepts only `name`, `description`, `hookUrl`, `allEvent` and
-`activityTypeIds[]`: there is no secret parameter and no signature header. So
-the secret in the URL is the strongest sender-side check available, and it is
-weaker than an HMAC — anyone who learns the URL can post to it.
+`activityTypeIds[]`: there is no secret parameter and no signature header. The
+secret in the URL is the strongest sender-side check available, and it is
+weaker than an HMAC — anyone who learns the URL can post to it. Keep the URL out
+of logs and issue trackers.
 
-The adapter compares it in constant time and answers **401 with an identical
-body** for a missing and a wrong token, so an unauthenticated caller learns
-nothing from the difference. It also checks the
-token **before it reads the request body**, so a caller who has found the URL
-but not the secret costs your function nothing but a 401 after its headers.
+The adapter compares the token in constant time, answers **401 with an
+identical body** for a missing and a wrong token, and checks it **before
+reading the request body**, so a caller who found the URL but not the secret
+costs your function nothing but its headers. A `webhookVerifier` is handed the
+body, so with one the body is read first. The adapter sets no body-size limit;
+your platform or a reverse proxy does.
 
-A `webhookVerifier` is the one case where the body is read first: the verifier
-is handed it, so it has to be. The adapter sets no body-size limit of its own;
-put one in front of the function — your platform's request limit, a reverse
-proxy — if that matters for your deployment.
-
-Harden a deployment further with `webhookVerifier`, which replaces the secret
-check: an IP allowlist against
+Harden a deployment with `webhookVerifier`: an IP allowlist against
 [Backlog's published sender addresses](https://support.backlog.com/hc/en-us/articles/360051330313-Webhook-sender-IP-address)
-(they are "subject to change"), Basic auth credentials in the hook URL, mTLS,
-or a reverse-proxy assertion.
+(they are "subject to change"), Basic auth credentials in the hook URL, mTLS, or
+a reverse-proxy assertion.
 
-**A right secret from the wrong space is authentic.** Verification proves that
-the caller knows the secret, and nothing more: no Backlog payload says which
-space it came from, so the adapter takes it to be the configured one. Register
-space B's webhook with space A's deployment URL and secret and every delivery
-verifies, gets its 200, and is then addressed with space A's credentials.
-Nothing is posted, and the sender sees a success.
-
-Do not count on that being a harmless 404. Two spaces measured on 2026-09-06
-were minting issue ids from interleaving ranges, so an id from one space can
-name a real, unrelated issue in the other — and the bot comments there. The
-adapter cannot catch this for you: the payload carries no value that can be
-tied back to a host, and the one candidate for a consistency check
-(`project.projectKey`) would start dropping real events the first time
-somebody renames a project key (docs/specs/adapter.md D19).
-
-So register the hook URL only in its own space. The trace to grep for when
-a space has gone quiet is `project lookup failed` naming a project id that
-space does not have.
-
-Keep the URL out of logs and issue trackers: it carries the secret.
+**A right secret from the wrong space is authentic.** No Backlog payload says
+which space it came from, so the adapter takes every verified delivery to be
+from the configured one. Register space B's webhook with space A's URL and
+secret, and every delivery verifies and is then read with space A's
+credentials. That is not reliably a harmless 404: two spaces were measured
+minting issue ids from interleaving ranges, so an id from one can name a real,
+unrelated issue in the other, and the bot comments there. Nothing in the
+payload lets the adapter catch this ([spec D19](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#12-design-decisions)), so register
+the URL only in its own space. The trace of a misregistration is
+`project lookup failed` naming a project id the space does not have.
 
 ## Issues and pull requests
 
 Both are threads of the same shape: the root message's `text` is the summary, a
-blank line, then the description; every comment — Backlog's auto-generated
-changelog comments included — is a message, `thread.post()` comments on the
-thread, and the **project** is the channel for both. Nothing in the `Adapter`
-surface asks you which kind you are on; the id says it.
-
-`message.subject` says it too, when a handler needs to branch:
+blank line, then the description; every comment — Backlog's changelog comments
+included — is a message; `thread.post()` comments on the thread; and the
+**project** is the channel. `message.subject` tells the kinds apart when a
+handler needs to:
 
 ```ts
 chat.onNewMention(async (thread, message) => {
@@ -261,175 +201,112 @@ chat.onNewMention(async (thread, message) => {
 });
 ```
 
-`subject.type` is `"issue"` or **`"pull_request"`** — the same string
+`subject.type` is `"issue"` or **`"pull_request"`**, the string
 `@chat-adapter/github` uses. `subject.labels` carries the issue type and
 priority for an issue, and the status plus `"<base> ← <branch>"` for a pull
-request.
+request. Elsewhere — `fetchThread().metadata.kind`, `raw.subject.kind`,
+`raw.kind` — the package's own spelling is `"pullRequest"`.
 
-The other spelling, `"pullRequest"`, is this package's own vocabulary and
-appears wherever the id grammar's subject does: `fetchThread().metadata.kind`,
-the `raw.subject.kind` of a comment's raw message, and the `raw.kind` of a root
-message's. Only `subject.type` follows the ecosystem.
-
-What a pull-request thread cannot do — delete a comment, get listed by
-`listThreads`, be merged, closed or created — is in the table below.
+A field change arrives as a comment with empty `text` and the change in
+`message.raw.changes`, so key a handler on `raw.changes`, not on "has text".
 
 ## Features and limitations
 
 | Capability | Support |
 | --- | --- |
-| Issue threads | yes |
-| Pull-request threads | yes |
-| Post and edit a comment | yes — both kinds |
-| Delete a comment | partial — issue comments only (see below) |
-| File uploads and downloads | yes — a pull-request comment's attachment resolves by name (see below) |
-| Mentions | yes — the webhook's notification list, a text match, or assignment to the bot |
-| Reactions | partial — one Backlog star; the emoji is ignored (see below) |
-| Streaming | partial — buffered, posted once (see below) |
-| Issue creation via `channel.post()` | **no** — call `client().postIssue()` (see below) |
-| Pull-request creation, merge or close | **no** — Backlog exposes no API (see below) |
-| Thread listing | partial — issues only (see below) |
-| User lookup, parent subject | yes — both kinds |
-| Message-deleted events | partial — issue deletion only; nothing deletes a pull request |
-| Message-updated events | **no** — see below |
+| Issue and pull-request threads | yes |
+| Post and edit a comment | yes |
+| Delete a comment | partial — issue comments only |
+| File uploads and downloads | yes |
+| Mentions | yes — notification, text match, or assignment to the bot |
+| Reactions | partial — one Backlog star; the emoji is ignored |
+| Streaming | partial — buffered, posted once |
+| Issue creation via `channel.post()` | **no** — call `client().postIssue()` |
+| Pull-request creation, merge or close | **no** — Backlog exposes no API |
+| Thread listing | partial — issues only |
+| User lookup, parent subject | yes |
+| Message-deleted events | partial — issue deletion only |
+| Message-updated events | **no** |
 | DMs, ephemeral messages, modals, buttons, slash commands, scheduling, nested replies, typing indicators | no — Backlog has no counterpart |
 
-Limitations worth knowing before you build on this:
-
-- **Comment edits fire no webhook.** Editing a comment in Backlog creates no
-  activity, however many times you do it, so `onMessageUpdated` never fires and
-  text placed by editing reaches nobody.
-- **A pull-request comment cannot be deleted.** Backlog has no endpoint for it,
-  so `deleteMessage` on a pull-request thread throws `AdapterError` with code
-  `UNSUPPORTED_OPERATION` before any request is made — `SentMessage.delete()`
-  there is a rejection a bot author has to expect. Issue comments delete
-  normally.
-- **`listThreads` lists issues only.** A pull-request list is per repository, a
-  coordinate the channel id does not carry;
-  `client().getPullRequests(projectId, repositoryId, …)` is the route to one.
-- **A pull request cannot be closed or merged from Chat.** Backlog exposes no
-  API for a status change. Merge in git or in the UI; the change then arrives
-  as a type-19 activity like any other update.
-- **`channel.post()` rejects with `ValidationError`.** A channel is a
-  project, and a project id is not a thread. Create an issue with
-  `client().postIssue(...)`; nothing creates a pull request, because
-  Backlog exposes no API for it.
-- **Creating a pull request with `notifiedUserId[]` adds a system comment no
+- **Comment edits fire no webhook**, so `onMessageUpdated` never fires and text
+  placed by editing reaches nobody.
+- **Adding the bot as a recipient of an existing comment is not a mention.**
+  Backlog reports it as a separate activity carrying the original comment,
+  which the adapter ignores so the comment is not delivered twice; address the
+  bot when posting instead.
+- **A pull-request comment cannot be deleted.** Backlog has no endpoint, so
+  `deleteMessage` there throws `AdapterError` with code
+  `UNSUPPORTED_OPERATION` before any request.
+- **`listThreads` lists issues only.** A pull-request list is per repository;
+  use `client().getPullRequests(projectId, repositoryId, …)`.
+- **`channel.post()` rejects with `ValidationError`**: a project is not a
+  thread. Create an issue with `client().postIssue(...)`.
+- **A pull request created with `notifiedUserId[]` gets a system comment no
   activity announces**, so `fetchMessages` returns one message the webhook
-  stream never delivered. A consumer reconciling the two will see the
-  difference.
-- **A pull-request comment's attachment resolves its id by name.** Its
-  `changeLog` names the file without an id, so `fetchData` lists the pull
-  request's attachments and takes the newest match — two files with the same
-  name in one pull request are indistinguishable. The list call is spent only
-  when someone actually reads the file, not once per message.
-- **A reaction is one star, and a repeat call costs a read instead of a
-  second star.** `POST /stars` is not idempotent — Backlog accepts the same
-  star twice from the same user and shows two (measured 2026-09-06) — so
-  `addReaction` reads the comment first and does nothing when the bot's own
-  star is already there. That covers a retry, a redelivered webhook and a
-  handler reacting to one comment twice; it is not a lock, so two
-  `addReaction` calls racing for the same comment can still leave two stars.
-  `removeReaction` deletes only stars the bot presented, never a human's.
-- **A root message leads with the summary.** Its `text` is the summary, a
-  blank line, then the description, so a bot that reads the first word of a
-  message as a command reads a word of the issue title on the thread's first
-  message. Parse the line the mention is on, not the whole text.
-- **`stream()` is buffered on purpose.** Left unimplemented, Chat SDK posts a
-  message and edits it every 500 ms — roughly 120 edits a minute against a
-  documented example limit of 150 updates a minute, so one streamed reply could
-  exhaust the user's write quota. This adapter accumulates the stream and posts
-  once, which makes `streamingUpdateIntervalMs` irrelevant. An **empty stream
-  still posts a single space**, so `stream()` always resolves to a message the
-  caller can edit or delete. Watch for that when you hand an AI SDK
-  `fullStream` straight to `thread.post()`: a model failure arrives as an
-  `{ type: 'error' }` chunk rather than a thrown error, Chat SDK's
-  `fromFullStream` forwards text and three known chunk types and drops
-  everything else, so the failure reaches this adapter as a stream with no
-  content and lands in Backlog as a comment holding one space. Iterate
-  `fullStream` yourself if you want the error to surface (measured against
-  Chat SDK 4.40 and AI SDK 7 on 2026-09-06).
-- **Backlog notation is not Markdown.** A project set to `backlog` uses a
-  different syntax, and the converter is deliberately lossy in two places:
-  inline code becomes plain text and table column alignment is dropped.
-  `&color()`, `#contents`, `#rev`, `#attach`, `#thumbnail`, wiki links and
-  issue-key auto-links pass through as text.
-- **Notation markers in your own text become decoration.** Backlog notation has
-  a documented escape — a `\` before a special character prints it literally,
-  so `\%\%Not Striked\%\%` renders as `%%Not Striked%%` — but this adapter does
-  **not** apply it when rendering a message to a `backlog` project. Whatever
-  markers your text already contains are markup by the time Backlog draws it:
-  `price is ''100''` puts `100` in bold, `50%% off, %%today` strikes text
-  through, `[[TICKET-1]]` becomes a link, a line opening with `* ` becomes an
-  H1, and a line that is just `{code}` opens a code macro that swallows the
-  rest. Model-generated replies hit this without trying. Escaping is not
-  applied because the guide documents the rule for `%` and `\` only and does
-  not say which other characters `\` covers, what it does before an ordinary
-  character, how an escaped comment should read back in, or whether a literal
-  `¥` escapes the way its `\(¥¥)` gloss can be read to promise — which would
-  put `¥100` in a Japanese sentence at risk. Getting that set wrong would eat
-  your backslashes instead of fixing anything. If you need a literal marker
-  today, post a `{ raw }` postable: it bypasses the converter and reaches
-  Backlog verbatim, so you can apply `\` yourself.
-- **A hand-typed `@Chatbot` is indistinguishable from a real mention.** Backlog
-  rewrites mentions to resolved display text before storing them, so a text
-  match cannot tell a real mention from someone typing the bot's name. False
-  positives are accepted. The webhook's own notification list and assignment to
-  the bot are the reliable triggers — but only a webhook has that list: the
-  same activity read back through `GET /space/activities` reports no
-  recipients, so a poller cannot reproduce the detection.
-- **`chat.getUser()` cannot route to this adapter** — the core infers the
-  adapter from the id shape and does not recognise `<host>:<id>`. Call
-  `adapter.getUser()` directly.
-- **`thread.messages` is not free.** Each page is one comment-list call for
-  either kind; `listThreads` draws on Backlog's **search** limit (lower than
-  `read`).
-- **Delivery is at-least-once.** The core dedupes on `message.id` for ten
-  minutes by default; a redelivery after that is processed again. `message.id`
-  is stable across deliveries, so key durable idempotency on it — and use a
-  durable `StateAdapter`, since subscriptions live in core state and an
-  in-memory one forgets them on restart.
-- **A project has no single comment stream**, so `fetchChannelMessages` is
-  absent and `channel.messages` is not meaningful.
+  never delivered.
+- **A pull-request comment's attachment resolves its id by name.** Backlog
+  names the file without an id, so `fetchData` lists the pull request's
+  attachments and takes the newest match; two files with one name are
+  indistinguishable.
+- **A reaction is one star.** Backlog accepts the same star twice, so
+  `addReaction` reads the comment first and does nothing when the bot's star
+  is there. It is not a lock: two calls racing can still leave two stars.
+  `removeReaction` deletes only the bot's stars.
+- **A root message leads with the summary**, so a bot that reads the first word
+  as a command reads the issue title. Parse the line the mention is on.
+- **`stream()` is buffered on purpose.** Otherwise Chat SDK edits the message
+  every 500 ms — about 120 edits a minute against a documented example limit of
+  150 updates — so the adapter posts once, and `streamingUpdateIntervalMs` does
+  not apply. An **empty stream posts a single space**, so `stream()` always
+  resolves to a message. Handing an AI SDK `fullStream` to `thread.post()`
+  hits this on a model failure: the error chunk is dropped by Chat SDK's
+  `fromFullStream`, and the comment holds one space. Iterate `fullStream`
+  yourself to surface the error.
+- **Backlog notation is not Markdown.** On a project set to `backlog`, inline
+  code becomes plain text and table alignment is dropped; `&color()`,
+  `#contents`, `#rev`, `#attach`, `#thumbnail`, wiki links and issue-key
+  auto-links pass through as text.
+- **Notation markers in your own text become decoration.** The adapter does not
+  apply notation's `\` escape, so on a `backlog` project `price is ''100''`
+  bolds `100`, `50%% off, %%today` strikes text through, `[[TICKET-1]]` becomes
+  a link and a line that is just `{code}` swallows the rest. Model-generated
+  replies hit this without trying. Which characters `\` escapes is undocumented,
+  so it is not guessed; post a `{ raw }` postable, which reaches Backlog
+  verbatim, and escape it yourself.
+- **`chat.getUser()` cannot route to this adapter**; call `adapter.getUser()`.
+- **`thread.messages` is not free**: each page is one comment-list call.
+  `listThreads` draws on Backlog's lower **search** limit.
+- **Delivery is at least once.** The core dedupes on `message.id` for ten
+  minutes by default; `message.id` is stable across deliveries, so key durable
+  idempotency on it, and use a durable `StateAdapter`.
+- **A project has no single comment stream**, so `channel.messages` is not
+  meaningful.
 
 ## Ids
 
 Every id carries the **subject** — `issue:<issueId>` or
-`pr:<repositoryId>:<number>` — so a thread id and the ids of its messages agree
-about what they address.
+`pr:<repositoryId>:<number>` — so a thread id and its message ids agree about
+what they address.
 
 | Kind | Shape | Example |
 | --- | --- | --- |
 | Channel (project) | `backlog:<host>:<projectId>` | `backlog:example.backlog.com:500` |
 | Thread — issue | `backlog:<host>:<projectId>:issue:<issueId>` | `backlog:example.backlog.com:500:issue:8001` |
 | Thread — pull request | `backlog:<host>:<projectId>:pr:<repositoryId>:<number>` | `backlog:example.backlog.com:500:pr:700:12` |
-| Root message (issue body / pull-request description) | `<host>:<subject>:r` | `example.backlog.com:issue:8001:r`<br>`example.backlog.com:pr:700:12:r` |
-| Comment | `<host>:<subject>:c<commentId>` | `example.backlog.com:issue:8001:c3001`<br>`example.backlog.com:pr:700:12:c4002` |
+| Root message | `<host>:<subject>:r` | `example.backlog.com:issue:8001:r` |
+| Comment | `<host>:<subject>:c<commentId>` | `example.backlog.com:pr:700:12:c4002` |
 | Update without a comment | `<host>:<subject>:u:<created>` | `example.backlog.com:issue:8001:u:2026-09-03T04:05:06Z` |
 | User | `<host>:<userId>` | `example.backlog.com:100` |
 
-The kind is an explicit segment on **both** kinds, never inferred. Issue and
-pull-request comment ids come from separate sequences and may overlap, so a
-bare comment id does not identify a message on its own — keep the whole id.
+Ids are **numeric, never issue keys or repository names**, which a rename
+rewrites. Issue and pull-request comment ids come from separate sequences and
+may overlap, so keep the whole id rather than a bare comment id. Every numeric
+segment is a positive integer of at most `Number.MAX_SAFE_INTEGER`; anything
+outside the grammar is a `ValidationError`.
 
-Ids are **numeric, never issue keys**: renaming a project key rewrites every
-issue key under it, while the numeric ids never change. `issueKey` appears only
-in metadata and URLs. A pull request is likewise addressed by its numeric
-repository id and its per-repository `number` — never the repository name,
-which can change, and never its space-wide `id`, which appears only in raw
-data.
-
-The host is part of message and user ids because Backlog comment ids are unique
-only within one space. A pull request's channel is its **project**, not its
-repository.
-
-Every numeric segment is a positive integer of at most
-`Number.MAX_SAFE_INTEGER`, and an id outside the grammar is a
-`ValidationError` wherever the adapter reads or writes one.
-
-A thread id is read back with `adapter.decodeThreadId(id)`. Message and user
-ids have no adapter member to read them, so the package exports the two
-decoders a handler needs:
+A thread id is read back with `adapter.decodeThreadId(id)`; message and user ids
+with the two exported decoders:
 
 ```ts
 import { decodeMessageId, decodeUserId } from '@nulab/chat-adapter-backlog';
@@ -441,53 +318,29 @@ decodeUserId(message.author.userId).userId; // 100 — the numeric Backlog user 
 
 ## Mentions
 
-Detected when the delivery names the bot among the users it notified, when the
-message text matches `@<botUserName>` (case-sensitive, left-bounded, so
-`@Chatbot2` and `foo@Chatbot` do not match), or when the bot is assigned the
-issue or the pull request. Without a `botUserName` the text rule is off and the
-other two still hold (see **Bot identity**).
+A message is a mention when the webhook names the bot among the users it
+notified, when its text matches `@<botUserName>` (case-sensitive and bounded, so
+`@Chatbot2` and `foo@Chatbot` do not match), or when it assigns the issue or
+pull request to the bot. The notification list is what makes the UI's
+notification field work: recipients chosen there leave no `@` in the text.
+Only a webhook carries that list; the same activity read from the activities
+API reports none.
 
-The notification list is what makes the UI's own way of addressing someone work.
-A comment whose recipients were chosen in the issue's notification field —
-rather than by typing `@name` — leaves no `@` in the stored text at all, so it
-would otherwise arrive as an unaddressed comment. Backlog carries that list on
-the **webhook** only; the same activity fetched from the activities API reports
-none. The reason code is not filtered: anything Backlog notified the bot about
-counts as a mention.
+- **The core's check is looser.** Chat SDK runs its own `@<userName>` match
+  case-insensitively and ORs it in, so `@chatbot` reaches your handler as a
+  mention.
+- **A pull request's summary keeps mention notation raw** — `<@U999>`, not
+  `@Chatbot`. The adapter matches both, so **read `message.isMention`** rather
+  than re-matching the text.
+- **Being the standing assignee is not a mention.** Becoming the assignee is;
+  later comments and edits on a subject the bot owns are ordinary messages.
+- **A hand-typed `@Chatbot` is indistinguishable from a real mention**, and is
+  accepted as one.
 
-Through `chat`, the effective check is looser than that: the core runs its own
-`@<userName>` regex **case-insensitively** and ORs the result in, so `@chatbot`
-reaches your handler with `isMention` true even though this adapter answered
-false. The core can only add mentions, never remove one.
-
-Two asymmetries are worth knowing.
-
-A pull request's **summary keeps mention notation raw**: `<@U999>` stays
-literal there — in storage, in the API and in the webhook body — while a
-description or a comment is rewritten to `@<display name>` on save. A new pull
-request's text is matched against both forms, so **read `message.isMention`
-rather than re-matching the text yourself**; a handler looking for `@Chatbot`
-finds nothing in a summary that says `<@U999>`.
-
-Being the **standing assignee** is not a mention. Assignment is: opening a pull
-request assigned to the bot, or changing an issue's or a pull request's assignee
-to it, all count. But once the bot is the assignee, later comments, edits and
-merges on that subject are ordinary messages — otherwise every review comment
-would address the bot. The payload does carry the current assignee on every
-event, and this adapter deliberately does not read it as an assignment; only
-the change record is one.
-
-That leaves no gap where the change record under-reports. A single `PATCH` that
-changed the assignee together with another field was once measured to report the
-other fields and not the assignee — but it still notified the new assignee, and
-the notification list is read first. So an update naming no assignee change is a
-mention when Backlog notified the bot about it and an ordinary message when it
-did not, which is also the right answer for a plain edit of a subject the bot
-already owns.
-
-To mention someone outbound, write Backlog's own notation — `<@U<userId>>`,
-`<@T<teamId>>` or `<@project>`. It notifies the user even without
-`notifiedUserId`:
+To mention someone outbound, write Backlog's notation — `<@U<userId>>`,
+`<@T<teamId>>` or `<@project>`; it notifies even without `notifiedUserId`.
+`notifiedUserId` notifies without a visible `@name`, and Backlog silently drops
+ids that are not project members:
 
 ```ts
 import type { PostableMarkdown } from 'chat';
@@ -499,49 +352,31 @@ const ping: PostableMarkdown & BacklogPostableExtras = { markdown: 'ping', notif
 await thread.post(ping);
 ```
 
-The annotated variable is not ceremony: an object literal passed straight to
-`post()` — `satisfies` included — is checked against `post()`'s own parameter
-type, which knows no Backlog extras, and fails excess-property checking. Nor
-can the annotation be dropped: an unannotated variable compiles too, but then
-nothing type-checks the extras themselves. A misspelt key is silently ignored,
-and a mistyped value surfaces only at run time as a `ValidationError`; the
-annotation catches both at compile time.
-
-`notifiedUserId` is independent: it notifies without leaving a visible `@name`.
-Backlog silently drops ids that are not project members.
+The annotated variable is required: an object literal passed straight to
+`post()` fails its excess-property check, and an unannotated variable leaves
+the extras unchecked until a `ValidationError` at run time.
 
 ## Errors
 
-Every failure surfaces as a class from `@chat-adapter/shared` —
-`ValidationError`, `AuthenticationError`, `PermissionError`,
-`ResourceNotFoundError`, `AdapterRateLimitError`, `NetworkError` or
-`AdapterError`. The class is chosen from Backlog's own `errors[].code` before
-the HTTP status, because Backlog reuses one status for several codes.
-
-`error.cause` carries `{ status, code?, message, moreInfo?, url }` with the
-query string stripped, so it never leaks the secret. No `zod` or `backlog-js`
-error ever escapes the package.
+Every failure is a class from `@chat-adapter/shared` — `ValidationError`,
+`AuthenticationError`, `PermissionError`, `ResourceNotFoundError`,
+`AdapterRateLimitError`, `NetworkError` or `AdapterError` — chosen from
+Backlog's `errors[].code` before the HTTP status. `error.cause` carries
+`{ status, code?, message, moreInfo?, url }` with the query string stripped. No
+`zod` or `backlog-js` error escapes the package.
 
 ## Rate limits and the raw API
 
-Backlog limits requests **per user, per minute**, and the numbers differ by
-plan. The adapter does not track them: it spends what it needs, and a request
-Backlog refuses with a 429 is retried or surfaced as `AdapterRateLimitError`
-(below). To see the figures yourself, call Backlog's
-[Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/)
-through `client()`.
+Backlog limits requests **per user, per minute**, differently per plan. The
+adapter does not track the limits; a request Backlog refuses with a 429 is
+retried once or surfaced as `AdapterRateLimitError`. Issue listing draws on the
+**search** limit, pull-request listing on `read`.
 
-Issue listing and counting draw on Backlog's **search** limit, not `read` — the
-trap any polling loop falls into. Listing or counting **pull requests** draws on
-`read` instead, so the two lists have different budgets and one being exhausted
-says nothing about the other.
-
-For anything outside the Chat SDK contract — custom fields, project settings,
-changing an assignee, the pull-request list `listThreads` deliberately does not
-cover — `client()` hands back the very
-[`backlog-js`](https://github.com/nulab/backlog-js) client the adapter makes
-its own calls with, so those calls share the same 429 retry and raise the same
-errors:
+For anything outside the Chat SDK contract — custom fields, an assignee, the
+pull-request list, [Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/)
+— `client()` hands back the [`backlog-js`](https://github.com/nulab/backlog-js)
+client the adapter itself uses, with the same 429 retry and errors. A client of
+your own would have neither.
 
 ```ts
 const client = adapter.client();
@@ -549,26 +384,18 @@ const fields = await client.getCustomFields(500); // projectId
 const pullRequests = await client.getPullRequests(500, '700', { count: 20 }); // projectId, repositoryId
 ```
 
-Build a Backlog client of your own instead and none of that holds.
-
 ### A 429 blocks the call for up to a minute
 
-Backlog sends no `Retry-After`, so a 429 is retried once by waiting until
-`X-RateLimit-Reset` — **up to 60 seconds, during which the call simply does
-not return**. A reset further off than that, or a second 429, rejects with
-`AdapterRateLimitError` at once; neither bound is configurable. On a paid space the wait is
-rare; on a free plan (15 updates per minute) a burst of comments reaches it
-easily, and a wait of ~55 seconds was measured on 2026-09-06.
+A 429 is retried once, after waiting until `X-RateLimit-Reset` — **up to 60
+seconds, during which the call does not return**. A reset further off, or a
+second 429, rejects with `AdapterRateLimitError` at once. On a free plan (15
+updates per minute) a burst of comments reaches the wait easily.
 
-That matters wherever execution time is capped. Serverless runtimes commonly
-stop a request at 60 seconds by default — no longer than the wait itself — and
-kill the call in the middle of it. The comment then disappears without an
-error, because the webhook already answered 200 and the work was running in the
-background. Give the runtime a ceiling comfortably above 60 seconds — on
-Vercel, `export const maxDuration = 90` in the function's module.
-
-Both outcomes are logged, at `warn`, through the Chat SDK logger — one line
-when the adapter starts waiting, one when it refuses to:
+Wherever execution time is capped, allow comfortably more than 60 seconds — on
+Vercel, `export const maxDuration = 90` in the function's module. Otherwise the
+runtime kills the call mid-wait, and because the webhook already answered 200,
+the reply disappears without an error. Both outcomes log one `warn` through the
+Chat SDK logger:
 
 ```
 rate limited; waiting for the limit to reset
@@ -577,36 +404,30 @@ rate limited; not retrying
   { remaining: 0, resetAt: '2026-09-06T12:39:00.000Z', waitMs: 300_000, attempt: 1 }
 ```
 
-Nothing else about rate limiting is logged; a line per request would be one
-entry per API call against a per-minute limit.
-
 ## Testing
 
-A bot's own tests need no network and no credentials when they stop at the
-adapter's boundary. The handlers a bot registers receive a `Thread` and a
-`Message`, so test them with the Chat SDK's own kit —
-[`@chat-adapter/tests`](https://chat-sdk.dev/docs/testing) builds a mock
-adapter, `ChatInstance` and state — and mock `adapter.client()` with your
-test runner where a handler reaches Backlog directly. The adapter does not
-offer an in-memory Backlog of its own.
+A bot's handlers receive a `Thread` and a `Message`, so test them with Chat
+SDK's own kit, [`@chat-adapter/tests`](https://chat-sdk.dev/docs/testing), and
+mock `adapter.client()` where a handler reaches Backlog directly. No network or
+credentials are needed.
 
 ## Links
 
 - [examples/](https://github.com/nulab/chat-adapter-backlog/tree/main/examples)
-  — deployable bots built on this adapter, in order of how much they ask of you
+  — deployable bots built on this adapter
 - [Chat SDK documentation](https://chat-sdk.dev/docs)
 - [Backlog API v2](https://developer.nulab.com/docs/backlog/)
 - [sample-messages.md](https://github.com/nulab/chat-adapter-backlog/blob/main/sample-messages.md)
   — a payload per activity type
+- [docs/specs/adapter.md](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md)
+  — the full behaviour specification
 - [DEVELOPMENT.md](https://github.com/nulab/chat-adapter-backlog/blob/main/DEVELOPMENT.md)
   — contributor setup
 
 ## Package name
 
-Chat SDK's convention for community adapters is the unscoped
-`chat-adapter-<platform>`, but `chat-adapter-backlog` on npm is already taken
-by an unrelated third-party package, so this one is published under the
-`@nulab` scope.
+`chat-adapter-backlog`, Chat SDK's convention for community adapters, is taken
+on npm by an unrelated package, so this one is published under `@nulab`.
 
 ## License
 

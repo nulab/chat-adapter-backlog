@@ -33,9 +33,10 @@ nothing about live behavior. If the opt-in live suite ran, say so.
       installs with `--frozen-lockfile`.
 - [ ] The public entry's exports changed: `scripts/consumer-smoke/smoke.mjs`
       changed in this PR too.
-- [ ] `exports`, `files`, `engines` or the build config changed: `pnpm build`
-      ran locally, since publint and attw run only there.
+- [ ] `exports`, `files`, the env fallbacks or `engines.node` changed:
+      `scripts/consumer-smoke/smoke.mjs` changed in this PR too (CLAUDE.md,
+      State of the repo).
 
 <!-- Adapter design constraints: rate limits in .claude/rules/backlog-api-facts.md; webhook authenticity
-(D2) and `stream()` (D4) in docs/specs/adapter.md §14; how to comment and
+(D2) and `stream()` (D4) in docs/specs/adapter.md's decision table; how to comment and
 where each fact lives in CLAUDE.md. -->
