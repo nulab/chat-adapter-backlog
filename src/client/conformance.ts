@@ -281,6 +281,14 @@ export function describeBacklogApiConformance(
       });
     });
 
+    it('the authenticated user is the bot the credential belongs to', async () => {
+      const api = await factory();
+      await expect(api.getMyself()).resolves.toMatchObject({
+        id: BOT.id,
+        name: BOT.name,
+      });
+    });
+
     it('a missing issue, project, user or comment is a ResourceNotFoundError', async () => {
       const api = await factory();
       await expect(api.getIssue(999_999)).rejects.toBeInstanceOf(

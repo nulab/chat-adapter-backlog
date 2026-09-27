@@ -1398,7 +1398,7 @@ describe('BacklogAdapter.handleWebhook — dispatch ordering and error handling'
     );
 
     // The response already came back although the factory is still blocked
-    // on the deferred promise above — proving §5.1 step 12 ("returned
+    // on the deferred promise above — proving §5.1 step 13 ("returned
     // before processing completes").
     expect(response.status).toBe(200);
     expect(factoryResolved).not.toHaveBeenCalled();
@@ -4079,4 +4079,321 @@ selfMessageContract({
         },
       })
     ),
+});
+
+/**
+ * A port whose `getMyself` answers the fixture bot and counts its calls, for
+ * the installations below that leave the identity to the API.
+ */
+function myselfCountingApi(host: string = FIXTURE.host) {
+  const api = createInMemoryBacklogApi({
+    projects: [conformanceFixture.baseProject()],
+    issues: [conformanceFixture.baseIssue()],
+    users: [CHATBOT_USER_REF],
+    me: CHATBOT_USER_REF,
+  });
+  const getMyself = vi.spyOn(api, 'getMyself');
+  return { api, getMyself, host };
+}
+
+function identitylessConfig(createApi: () => BacklogApi) {
+  return {
+    host: FIXTURE.host,
+    apiKey: 'test-api-key',
+    webhookSecret: FIXTURE.webhookSecret,
+    createApi,
+  };
+}
+
+function selfAuthoredComment() {
+  return issueCommented({
+    createdUser: {
+      id: FIXTURE.bot.id,
+      name: FIXTURE.bot.name,
+      userId: FIXTURE.bot.userId,
+    },
+  });
+}
+
+describe('BacklogAdapter bot identity (§3.2, D23)', () => {
+  it('a configured botUserId and botUserName cost no GET /users/myself at all', async () => {
+    const { api, getMyself } = myselfCountingApi();
+    const adapter = createBacklogAdapter({
+      ...identitylessConfig(() => api),
+      botUserId: FIXTURE.bot.id,
+      botUserName: FIXTURE.bot.name,
+    });
+    const chat = createMockChatInstance({ logger: createMockLogger() });
+    await adapter.initialize(chat);
+
+    await adapter.handleWebhook(webhookRequest(issueCommented()));
+    await adapter.handleWebhook(webhookRequest(selfAuthoredComment()));
+    await adapter.getUser(`${FIXTURE.host}:${FIXTURE.bot.id}`);
+
+    expect(getMyself).not.toHaveBeenCalled();
+  });
+
+  it('constructing without a bot identity validates synchronously and calls nothing', () => {
+    const createApi = vi.fn(() => myselfCountingApi().api);
+
+    const adapter = createBacklogAdapter(identitylessConfig(createApi));
+
+    expect(adapter.name).toBe('backlog');
+    expect(createApi).not.toHaveBeenCalled();
+  });
+
+  it('constructs from BACKLOG_HOST, BACKLOG_API_KEY and BACKLOG_WEBHOOK_SECRET alone', () => {
+    process.env.BACKLOG_HOST = 'example.backlog.com';
+    process.env.BACKLOG_API_KEY = 'env-api-key';
+    process.env.BACKLOG_WEBHOOK_SECRET = 'env-webhook-secret';
+
+    expect(() => createBacklogAdapter()).not.toThrow();
+  });
+
+  it('a configured half is still validated when the other half is left to the API', () => {
+    expect(() =>
+      createBacklogAdapter({
+        ...identitylessConfig(() => myselfCountingApi().api),
+        botUserName: '  ',
+      })
+    ).toThrow(ValidationError);
+    expect(() =>
+      createBacklogAdapter({
+        ...identitylessConfig(() => myselfCountingApi().api),
+        botUserId: 0,
+      })
+    ).toThrow(ValidationError);
+  });
+
+  it('blank BACKLOG_BOT_USER_ID and BACKLOG_BOT_USER_NAME are looked up rather than rejected', async () => {
+    process.env.BACKLOG_BOT_USER_ID = '';
+    process.env.BACKLOG_BOT_USER_NAME = '';
+    const { api, getMyself } = myselfCountingApi();
+    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+
+    await adapter.initialize(
+      createMockChatInstance({ logger: createMockLogger() })
+    );
+
+    expect(getMyself).toHaveBeenCalledTimes(1);
+    expect(adapter.botUserName(FIXTURE.host)).toBe(FIXTURE.bot.name);
+  });
+
+  it('botUserName before the identity is known is refused rather than guessed', () => {
+    const adapter = createBacklogAdapter(
+      identitylessConfig(() => myselfCountingApi().api)
+    );
+
+    let failure: unknown;
+    try {
+      adapter.botUserName(FIXTURE.host);
+    } catch (cause) {
+      failure = cause;
+    }
+
+    expect(failure).toBeInstanceOf(AdapterError);
+    expect((failure as AdapterError).code).toBe('BOT_IDENTITY_UNRESOLVED');
+  });
+
+  it('with neither configured, initialize reads both from one GET /users/myself', async () => {
+    const { api, getMyself } = myselfCountingApi();
+    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+    const chat = createMockChatInstance({ logger: createMockLogger() });
+
+    await adapter.initialize(chat);
+
+    expect(getMyself).toHaveBeenCalledTimes(1);
+    expect(adapter.userName).toBe(FIXTURE.bot.name);
+    expect(adapter.botUserName(FIXTURE.host)).toBe(FIXTURE.bot.name);
+  });
+
+  it('the fetched id suppresses the bot’s own comments and the lookup is not repeated', async () => {
+    const { api, getMyself } = myselfCountingApi();
+    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+    const chat = createMockChatInstance({ logger: createMockLogger() });
+    await adapter.initialize(chat);
+
+    const self = await adapter.handleWebhook(
+      webhookRequest(selfAuthoredComment())
+    );
+    expect(self.status).toBe(200);
+    expect(chat).not.toHaveDispatched('processMessage');
+
+    const other = await adapter.handleWebhook(webhookRequest(issueCommented()));
+    expect(other.status).toBe(200);
+    expect(chat).toHaveDispatched('processMessage');
+
+    expect(getMyself).toHaveBeenCalledTimes(1);
+  });
+
+  it('a configured botUserName wins over the fetched name, and the id still comes from the API', async () => {
+    const { api } = myselfCountingApi();
+    const adapter = createBacklogAdapter({
+      ...identitylessConfig(() => api),
+      botUserName: 'Support Bot',
+    });
+    const chat = createMockChatInstance({ logger: createMockLogger() });
+    await adapter.initialize(chat);
+
+    expect(adapter.botUserName(FIXTURE.host)).toBe('Support Bot');
+    await adapter.handleWebhook(webhookRequest(selfAuthoredComment()));
+    expect(chat).not.toHaveDispatched('processMessage');
+  });
+
+  it('a configured botUserId wins over the fetched id, and the name still comes from the API', async () => {
+    const { api } = myselfCountingApi();
+    const adapter = createBacklogAdapter({
+      ...identitylessConfig(() => api),
+      botUserId: FIXTURE.alice.id,
+    });
+    const chat = createMockChatInstance({ logger: createMockLogger() });
+    await adapter.initialize(chat);
+
+    expect(adapter.botUserName(FIXTURE.host)).toBe(FIXTURE.bot.name);
+    // Alice is the configured bot now, so her comment is the one skipped.
+    await adapter.handleWebhook(webhookRequest(issueCommented()));
+    expect(chat).not.toHaveDispatched('processMessage');
+  });
+
+  it('only the installations missing an identity are looked up, once each', async () => {
+    const first = myselfCountingApi(FIXTURE.host);
+    const second = myselfCountingApi(FIXTURE.otherHost);
+    const ports = new Map([
+      [first.host, first.api],
+      [second.host, second.api],
+    ]);
+    const adapter = createBacklogAdapter({
+      installations: [
+        {
+          host: FIXTURE.host,
+          apiKey: 'k1',
+          botUserId: FIXTURE.bot.id,
+          botUserName: FIXTURE.bot.name,
+          webhookSecret: FIXTURE.webhookSecret,
+        },
+        {
+          host: FIXTURE.otherHost,
+          apiKey: 'k2',
+          webhookSecret: 'other-webhook-secret',
+        },
+      ],
+      createApi: (installation) => ports.get(installation.host) as BacklogApi,
+    });
+    const chat = createMockChatInstance({ logger: createMockLogger() });
+
+    await adapter.initialize(chat);
+
+    expect(first.getMyself).not.toHaveBeenCalled();
+    expect(second.getMyself).toHaveBeenCalledTimes(1);
+    expect(adapter.botUserName(FIXTURE.otherHost)).toBe(FIXTURE.bot.name);
+  });
+
+  it('a failed lookup does not fail initialize; it is logged and retried by the next webhook', async () => {
+    const { api, getMyself } = myselfCountingApi();
+    getMyself.mockRejectedValueOnce(new Error('network down'));
+    const logger = createMockLogger();
+    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+    const chat = createMockChatInstance({ logger });
+
+    await expect(adapter.initialize(chat)).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'bot identity lookup failed; retried on demand',
+      { host: FIXTURE.host, error: 'network down' }
+    );
+    expect(adapter.userName).toBe('');
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(selfAuthoredComment())
+    );
+
+    expect(response.status).toBe(200);
+    expect(chat).not.toHaveDispatched('processMessage');
+    expect(getMyself).toHaveBeenCalledTimes(2);
+    expect(adapter.userName).toBe(FIXTURE.bot.name);
+  });
+
+  it('a webhook whose bot identity cannot be learned is answered 503 and not dispatched', async () => {
+    // Dispatching without the id would skip the self-message check, and a
+    // bot that answers its own comments answers them forever.
+    const { api, getMyself } = myselfCountingApi();
+    getMyself.mockRejectedValue(new Error('network down'));
+    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+    const chat = createMockChatInstance({ logger: createMockLogger() });
+    await adapter.initialize(chat);
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented())
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe('Bot identity unavailable');
+    expect(chat).not.toHaveDispatched('processMessage');
+  });
+
+  it('parseMessage before the identity is known is refused rather than guessed', () => {
+    const adapter = createBacklogAdapter(
+      identitylessConfig(() => myselfCountingApi().api)
+    );
+
+    let failure: unknown;
+    try {
+      adapter.parseMessage({
+        kind: 'webhook',
+        host: FIXTURE.host,
+        payload: issueCommented() as unknown as BacklogWebhookPayload,
+        changes: [],
+      });
+    } catch (cause) {
+      failure = cause;
+    }
+
+    expect(failure).toBeInstanceOf(AdapterError);
+    expect((failure as AdapterError).code).toBe('BOT_IDENTITY_UNRESOLVED');
+  });
+
+  it('a mention of the fetched name reaches a real Chat, which answers once', async () => {
+    const { api } = myselfCountingApi();
+    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+    let resolveMentionHandled: (() => void) | undefined;
+    const mentionHandled = new Promise<void>((resolve) => {
+      resolveMentionHandled = resolve;
+    });
+    const chat = new Chat({
+      adapters: { backlog: adapter },
+      state: new MemoryStateAdapter(),
+      // Deliberately not the bot's name: the mention must match the name the
+      // adapter learned, not a fallback the core would supply.
+      userName: 'someone-else',
+    });
+    chat.onNewMention(async (thread) => {
+      await thread.post('On it.');
+      resolveMentionHandled?.();
+    });
+    await chat.initialize();
+
+    await adapter.handleWebhook(
+      webhookRequest(
+        issueCommented({ text: `@${FIXTURE.bot.name} please help` })
+      )
+    );
+    await mentionHandled;
+
+    expect(
+      api.state.recordedInputs.filter((input) => input.method === 'addComment')
+    ).toHaveLength(1);
+  });
+});
+
+selfMessageContract({
+  name: 'backlog (identity from GET /users/myself)',
+  setup: async () => {
+    const adapter = createBacklogAdapter(
+      identitylessConfig(() => myselfCountingApi().api)
+    );
+    const chat = createMockChatInstance({ logger: createMockLogger() });
+    await adapter.initialize(chat);
+    return { adapter, chat };
+  },
+  makeOtherMessageRequest: () => webhookRequest(issueCommented()),
+  makeSelfMessageRequest: () => webhookRequest(selfAuthoredComment()),
 });

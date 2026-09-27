@@ -551,8 +551,8 @@ export interface BacklogInstallation {
   host: string;
   apiKey?: Resolvable;
   accessToken?: Resolvable;
-  botUserId: number;
-  botUserName: string;
+  botUserId?: number;
+  botUserName?: string;
   webhookSecret?: string;
 }
 
@@ -583,12 +583,14 @@ export type ResolvedCredential =
  *   constructor, every fixture, every `createApi` double a consumer writes —
  *   cast into it, and the one producer of the value is `validateHost` in
  *   `src/ids.ts`, which lowercases through the same grammar the id codec
- *   uses. The cost outweighs what the brand buys (issue #62).
+ *   uses. The cost outweighs what the brand buys (issue #62);
+ * - `botUserId`/`botUserName` stay as configured: `createApi` runs before
+ *   `GET /users/myself` has answered, so the fetched identity is not here.
  */
 export type ResolvedInstallation = {
   host: string;
-  botUserId: number;
-  botUserName: string;
+  botUserId?: number;
+  botUserName?: string;
   webhookSecret?: string;
 } & ResolvedCredential;
 

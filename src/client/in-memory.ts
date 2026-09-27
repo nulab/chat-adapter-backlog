@@ -393,6 +393,10 @@ export function createInMemoryBacklogApi(
       return findUser(userId);
     },
 
+    async getMyself() {
+      return me;
+    },
+
     async listIssues(projectId, options: ListIssuesOptions) {
       findProject(projectId);
       const offset = options.offset ?? 0;

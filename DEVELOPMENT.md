@@ -291,8 +291,8 @@ You need a Backlog space and a personal API key.
    | `BACKLOG_HOST`          | yes                     | Space host without a scheme, port or path, e.g. `example.backlog.com`. Also `backlog.jp` and legacy `backlogtool.com` domains.      |
    | `BACKLOG_API_KEY`       | one of these two        | The personal API key issued above. Sent in the `Backlog-API-Key` header.                                                            |
    | `BACKLOG_ACCESS_TOKEN`  | one of these two        | OAuth 2.0 bearer token instead of a key. Expires after an hour; the adapter runs no OAuth flow, so use the resolver form long-term.  |
-   | `BACKLOG_BOT_USER_ID`   | yes                     | Numeric id of the bot user. `GET /api/v2/users/myself` reports it for the key above. Recognises the bot's own messages.              |
-   | `BACKLOG_BOT_USER_NAME` | yes                     | The bot's display name as Backlog renders it. Mentions arrive as resolved text, so this is what the mention pattern matches.         |
+   | `BACKLOG_BOT_USER_ID`   | no                      | Numeric id of the bot user; read from `GET /api/v2/users/myself` for the key above when unset. Recognises the bot's own messages.    |
+   | `BACKLOG_BOT_USER_NAME` | no                      | The bot's display name as Backlog renders it; read from `GET /api/v2/users/myself` when unset. What the mention pattern matches.    |
    | `BACKLOG_WEBHOOK_SECRET`| unless a verifier is set| Secret carried in the webhook URL's `token` parameter, at least 16 bytes. Backlog signs nothing, so this is the only sender-side check available. |
    | `BACKLOG_LIVE_ISSUE_ID` | live suite only         | Numeric id of a scratch issue the opt-in live suite comments on.                                                                     |
    | `BACKLOG_LIVE_PULL_REQUEST` | live suite only     | `<repositoryId>:<number>` of a scratch pull request in the same project as `BACKLOG_LIVE_ISSUE_ID`. The suite comments on it and cannot clean up: Backlog has no delete. |
@@ -429,7 +429,10 @@ bundle — that the entry resolves through `exports`, that the installed tree is
 exactly `dist/`, `package.json`, `README.md` and `LICENSE`, that
 `exports["."].types` names a file that shipped, and that
 `createBacklogAdapter()` with no argument builds an adapter out of the five
-`BACKLOG_*` variables on Node 20, the floor of `engines.node`.
+`BACKLOG_*` variables on Node 20, the floor of `engines.node`, whose
+`initialize` then makes no request — the two `BACKLOG_BOT_*` variables are
+what spares it `GET /users/myself` — and builds one more out of the three
+required variables alone.
 
 The install runs lifecycle scripts, as a consumer's does, so a `preinstall`
 the tarball should not carry (#99) fails it rather than being stepped around.

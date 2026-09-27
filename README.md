@@ -92,8 +92,8 @@ not a request to fall back.
 | `BACKLOG_HOST` | yes | Space host without a scheme, port or path. |
 | `BACKLOG_API_KEY` | one of the two | Personal API key, sent in the `Backlog-API-Key` header. |
 | `BACKLOG_ACCESS_TOKEN` | one of the two | OAuth 2.0 bearer token instead of a key. |
-| `BACKLOG_BOT_USER_ID` | yes | Numeric id of the bot user; `GET /api/v2/users/myself` reports it. |
-| `BACKLOG_BOT_USER_NAME` | yes | The bot's display name, as Backlog renders it in a comment. |
+| `BACKLOG_BOT_USER_ID` | no | Numeric id of the bot user. Read from `GET /api/v2/users/myself` when unset or blank — see **Bot identity**. |
+| `BACKLOG_BOT_USER_NAME` | no | The bot's display name, as Backlog renders it in a comment. Read from `GET /api/v2/users/myself` when unset or blank. |
 | `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter. At least 16 bytes. |
 
 ## Configuration
@@ -102,17 +102,37 @@ not a request to fall back.
 | --- | --- | --- | --- |
 | `host` | `string` | — | Full hostname. Backlog spaces also live on `backlog.jp` and legacy `backlogtool.com`, so this is never a subdomain slug. |
 | `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | — | Exactly one per installation. The function form is resolved on **every** call and never cached, so an expiring token can be refreshed without reconstructing the adapter. |
-| `botUserId` | `number` | — | Positive integer, at most `Number.MAX_SAFE_INTEGER` — it is encoded into user ids. Recognises the adapter's own messages and assignment to the bot. |
-| `botUserName` | `string` | — | Non-empty. Mentions arrive as resolved text, so this is what the mention pattern matches. |
+| `botUserId` | `number` | `GET /users/myself` | Positive integer, at most `Number.MAX_SAFE_INTEGER` — it is encoded into user ids. Recognises the adapter's own messages and assignment to the bot. |
+| `botUserName` | `string` | `GET /users/myself` | Non-empty. Mentions arrive as resolved text, so this is what the mention pattern matches. |
 | `webhookSecret` | `string` | — | Required on every installation unless `webhookVerifier` is set. **At least 16 bytes**, checked when the adapter is constructed — it is the only thing standing between the URL and your projects, so a short one is refused rather than warned about. |
 | `installations` | `BacklogInstallation[]` | — | Several spaces in one adapter. Mutually exclusive with the fields above. |
 | `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check entirely — for a reverse-proxy assertion, mTLS or an IP allowlist. |
-| `userName` | `string` | first installation's `botUserName` | Exposed to the core as `adapter.userName`. One string for the whole adapter; per space, read `adapter.botUserName(host)`. |
+| `userName` | `string` | first installation's bot name | Exposed to the core as `adapter.userName`. One string for the whole adapter; per space, read `adapter.botUserName(host)`. |
 | `logger` | `Logger` | `ConsoleLogger("info")` | Replaced by `chat.getLogger("backlog")` in `initialize`. |
 | `rateLimit.maxWaitMs` | `number` | `60_000` | Longest wait before a 429 retry. Non-negative integer. |
 | `rateLimit.maxRetries` | `number` | `1` | Non-negative integer; `0` disables retries. |
 | `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | Positive integer. Larger bodies get a 413. Description edits carry two full bodies. |
 | `createApi` | `(installation: ResolvedInstallation) => BacklogApi` | the `backlog-js`-backed port | Test seam: replaces the port every Backlog call goes through, so a consumer's suite needs no network — see **Testing**. Replacing it also takes the rate-limit accounting, the 429 retry and `client()` with it. |
+
+### Bot identity
+
+`botUserId` and `botUserName` may be left out, per installation. Whichever is
+missing is read from `GET /api/v2/users/myself` — the user the API key or
+token acts as — once per installation, when `initialize` runs (on the first
+webhook, or `chat.initialize()`). A value you configure always wins over the
+fetched one, so you can pin the display name your users type and leave the id
+to the API.
+
+- **Configure both and the adapter never asks.** That is the setting for a
+  runtime that starts a fresh instance per request, where every cold start
+  would otherwise spend one `read`-bucket call.
+- **A failed lookup does not fail `initialize`.** It is logged as a warning
+  and retried by the next webhook or call that needs it. A webhook whose bot
+  identity still cannot be learned is answered **503** and not dispatched:
+  without the id the adapter cannot tell the bot's own comments apart, and a
+  bot that answers itself answers forever.
+- `adapter.userName` is `""` and `adapter.botUserName(host)` throws until the
+  lookup has answered; both are settled once `initialize` resolves.
 
 ### Several spaces
 
@@ -156,8 +176,10 @@ core's `@<id>` pattern would be wrong for every space but one.
    `channel.post()`.
 2. **Issue an API key** as that user: **Personal Settings → API**. If the
    section is missing, an administrator must enable API access for the space.
-3. **Find its numeric id.** `GET /api/v2/users/myself` with that key reports
-   `id` — that is `botUserId`, not the login name.
+3. **Optionally, pin its identity.** `GET /api/v2/users/myself` with that key
+   reports `id` — that is `botUserId`, not the login name — and `name`, the
+   `botUserName`. Leave both out and the adapter reads them itself (see
+   **Bot identity**); set both and it never has to.
 4. **Generate a webhook secret**: `openssl rand -hex 32`. Anything under 16
    bytes is rejected at construction.
 5. **Register a webhook per project** (Project Settings → Integrations →

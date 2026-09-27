@@ -64,7 +64,9 @@ A second job, `consumer`, is the same claim about the **published** package
 rather than the bundle: it packs the tarball, installs it with npm outside the
 repository and runs `scripts/consumer-smoke/smoke.mjs` on Node 20, where the
 entry has to resolve through `exports` and `createBacklogAdapter()` gets no
-argument at all — the five `BACKLOG_*` variables are the whole configuration.
+argument at all — the five `BACKLOG_*` variables are the whole configuration,
+and because the two `BACKLOG_BOT_*` ones are set, `initialize` must reach no
+network either (without them it would ask `GET /users/myself`; spec D23).
 So `exports`, `files`, the env fallbacks and the floor of `engines.node` fail
 here rather than at a consumer. Changing any of those four means changing that
 consumer in the same commit; its assertions are one file, in the order a
@@ -630,7 +632,8 @@ State is `@chat-adapter/state-memory`, and no example subscribes to a thread.
 
 Environment variable names are shared across examples, not invented per
 example: the five the adapter reads (`BACKLOG_HOST`, `BACKLOG_API_KEY`,
-`BACKLOG_BOT_USER_ID`, `BACKLOG_BOT_USER_NAME`, `BACKLOG_WEBHOOK_SECRET`) plus
+`BACKLOG_BOT_USER_ID`, `BACKLOG_BOT_USER_NAME`, `BACKLOG_WEBHOOK_SECRET` — the
+two `BACKLOG_BOT_*` optional, read from `GET /users/myself` when unset) plus
 meaningful names for the rest — `DONE_STATUS_ID`, `REQUIRED_CUSTOM_FIELD_ID`,
 `BUG_ISSUE_TYPE_NAME`, `INTAKE_CONTACT_USER_ID`, `AI_MODEL`,
 `AI_GATEWAY_API_KEY`. No `EXAMPLE_` prefix.
