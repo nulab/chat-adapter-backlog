@@ -26,6 +26,7 @@ replies by commenting.
 
 ```sh
 npm i @nulab/chat-adapter-backlog chat
+npm i @chat-adapter/state-memory @vercel/functions # used by the Quick start below
 ```
 
 `chat` is a peer dependency (`^4.40.0`). You need Node.js 20 or newer. The
@@ -58,8 +59,7 @@ export async function POST(request: Request) {
 }
 ```
 
-This also needs `@chat-adapter/state-memory` and `@vercel/functions`. The
-webhook answers 200 before your handler runs, so pass your runtime's
+The webhook answers 200 before your handler runs, so pass your runtime's
 `waitUntil` on serverless platforms. Use a durable state adapter in production;
 the memory state forgets everything on restart.
 
@@ -88,9 +88,9 @@ createBacklogAdapter({ host, apiKey, botUserId, botUserName, webhookSecret });
 | Option                   | Type                                          | Default                  | Notes                                                                    |
 | ------------------------ | --------------------------------------------- | ------------------------ | ------------------------------------------------------------------------ |
 | `host`                   | `string`                                      | `BACKLOG_HOST`           | Spaces also live on `backlog.jp` and `backlogtool.com`.                  |
-| `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | env                      | Exactly one. A function is called on every request, so a token can rotate. |
-| `botUserId`              | `number`                                      | `GET /users/myself`      | Recognises the bot's own comments and assignment to it.                  |
-| `botUserName`            | `string`                                      | `GET /users/myself`      | Fetched only when `botUserId` is unset too. Exposed as `adapter.userName`. |
+| `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | `BACKLOG_API_KEY` / `BACKLOG_ACCESS_TOKEN` | Exactly one. A function is called on every request, so a token can rotate. |
+| `botUserId`              | `number`                                      | `BACKLOG_BOT_USER_ID`, else `GET /users/myself` | Recognises the bot's own comments and assignment to it.                  |
+| `botUserName`            | `string`                                      | `BACKLOG_BOT_USER_NAME`, else `GET /users/myself` | Fetched only when `botUserId` is unset too. Exposed as `adapter.userName`. |
 | `webhookSecret`          | `string`                                      | `BACKLOG_WEBHOOK_SECRET` | Required unless `webhookVerifier` is set.                                |
 | `webhookVerifier`        | `(request, rawBody) => unknown`               | —                        | Replaces the secret check; a truthy result accepts the delivery.         |
 | `logger`                 | `Logger`                                      | `ConsoleLogger("info")`  | Replaced by `chat.getLogger("backlog")` on `initialize`.                 |
@@ -102,14 +102,17 @@ its own webhook URL.
 `GET /users/myself`, and a webhook that arrives while that lookup fails gets a
 503. **Always give `new Chat({ userName })` a non-empty value**: when
 both it and `botUserName` are empty, every stray `@` in a comment becomes a
-mention.
+mention. With `botUserId` set and `botUserName` unset, `initialize` logs one
+warning: a typed `@name` then no longer counts as a mention, while
+notifications and assignment to the bot still do.
 
 ## Webhook setup
 
 1. Create a bot user. Add it to every project it should answer in, with
    permission to comment.
-2. Issue an API key as that user (**Personal Settings → API**) and read its
-   numeric `id` and `name` from `GET /api/v2/users/myself`.
+2. Issue an API key as that user (**Personal Settings → API**; if the section
+   is missing, an administrator must enable API access) and read its numeric
+   `id` and `name` from `GET /api/v2/users/myself`.
 3. Generate a secret: `openssl rand -hex 32`.
 4. In each project, add a webhook (**Project Settings → Integrations →
    Webhook**). Point it at
@@ -118,7 +121,8 @@ mention.
    https://<your-app>/api/webhooks/backlog?token=<secret>
    ```
 
-   and select these activity types. **Never select `allEvent`**:
+   and select these activity types. Leave 21 unchecked (a merge or close
+   arrives as a 19), and **never select `allEvent`**:
 
    | Types      | Events                                              |
    | ---------- | --------------------------------------------------- |
@@ -127,9 +131,10 @@ mention.
    | 18, 19, 20 | pull request added, updated (incl. merge), commented |
    | 4          | issue deleted — optional                            |
 
-The subscription is the only switch per kind. Leave out 18–20 and no pull
-request reaches a handler. Leave out 14 to avoid fanning a bulk update out into
-one handler run per issue. See
+The activity types you select are the only on/off switch. Leave out 18–20 and
+no pull request reaches a handler. Leaving out 14 avoids fanning a bulk update
+out into one handler run per issue, but then an update made from the issue
+list, even of a single issue, reaches no handler at all. See
 [Activity-type mapping](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#53-activity-type-mapping).
 
 ## Webhook authenticity
@@ -178,8 +183,9 @@ chat.onNewMention(async (thread, message) => {
 change without text arrives as a message with empty `text` and the change in
 `message.raw.changes`.
 
-Ids are numeric, never issue keys, so a rename does not break them. Read them
-back with `adapter.decodeThreadId()`, `decodeMessageId()` and `decodeUserId()`:
+Ids are numeric, never issue keys, so a rename does not break them. Read a
+thread id back with `adapter.decodeThreadId()`, and message and user ids with
+the exported functions `decodeMessageId()` and `decodeUserId()`:
 
 ```ts
 import { decodeMessageId, decodeUserId } from '@nulab/chat-adapter-backlog';
@@ -232,13 +238,14 @@ await client.patchIssue(8001, { assigneeId: 100 });
 
 Every failure is a `@chat-adapter/shared` class — `ValidationError`,
 `AuthenticationError`, `PermissionError`, `ResourceNotFoundError`,
-`AdapterRateLimitError`, `NetworkError` or `AdapterError` — with
-`{ status, code?, message, moreInfo?, url }` in `error.cause`.
+`AdapterRateLimitError`, `NetworkError` or `AdapterError`. An error from a
+Backlog API response carries `{ status, code?, message, moreInfo?, url }` in
+`error.cause`.
 
 ### Rate limits and retries
 
 Backlog limits requests per user, per minute, per plan. A 429 is retried once,
-after waiting for `X-RateLimit-Reset` for **up to 60 seconds**. During the wait
+after waiting until the time in `X-RateLimit-Reset`, **at most 60 seconds**. During the wait
 the call does not return. A longer reset or a second 429 rejects with
 `AdapterRateLimitError`. Give a serverless function comfortably more than 60
 seconds (on Vercel, `export const maxDuration = 90`), or a reply cut off
@@ -258,7 +265,11 @@ Mock `adapter.client()` where a handler calls Backlog directly.
 - Creating, merging or closing a pull request has no Backlog API.
 - A reaction is a single Backlog star. The emoji is ignored.
 - `stream()` buffers and posts once, since editing every 500 ms would exhaust
-  the update limit.
+  the update limit. An empty stream, such as a failed AI SDK `fullStream`,
+  posts a single space.
+- Adding the bot to an existing comment's recipients is ignored; address the
+  bot when posting the comment.
+- `listThreads` and issue listing draw on Backlog's lower search limit.
 - Notation markers in your own text (`''bold''`, `%%strike%%`, `[[link]]`) are
   rendered by Backlog. Post a `{ raw }` message to control escaping yourself.
 - `chat.getUser()` cannot route to this adapter. Call `adapter.getUser()`.
