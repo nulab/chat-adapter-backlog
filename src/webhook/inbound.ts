@@ -52,7 +52,7 @@ interface MentionEvidence {
    * `@<display name>` (measured); everywhere else a literal `<@U…>` is a
    * mention that notified nobody.
    */
-  rawMentionNotationSurvives: boolean;
+  rawMentionSurvives: boolean;
 }
 
 // An issue reports a new assignee as `assigner`, a pull request as `assignee`,
@@ -69,10 +69,7 @@ function detectMention(evidence: MentionEvidence): boolean {
   if (botUserName !== undefined && mentionPattern(botUserName).test(text)) {
     return true;
   }
-  if (
-    evidence.rawMentionNotationSurvives &&
-    text.includes(mentionUser(botUserId))
-  ) {
+  if (evidence.rawMentionSurvives && text.includes(mentionUser(botUserId))) {
     return true;
   }
   if (assigneeId === botUserId) {
@@ -133,7 +130,7 @@ interface MessageParts {
   attachments: Attachment[];
   assigneeId: number | undefined;
   changes: BacklogChange[];
-  rawMentionNotationSurvives: boolean;
+  rawMentionSurvives: boolean;
 }
 
 // Comment edits emit no webhook (measured), so a webhook message is never
@@ -162,7 +159,7 @@ function assemble(
       assigneeId: parts.assigneeId,
       changes,
       notifications: activity.notifications,
-      rawMentionNotationSurvives: parts.rawMentionNotationSurvives,
+      rawMentionSurvives: parts.rawMentionSurvives,
     }),
   });
 }
@@ -182,7 +179,7 @@ function rootParts(
     attachments: attachments.map((file) => subject.webhookAttachment(file)),
     assigneeId: assignee?.id,
     changes: [],
-    rawMentionNotationSurvives: activity.type === 18,
+    rawMentionSurvives: activity.type === 18,
   };
 }
 
@@ -207,7 +204,7 @@ function commentParts(
     ],
     assigneeId: undefined,
     changes,
-    rawMentionNotationSurvives: false,
+    rawMentionSurvives: false,
   };
 }
 
@@ -251,7 +248,7 @@ export function buildBulkUpdateMessage(
       attachments: [],
       assigneeId: undefined,
       changes,
-      rawMentionNotationSurvives: false,
+      rawMentionSurvives: false,
     },
     {
       kind: 'bulkUpdate',

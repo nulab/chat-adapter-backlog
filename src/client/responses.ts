@@ -28,7 +28,7 @@ export type BacklogIssueComment = BacklogRawComment & { issueId: number };
 
 export type BacklogProject = Pick<
   Entity.Project.Project,
-  'id' | 'projectKey' | 'name' | 'textFormattingRule'
+  'id' | 'projectKey' | 'name'
 >;
 
 const userSchema = z.looseObject({
@@ -132,7 +132,6 @@ const projectSchema = z.looseObject({
   id: z.number(),
   projectKey: z.string(),
   name: z.string(),
-  textFormattingRule: z.enum(['markdown', 'backlog']),
 });
 
 const gitRepositorySchema = z.looseObject({

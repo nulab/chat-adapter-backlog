@@ -112,12 +112,10 @@ describe.skipIf(!configured).sequential('a real Backlog space', () => {
     expect(thread.metadata['issueKey']).toMatch(/^[A-Z0-9_]+-\d+$/);
   });
 
-  it("reports the project's text formatting rule as one of the two the converters cover", async () => {
+  it("describes the issue's project as a channel", async () => {
     const channel = await adapter.fetchChannelInfo(channelId);
 
-    expect(['markdown', 'backlog']).toContain(
-      channel.metadata['textFormattingRule']
-    );
+    expect(channel.metadata['projectKey']).toMatch(/^[A-Z0-9_]+$/);
   });
 
   it('posts, reads, edits, stars, unstars and deletes one comment', async () => {

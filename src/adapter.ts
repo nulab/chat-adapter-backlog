@@ -11,7 +11,7 @@ import { errorMessage } from './client/errors';
 import { parseConfig } from './config';
 import type { SpaceConfig } from './config';
 import { readGitRepository, readProject, readUser } from './client/responses';
-import type { Backlog, Types } from 'backlog-js';
+import type { Backlog } from 'backlog-js';
 import {
   addReaction as addReactionToComment,
   bufferStream,
@@ -20,8 +20,7 @@ import {
   removeReaction as removeReactionFromComment,
   requireCommentInThread,
 } from './egress';
-import { BacklogMarkdownConverter } from './format/markdown';
-import { BacklogNotationConverter } from './format/notation';
+import { converter } from './format';
 import {
   channelIdFromThreadId as decodeChannelIdFromThreadId,
   decodeChannelId,
@@ -46,7 +45,6 @@ import { subjectClientFor } from './subject/client';
 import type { SubjectClient, SubjectNames } from './subject/client';
 import type {
   BacklogAdapterConfig,
-  BacklogChannelId,
   BacklogRawMessage,
   BacklogSubjectRef,
   BacklogThreadId,
@@ -66,7 +64,6 @@ import type {
   Adapter,
   AdapterPostableMessage,
   Attachment,
-  BaseFormatConverter,
   ChannelInfo,
   ChatInstance,
   FetchOptions,
@@ -92,11 +89,6 @@ interface BotIdentity {
   id: number;
   name: string | undefined;
 }
-
-const CONVERTERS: Record<Types.TextFormattingRule, BaseFormatConverter> = {
-  markdown: new BacklogMarkdownConverter(),
-  backlog: new BacklogNotationConverter(),
-};
 
 function subjectOfRaw(raw: BacklogRawMessage): {
   projectId: number;
@@ -133,20 +125,6 @@ function subjectOfRaw(raw: BacklogRawMessage): {
   }
 }
 
-/** `renderFormatted` accepts a thread id or a channel id; anything else has no cached rule. */
-function channelOfTarget(target: string): BacklogChannelId | undefined {
-  try {
-    return decodeThreadIdString(target);
-  } catch {
-    // Not a thread id; a channel id is equally valid.
-  }
-  try {
-    return decodeChannelId(target);
-  } catch {
-    return undefined;
-  }
-}
-
 function repositoryNameKey(host: string, repositoryId: number): string {
   return `${host}:${repositoryId}`;
 }
@@ -167,15 +145,8 @@ export class BacklogAdapter implements Adapter<
    */
   private identity: BotIdentity | undefined;
   private readonly backlog: Backlog;
-  /**
-   * For the process's lifetime (D14). The project key rides along because a
-   * pull request's web URL needs it and the pull-request object lacks it.
-   */
-  private readonly projectCache = new Map<
-    string,
-    { projectKey: string; textFormattingRule: Types.TextFormattingRule }
-  >();
-  /** The other half of a pull request's web URL, which the object lacks too. */
+  /** The two halves of a pull request's web URL, which its object lacks. */
+  private readonly projectKeyCache = new Map<string, string>();
   private readonly repositoryNameCache = new Map<string, string>();
 
   private logger: Logger;
@@ -294,68 +265,8 @@ export class BacklogAdapter implements Adapter<
     return this.backlog;
   }
 
-  /**
-   * Cache-only because the member is synchronous: a target with no cached
-   * rule renders Markdown rather than blocking on a Get Project (D14).
-   */
-  renderFormatted(content: FormattedContent, target?: string): string {
-    const channel = target === undefined ? undefined : channelOfTarget(target);
-    const rule =
-      channel === undefined
-        ? 'markdown'
-        : this.ruleFor(channel.host, channel.projectId);
-    return CONVERTERS[rule].fromAst(content);
-  }
-
-  private cachedProject(host: string, projectId: number) {
-    return this.projectCache.get(encodeChannelId({ host, projectId }));
-  }
-
-  /** A cold cache is a `warn` and Markdown, never a failure. */
-  private ruleFor(host: string, projectId: number): Types.TextFormattingRule {
-    const rule = this.cachedProject(host, projectId)?.textFormattingRule;
-    if (rule === undefined) {
-      this.logger.warn('textFormattingRule uncached; assuming markdown', {
-        host,
-        projectId,
-      });
-      return 'markdown';
-    }
-    return rule;
-  }
-
-  /**
-   * A failed lookup is not cached, so the next caller tries again rather than
-   * being pinned to Markdown for the process's lifetime.
-   */
-  private async ensureProject(host: string, projectId: number): Promise<void> {
-    if (this.cachedProject(host, projectId) !== undefined) {
-      return;
-    }
-    try {
-      const project = await readProject(
-        this.clientFor(host).getProject(projectId)
-      );
-      this.projectCache.set(encodeChannelId({ host, projectId }), {
-        projectKey: project.projectKey,
-        textFormattingRule: project.textFormattingRule,
-      });
-    } catch (cause) {
-      this.logger.warn('project lookup failed', {
-        host,
-        projectId,
-        error: errorMessage(cause),
-      });
-    }
-  }
-
-  /** For the members that can await: the first post to a notation project must not render Markdown. */
-  private async converterFor(
-    host: string,
-    projectId: number
-  ): Promise<BaseFormatConverter> {
-    await this.ensureProject(host, projectId);
-    return CONVERTERS[this.ruleFor(host, projectId)];
+  renderFormatted(content: FormattedContent): string {
+    return converter.fromAst(content);
   }
 
   private subjectClient(
@@ -368,7 +279,6 @@ export class BacklogAdapter implements Adapter<
 
   private messageBuilders(
     host: string,
-    converter: BaseFormatConverter,
     identity: BotIdentity
   ): Omit<MessageBuilders, 'projectId' | 'subject'> {
     return {
@@ -408,38 +318,56 @@ export class BacklogAdapter implements Adapter<
     if (repositoryId === undefined) {
       return {};
     }
-    await this.ensureProject(host, projectId);
     return {
-      projectKey: this.cachedProject(host, projectId)?.projectKey,
-      repositoryName: await this.repositoryName(host, projectId, repositoryId),
+      projectKey: await this.cachedName(
+        this.projectKeyCache,
+        encodeChannelId({ host, projectId }),
+        async () =>
+          (await readProject(this.clientFor(host).getProject(projectId)))
+            .projectKey,
+        'project key',
+        { host, projectId }
+      ),
+      repositoryName: await this.cachedName(
+        this.repositoryNameCache,
+        repositoryNameKey(host, repositoryId),
+        async () =>
+          (
+            await readGitRepository(
+              this.clientFor(host).getGitRepository(
+                projectId,
+                String(repositoryId)
+              )
+            )
+          ).name,
+        'repository name',
+        { host, projectId, repositoryId }
+      ),
     };
   }
 
   /**
    * A failed lookup is not cached: the caller omits the URL rather than
-   * failing, and the next call may find the repository readable again.
+   * failing, and the next call may find the name readable again.
    */
-  private async repositoryName(
-    host: string,
-    projectId: number,
-    repositoryId: number
+  private async cachedName(
+    cache: Map<string, string>,
+    key: string,
+    lookUp: () => Promise<string>,
+    what: string,
+    fields: Record<string, unknown>
   ): Promise<string | undefined> {
-    const key = repositoryNameKey(host, repositoryId);
-    const cached = this.repositoryNameCache.get(key);
+    const cached = cache.get(key);
     if (cached !== undefined) {
       return cached;
     }
     try {
-      const repository = await readGitRepository(
-        this.clientFor(host).getGitRepository(projectId, String(repositoryId))
-      );
-      this.repositoryNameCache.set(key, repository.name);
-      return repository.name;
+      const name = await lookUp();
+      cache.set(key, name);
+      return name;
     } catch (cause) {
-      this.logger.warn('repository name lookup failed; url omitted', {
-        host,
-        projectId,
-        repositoryId,
+      this.logger.warn(`${what} lookup failed; url omitted`, {
+        ...fields,
         error: errorMessage(cause),
       });
       return undefined;
@@ -568,17 +496,11 @@ export class BacklogAdapter implements Adapter<
       return new Response('OK', { status: 200 });
     }
 
-    // One lookup for every factory: a bulk update's run concurrently, and
-    // each would otherwise miss the same cold cache.
-    const projectReady = this.ensureProject(host, projectId);
     const dispatch = (
       threadId: string,
       build: (context: InboundContext) => Message<BacklogRawMessage>
     ): void => {
-      const factory = async () => {
-        await projectReady;
-        return build(this.inboundContext(host, projectId, identity));
-      };
+      const factory = async () => build(this.inboundContext(host, identity));
       chat
         .processMessage(this, threadId, factory, options)
         .catch((cause: unknown) =>
@@ -630,12 +552,7 @@ export class BacklogAdapter implements Adapter<
     });
   }
 
-  private inboundContext(
-    host: string,
-    projectId: number,
-    identity: BotIdentity
-  ): InboundContext {
-    const converter = CONVERTERS[this.ruleFor(host, projectId)];
+  private inboundContext(host: string, identity: BotIdentity): InboundContext {
     return {
       host,
       botUserId: identity.id,
@@ -656,11 +573,7 @@ export class BacklogAdapter implements Adapter<
       );
     }
     const activity = activityOf(raw.payload);
-    const context = this.inboundContext(
-      raw.host,
-      activity.project.id,
-      this.knownBotIdentity()
-    );
+    const context = this.inboundContext(raw.host, this.knownBotIdentity());
     if (activity.type === 14) {
       const issueId = raw.kind === 'bulkUpdate' ? raw.issueId : undefined;
       const link = activity.content.link.find((entry) => entry.id === issueId);
@@ -694,13 +607,11 @@ export class BacklogAdapter implements Adapter<
     message: AdapterPostableMessage
   ): Promise<RawMessage<BacklogRawMessage>> {
     const { host, projectId, subject } = this.subjectFor(threadId);
-    const converter = await this.converterFor(host, projectId);
     return postComment({
       host,
       projectId,
       subject,
       client: this.clientFor(host),
-      converter,
       message,
       toBuffer: this.toFileBuffer,
     });
@@ -716,13 +627,11 @@ export class BacklogAdapter implements Adapter<
       messageId,
       'edited'
     );
-    const converter = await this.converterFor(host, projectId);
     return editComment({
       host,
       projectId,
       subject: this.subjectClient(host, projectId, subject),
       commentId,
-      converter,
       message,
     });
   }
@@ -797,13 +706,12 @@ export class BacklogAdapter implements Adapter<
     threadId: string,
     options?: FetchOptions
   ): Promise<FetchResult<BacklogRawMessage>> {
-    const { host, projectId, subject } = this.subjectFor(threadId);
-    const converter = await this.converterFor(host, projectId);
+    const { host, subject } = this.subjectFor(threadId);
     return fetchMessagesRead({
       threadId,
       options,
       subject,
-      builders: this.messageBuilders(host, converter, await this.botIdentity()),
+      builders: this.messageBuilders(host, await this.botIdentity()),
     });
   }
 
@@ -811,19 +719,15 @@ export class BacklogAdapter implements Adapter<
     threadId: string,
     messageId: string
   ): Promise<Message<BacklogRawMessage> | null> {
-    const { host, projectId, subject } = this.subjectFor(threadId);
+    const { host, subject } = this.subjectFor(threadId);
     return fetchMessageRead({
       threadId,
       messageId,
       subject,
-      // Deferred: resolving the formatting rule can cost a Get Project, and
+      // Deferred: learning the bot identity can cost a GET /users/myself, and
       // an id answered `null` must cost nothing.
       builders: async () =>
-        this.messageBuilders(
-          host,
-          await this.converterFor(host, projectId),
-          await this.botIdentity()
-        ),
+        this.messageBuilders(host, await this.botIdentity()),
     });
   }
 
@@ -841,12 +745,11 @@ export class BacklogAdapter implements Adapter<
     options?: ListThreadsOptions
   ): Promise<ListThreadsResult<BacklogRawMessage>> {
     const { host, projectId } = decodeChannelId(channelId);
-    const converter = await this.converterFor(host, projectId);
     return listThreadsRead({
       channelId,
       options,
       client: this.clientFor(host),
-      builders: this.messageBuilders(host, converter, await this.botIdentity()),
+      builders: this.messageBuilders(host, await this.botIdentity()),
       // Every thread this lists is an issue: a pull-request list is per
       // repository, a coordinate a channel id does not carry (D-PR7), so the
       // subject of each row is known before the row is read.

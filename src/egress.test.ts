@@ -9,7 +9,6 @@ import {
   removeReaction,
   requireCommentInThread,
 } from './egress';
-import { BacklogMarkdownConverter } from './format/markdown';
 import { encodeMessageId } from './ids';
 import {
   BOB,
@@ -144,7 +143,6 @@ describe('postComment', () => {
         projectId: PROJECT_ID,
         subject: subjectStub(ref, { addComment }),
         client: stubClient({}),
-        converter: new BacklogMarkdownConverter(),
         message: { markdown: 'Any progress?' },
         toBuffer: noFiles,
       });
@@ -181,7 +179,6 @@ describe('postComment', () => {
       projectId: PROJECT_ID,
       subject: subjectStub(ISSUE, { addComment }),
       client: stubClient({}),
-      converter: new BacklogMarkdownConverter(),
       message,
       toBuffer: noFiles,
     });
@@ -202,7 +199,6 @@ describe('postComment', () => {
       projectId: PROJECT_ID,
       subject: subjectStub(ISSUE, { addComment }),
       client: stubClient({ postSpaceAttachment }),
-      converter: new BacklogMarkdownConverter(),
       message: {
         markdown: 'See attached',
         files: [{ filename: 'notes.txt', data: Buffer.from('hello') }],
@@ -238,7 +234,6 @@ describe('postComment', () => {
           projectId: PROJECT_ID,
           subject: subjectStub(ISSUE, { addComment }),
           client: stubClient({}),
-          converter: new BacklogMarkdownConverter(),
           message,
           toBuffer: noFiles,
         })
@@ -254,7 +249,6 @@ describe('postComment', () => {
       projectId: PROJECT_ID,
       subject: subjectStub(ISSUE, { addComment }),
       client: stubClient({}),
-      converter: new BacklogMarkdownConverter(),
       message: 'hi',
       toBuffer: noFiles,
     });
@@ -271,7 +265,6 @@ describe('postComment', () => {
         projectId: PROJECT_ID,
         subject: subjectStub(ISSUE, { addComment }),
         client: stubClient({ postSpaceAttachment }),
-        converter: new BacklogMarkdownConverter(),
         message: {
           markdown: 'See attached',
           files: [
@@ -299,7 +292,6 @@ describe('postComment', () => {
           addComment: vi.fn().mockRejectedValue(new Error('boom')),
         }),
         client: stubClient({}),
-        converter: new BacklogMarkdownConverter(),
         message: 'hi',
         toBuffer: noFiles,
       })
@@ -316,7 +308,6 @@ describe('postComment', () => {
         addComment: vi.fn().mockResolvedValue(comment()),
       }),
       client: stubClient({}),
-      converter: new BacklogMarkdownConverter(),
       message,
       toBuffer: noFiles,
     });
@@ -334,7 +325,6 @@ describe('editComment', () => {
       projectId: PROJECT_ID,
       subject: subjectStub(ISSUE, { updateComment }),
       commentId: 1,
-      converter: new BacklogMarkdownConverter(),
       message: { markdown: 'Edited' },
     });
 
@@ -356,7 +346,6 @@ describe('editComment', () => {
         projectId: PROJECT_ID,
         subject: subjectStub(ISSUE),
         commentId: 1,
-        converter: new BacklogMarkdownConverter(),
         message: {
           markdown: 'x',
           files: [{ filename: 'a.txt', data: Buffer.from('a') }],
@@ -376,7 +365,6 @@ describe('editComment', () => {
         projectId: PROJECT_ID,
         subject: subjectStub(ISSUE),
         commentId: 1,
-        converter: new BacklogMarkdownConverter(),
         message,
       })
     ).rejects.toThrow(ValidationError);

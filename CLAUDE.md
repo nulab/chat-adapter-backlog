@@ -25,7 +25,7 @@ plus environment, one schema), `src/ids.ts` (the id grammar), `src/types.ts`
 (public types, including the serialisable raw-message shapes), `src/egress.ts` and `src/reads.ts`, `src/subject/*` (the issue and
 pull-request halves of a thread behind one `SubjectClient`), `src/webhook/*`
 (ingress), `src/client/*` (the `backlog-js` client and its response schemas),
-`src/format/*` (the converters), and `src/test/fixtures/*`.
+`src/format.ts` (the Markdown converter), and `src/test/fixtures/*`.
 
 `src/subject/*` is where behaviour that differs between an issue and a pull
 request belongs, and nowhere else: `subjectClientFor` in

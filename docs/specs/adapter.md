@@ -3,7 +3,7 @@
 What a consumer of the Backlog adapter for Chat SDK (`chat@4.40.0`) can
 observe, and the decisions that shaped it (§12). The tests are written from
 this document; when code and spec disagree, one of them is wrong. Code cites a
-decision by its id (`D14`), never by section number.
+decision by its id (`D23`), never by section number.
 
 Measured Backlog behaviour appears here only as far as it changes what the
 adapter does. The measurements, with dates and payload excerpts, are in
@@ -35,8 +35,9 @@ OAuth token acquisition or refresh, registering webhooks on the consumer's
 behalf, any persistent state of the adapter's own (subscriptions and dedupe
 belong to the Chat SDK `StateAdapter`), creating an issue through
 `channel.post` (D24), creating, closing or merging pull requests (Backlog has
-no status API), a git repository as a channel (D-PR1), and listing pull
-requests through `listThreads` (D-PR7).
+no status API), a git repository as a channel (D-PR1), listing pull
+requests through `listThreads` (D-PR7), and projects that use Backlog
+notation (D32).
 
 ## 2. Conceptual model
 
@@ -198,7 +199,7 @@ assignment to it; the name only recognises a hand-typed `@name` (§5.4).
   for every endpoint the `Adapter` interface does not cover. It carries the
   adapter's 429 retry, error mapping and per-request credential (§8), and
   holds no credential of its own (D-API1).
-- `renderFormatted(content, target?)` — §9.1.
+- `renderFormatted(content)` — §9.
 
 `botUserId` is not exposed: the core's only use of it is an `@<id>` mention
 pattern no Backlog text contains, and it may not be known before `initialize`.
@@ -261,7 +262,7 @@ webhook dispatched, without an API call and without parsing `payload` again.
 It throws `ValidationError` for the three REST kinds, a type-4 `webhook` raw (a
 deletion is no message) and a `bulkUpdate` whose `issueId` is not in its batch:
 the core never calls `parseMessage`, and a message read over REST already is a
-`Message`. `formatted` follows the cached formatting rule (§9.1).
+`Message`.
 
 ### 3.6 Errors
 
@@ -290,7 +291,7 @@ says otherwise.
 | `encodeThreadId` / `decodeThreadId` | implemented | §2; exact round trip of `{ host, projectId, subject }`. | never |
 | `channelIdFromThreadId` | implemented | The first three segments, `backlog:<host>:<projectId>`. | `createThread`, lock key, history |
 | `parseMessage(raw)` | implemented | §3.5. | never |
-| `renderFormatted(content, target?)` | implemented | §9.1. | never |
+| `renderFormatted(content)` | implemented | §9. | never |
 | `postMessage(threadId, message)` | implemented | §6.1. A channel id — what the core passes for `channel.post` — is a `ValidationError` (D24). | `thread.post`, fallbacks |
 | `editMessage(threadId, messageId, message)` | implemented | §6.2. | `SentMessage.edit` |
 | `deleteMessage(threadId, messageId)` | implemented; issues only | §6.3. On a pull-request thread, `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call (D-PR3); on an issue comment that records a change, the same before Delete Comment (D31). | `SentMessage.delete` |
@@ -356,10 +357,8 @@ A body that passes its schema but carries an id the codec rejects
 
 On success the adapter calls `chat.processMessage(this, threadId, factory,
 options)` once per message — once per issue for a type 14 — or, for a type 4,
-`chat.processMessageDeleted(…)`. Each factory waits for the project's
-formatting rule (one lookup shared by the whole delivery) and builds the
-message from the parsed activity. A lookup that fails falls back to Markdown
-(§9.1), so the message is delivered rather than lost. A rejection from the core
+`chat.processMessageDeleted(…)`. Each factory builds the message from the
+parsed activity without an API call. A rejection from the core
 is logged as error `inbound processing failed` `{host, threadId, error}`; the
 core registers the work with `options.waitUntil` itself.
 
@@ -465,8 +464,8 @@ mention when any rule holds:
    every type. Backlog names the field `assigner` on issues (types 2 and 14)
    and `assignee` on pull requests (type 19), and reports the new assignee by
    display name; either name is accepted on either kind.
-4. **Raw notation in a pull-request summary.** Backlog leaves mention notation
-   unrewritten in a pull request's summary, so type-18 text is also matched
+4. **A raw `<@U…>` in a pull-request summary.** Backlog leaves a `<@U…>`
+   mention unrewritten in a pull request's summary, so type-18 text is also matched
    against `<@U<botUserId>>`. A handler that matches the display name in text
    finds nothing there; it reads `isMention`.
 5. **Notification.** Any `notifications[]` entry with `user.id === botUserId`,
@@ -486,8 +485,8 @@ handler with `isMention` true although rule 1 alone says false. The core can
 only add mentions. A hand-typed `@Chatbot`, and a display name another user
 shares, are accepted false positives.
 
-Outbound, a consumer writes Backlog's notation itself; the package exports no
-helper. `<@U<id>>` in content notifies the user without `notifiedUserId`;
+Outbound, a consumer writes Backlog's mention syntax itself; the package
+exports no helper. `<@U<id>>` in content notifies the user without `notifiedUserId`;
 `notifiedUserId` notifies without a visible mention.
 
 ### 5.5 Delivery semantics
@@ -519,10 +518,10 @@ selects (D-PR2). A root or update message id (`:r`, `:u:`) is refused with
    `file.data` must be a `Buffer`, an `ArrayBuffer` or a `Blob`; anything else,
    or a `Blob` whose bytes cannot be read, is a `ValidationError` naming the
    file, raised when that file's turn comes; a read failure is its `cause`.
-2. Render `converter.renderPostable(message)` with the project's converter
-   (§9). A `string` and `{ raw }` pass through untouched; `{ markdown }` is
-   converted; a card renders as fallback text in the project's markup (§9.2),
-   and a caller-supplied `fallbackText` is posted verbatim instead.
+2. Render the message as Markdown (§9). A `string`, `{ raw }` and
+   `{ markdown }` pass through untouched; `{ ast }` is stringified; a card
+   renders as fallback text (§9.1), and a caller-supplied `fallbackText` is
+   posted verbatim instead.
 3. [Add Comment](https://developer.nulab.com/docs/backlog/api/2/add-comment/)
    or [Add Pull Request Comment](https://developer.nulab.com/docs/backlog/api/2/add-pull-request-comment/)
    with `content`, `notifiedUserId[]` and `attachmentId[]`.
@@ -635,8 +634,8 @@ what separates "come back with cursor 0" from "this thread has no comments".
 
 Guarantees: pages are chronological; backward pages walk from newest to
 oldest; the union of all pages in either direction is the root plus every
-comment exactly once; a page never exceeds `limit`. `formatted` comes from the
-project's converter (§9.1), `text` stays Backlog's text. A comment message has
+comment exactly once; a page never exceeds `limit`. `formatted` is `text`
+parsed as Markdown (§9), `text` stays Backlog's text. A comment message has
 `edited = comment.updated !== comment.created` and `editedAt`; the root has
 `edited: false`, because `updated` moves on any field change. Backlog's
 timestamps are second-granular, so an edit made within the second the comment
@@ -663,12 +662,14 @@ Issue: one Get Issue →
 Pull request: one Get Pull Request →
 `{ id, channelId, channelName: <project key>, isDM: false, metadata: { kind: "pullRequest", host, projectId, repositoryId, number, summary, status: { id, name }, url? } }`,
 with `url = https://<host>/git/<projectKey>/<repositoryName>/pullRequests/<number>`.
-The object carries neither name: the project key comes from the project cache
-(§9.1), and the repository name from a cache filled by every pull-request
+The object carries neither name: the project key comes from a cache filled by
+one [Get Project](https://developer.nulab.com/docs/backlog/api/2/get-project/)
+per project, and the repository name from a cache filled by every pull-request
 webhook that carries `content.repository.name` and, on a miss, by one
 [Get Git Repository](https://developer.nulab.com/docs/backlog/api/2/get-git-repository/).
 Both last the process's lifetime. A name lookup that fails is not cached, logs
-`warn` `repository name lookup failed; url omitted`, and leaves `url` out.
+`warn` `project key lookup failed; url omitted` or
+`repository name lookup failed; url omitted`, and leaves `url` out.
 Statuses are `1 Open`, `2 Closed`, `3 Merged`.
 
 `metadata` names the thread and nothing more; every other field is on
@@ -687,8 +688,8 @@ The core calls it lazily from `message.subject` and turns an error into `null`.
 ### 7.5 `fetchChannelInfo(channelId)`
 
 [Get Project](https://developer.nulab.com/docs/backlog/api/2/get-project/) →
-`{ id: channelId, name: project.name, isDM: false, metadata: { host, projectId, projectKey, textFormattingRule } }`.
-It touches no cache (D14).
+`{ id: channelId, name: project.name, isDM: false, metadata: { host, projectId, projectKey } }`.
+It touches no cache.
 
 ### 7.6 `listThreads(channelId, { limit?, cursor? })`
 
@@ -722,7 +723,7 @@ spends:
 | Member | Calls | Limit |
 | --- | --- | --- |
 | `initialize`, `handleWebhook` | `getMyself` when the bot id is not configured (D23) | read |
-| any member that renders or builds a message, `fetchThread` on a pull request | `getProject`, once per project per process (§9.1) | read |
+| `fetchThread`, `fetchSubject` on a pull request | `getProject`, once per project per process (§7.3) | read |
 | `postMessage` | `postSpaceAttachment` per file; `postIssueComments` / `postPullRequestComments` | update |
 | `editMessage` | `patchIssueComment` / `patchPullRequestComments` | update |
 | `deleteMessage` | `getIssueComment`; `deleteIssueComment` | read, update |
@@ -811,119 +812,39 @@ never the `backlog-js` error and never the request. Backlog's message is on
 
 ## 9. Formatting
 
-### 9.1 Rule selection (D14)
+Markdown (GFM) only (D32). Every project is treated as if its
+`textFormattingRule` were `"markdown"`, and the setting is never read: on a
+project set to Backlog notation, a post appears as Markdown source and incoming
+notation is read as Markdown.
 
-A project's `textFormattingRule` is `"markdown"` (GFM) or `"backlog"` (Backlog
-notation, a different syntax)
-([Get Project](https://developer.nulab.com/docs/backlog/api/2/get-project/)).
-The adapter caches it per channel, with the project key, from one Get Project:
+`toAst` is `chat`'s `parseMarkdown` (remark + GFM) and does not throw;
+`fromAst` and `renderFormatted(content)` are `stringifyMarkdown(ast).trim()`,
+and a failure there propagates, so a post that cannot be rendered fails rather
+than posting something else. `{ markdown }` is posted verbatim, without a round
+trip through `stringifyMarkdown`.
 
-- The first operation that needs it on a channel fills the entry, which lasts
-  the process's lifetime; a changed setting is picked up on restart.
-- A failed lookup — an unknown rule value included — logs `warn`
-  `project lookup failed` and renders Markdown for that call; nothing is
-  cached.
-- `renderFormatted(content, target?)` and `parseMessage(raw)` are synchronous
-  and read only the cache. An uncached project renders Markdown with one
-  `warn` `textFormattingRule uncached; assuming markdown`; a `target` that is
-  neither a thread nor a channel id, or none, renders Markdown without one.
-  The webhook path looks the rule up before building a message, so it always
-  honours it.
+### 9.1 Cards
 
-Neither converter's `toAst` throws on any input; a `fromAst` failure
-propagates, so a post that cannot be rendered fails rather than posting
-something else.
+A card renders as Markdown fallback text:
 
-### 9.2 Cards
-
-A card renders as fallback text in the project's own markup:
-
-| Card child | Markdown project | Notation project |
-| --- | --- | --- |
-| title, field label | `**…**` | `''…''` |
-| `link` | `[label](url)`, or the bare URL when the label is empty or equal to it | `[[label>url]]` / `[[url]]` |
-| `divider` | `---` | `----` |
-| `text`, subtitle | as written, unconverted | as written, unconverted |
-| `table`, `chart` | `chat`'s space-aligned plain text | the same |
-| emoji placeholder (`{{emoji:tada}}`) | as written | as written |
-| `image`, `actions` | nothing | nothing |
-
-On a Markdown project the `---` divider, and a single-column table's dash row,
-turn the line above into a setext heading (D26).
-
-### 9.3 Markdown projects
-
-`toAst` is `chat`'s `parseMarkdown` (remark + GFM); `fromAst` is
-`stringifyMarkdown(ast).trim()`. `{ markdown }` is posted verbatim, without a
-round trip.
-
-### 9.4 Notation projects, outbound
-
-| mdast node | Backlog notation |
+| Card child | Rendered as |
 | --- | --- |
-| `heading` depth n | `*` × n, space, content |
-| `paragraph` | inline children, a blank line between blocks |
-| `text` | the value, unescaped (§9.6) |
-| `strong` | `''…''` |
-| `emphasis` | `'''…'''` |
-| `delete` | `%%…%%` |
-| `inlineCode` | the value (Backlog notation has no inline code) |
-| `code` | `{code:lang}` / `{code}` … `{/code}` |
-| `link` | `[[url]]` when the label is empty or equals the URL, else `[[label>url]]` |
-| `image` | `#image(url)` |
-| `break` | `&br;` |
-| `thematicBreak` | `----` |
-| `blockquote` | each line prefixed `> ` |
-| `list` | `-` × depth (unordered) or `+` × depth (ordered) |
-| `table` | `\|cell\|cell\|` per row, the header row suffixed `h`; alignment dropped |
-| `html`, footnotes, others | `defaultNodeToText` |
+| title, field label | `**…**` |
+| `link` | `[label](url)`, or the bare URL when the label is empty or equal to it |
+| `text`, subtitle | as written, unconverted |
+| `table`, `chart` | `chat`'s space-aligned plain text |
+| emoji placeholder (`{{emoji:tada}}`) | as written |
+| `divider`, `image`, `actions` | nothing |
 
-### 9.5 Notation projects, inbound
-
-`toAst` translates line by line: `{code}` / `{code:lang}` … `{/code}`, a pair on
-one line included and an unclosed block closed at the end (contents not
-converted); `{quote}` … `{/quote}` and `> ` lines → `blockquote`, parsed to 16
-levels and kept as quoted text below that; `*`–`******` headings; `-` / `+`
-lists with depth by repetition; `----` → `thematicBreak`; tables `|a|b|h` and
-header cells `|~cell`; `#image(…)`; inline `'''x'''`, `''x''`, `%%x%%`,
-`[[label>url]]`, `[[label:url]]`, `[[url]]`, `&br;`. Unrecognised markup is
-text: `&color(…)`, `#rev`, `#contents`, `#attach`, `#thumbnail`, wiki links and
-issue-key auto-links pass through unconverted.
-
-Lists:
-
-- A list ends at the first marker it cannot contain — one shallower than its
-  own depth, or of the other kind at that depth — and the next list starts
-  there. `+ a` then `- b` is an ordered list followed by an unordered one.
-- A jump of more than one level opens a single nested list; a marker between
-  two open depths becomes a second child list of the same item.
-- A marker with no text after it is not a list item: it ends every open list
-  and stays a paragraph. The separator after a marker is taken greedily, so
-  an item's text never begins with whitespace. `----` followed by a space is
-  still a `thematicBreak`; `---- four` is a list item.
-
-A heading marker with no text is an empty heading, unlike a list marker.
-
-### 9.6 Known lossy conversions
-
-- Inline code and table alignment, outbound to notation; the macros §9.5
-  leaves as text, inbound.
-- **Text reaches a notation project unescaped (D27).** Backlog notation has an
-  escape — a `\` before a special character prints it literally — but
-  `fromAst` does not apply it, so markers in a caller's prose become markup:
-  `price is ''100''` bolds `100`, `50%% off, %%today` strikes text through,
-  `[[TICKET-1]]` becomes a link, a line opening `* ` a heading, `- ` a list
-  item, and a line `{code}` opens a macro that swallows what follows. A
-  caller who needs a literal marker posts `{ raw }`, which bypasses the
-  converter, and applies `\` itself.
+A single-column table's dash row turns the line above into a setext heading.
 
 ## 10. Logging
 
 - Everything goes through the `Logger` from `chat`; nothing is written to the
   console directly.
 - `debug` for per-request flow (a skipped self message); `info` for ignored
-  activity types; `warn` for rejected webhooks, degraded formatting, a cache
-  miss that fell back and the two rate-limit outcomes; `error` for processing
+  activity types; `warn` for rejected webhooks, a name lookup that left a URL
+  out and the two rate-limit outcomes; `error` for processing
   failures after the 200 (their only carrier), a webhook before `initialize`,
   and one whose bot identity could not be learned.
 - Structured fields only — `host`, `projectId`, `repositoryId`, `type`,
@@ -981,7 +902,7 @@ evidence for a measured reason is in the rules file named.
 | D11 | Uploads in two steps; downloads through the client; `rehydrateAttachment` from the API URL | A Backlog attachment needs authentication, and a URL is the only handle that survives a queue. | Public URLs (none exist); `fetchMetadata` blobs. |
 | D12 | Root and update messages cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Editing what the bot posted does not extend to rewriting a person's issue, and an update has no resource. | `editMessage(:r)` as Update Issue. |
 | D13 | `listThreads` keeps Backlog's order and filters nothing | Sorting or filtering in the adapter would hide the search-limit cost. | "Open issues first". |
-| D14 | The formatting rule is cached per project for the process's lifetime; synchronous members read only the cache | A third of the projects on a measured space use notation (`backlog-api-facts.md`), and the setting rarely changes. | A TTL; `fetchChannelInfo` rewriting the cache (built and removed); Markdown only. |
+| D14 | Superseded by D32. The formatting rule is cached per project for the process's lifetime; synchronous members read only the cache | A third of the projects on a measured space use notation (`backlog-api-facts.md`), and the setting rarely changes. | A TTL; `fetchChannelInfo` rewriting the cache (built and removed); Markdown only. |
 | D15 | `chat` peer `^4.40.0`, `@chat-adapter/shared` `^4.40.0`, `backlog-js` `^0.20.1`, `engines.node >=20`; the package's own semver from `0.1.0` | 4.40.0 is the contract verified; a caret range spares a consumer on a later minor a second core. | Exact pins; tracking `chat`'s version line. |
 | D18 | No `processMessageUpdated` | A comment edit emits no webhook (`backlog-webhook-facts.md`). | Polling for edits. |
 | D19 | Every authentic delivery is taken to be from the configured space | No body field identifies a space, and `projectKey` changes on a rename (`backlog-webhook-facts.md`). | Cross-checking `projectKey` (drops events after a rename). |
@@ -989,13 +910,14 @@ evidence for a measured reason is in the rules file named.
 | D23 | The bot identity is optional: without `botUserId`, one `GET /users/myself`; with it, no request; a failed lookup is retried on demand, and a webhook without an id is 503 | Every serverless cold start runs `initialize`; the core never retries a rejected `initialize`; dispatching without the id lets the bot answer itself. | Both fields required; always looking up a missing name; a lazy lookup on the first webhook only; rejecting `initialize`; dispatching without the id. |
 | D24 | No `postChannelMessage`, no `markAsRead`; `ThreadInfo.metadata` names the thread only | No consumer needs them and neither first-party reference adapter has them; an issue created from a message had to guess its type and priority; a full copy in `metadata` duplicated `fetchSubject().raw`. | Keeping them because Backlog makes them possible. |
 | D25 | `raw.payload` is typed as `backlog-js`'s `Entity.Activity` with the measured deviations overlaid, discriminated on `type` | One type follows `backlog-js`, and only a measured deviation is declared here. | A loose envelope with `Record<string, unknown>`; hand-written per-type interfaces. |
-| D26 | Card fallback text uses the project's markup, and a Markdown divider stays `---` | `**` would reach a notation project as literal asterisks, and the card walk `chat` uses drops a link's URL; `---` is the byte the walk emitted before, so only the bug changes. | Markdown on every project; `***` for the divider. |
-| D27 | Notation's `\` escape is not applied to user text | Which characters `\` escapes, and whether a literal `¥` does, is undocumented; escaping by guess would eat a caller's backslashes or mangle prices (issue #92). | Escaping the documented characters only; escaping every marker. |
+| D26 | Card fallback text renders a link as a Markdown link and drops a divider | The card walk `chat` uses drops a link's URL, which loses content. A dropped divider loses none, and the `---` the adapter used to emit turned the line above it into a setext heading. | Leaving `link` to `chat`; `---` or `***` for the divider. |
+| D27 | Superseded by D32. Notation's `\` escape is not applied to user text | Which characters `\` escapes, and whether a literal `¥` does, is undocumented; escaping by guess would eat a caller's backslashes or mangle prices (issue #92). | Escaping the documented characters only; escaping every marker. |
 | D28 | No timestamp window on webhooks | A Backlog timestamp is unsigned, so a window protects nothing, and redeliveries arrive about 20 minutes late (`backlog-webhook-facts.md`). | Rejecting payloads older than N minutes. |
 | D29 | The adapter does not dispatch the bot's own activity | `selfMessageContract` requires it; the core's `isMe` check is a second line. | Relying on the core alone. |
 | D30 | No webhook body-size limit of the adapter's own, and no 413 | Hosting platforms already cap request bodies, and no consumer needed a second, configurable cap (maintainer decision, 2026-09-27). | A `maxWebhookBodyBytes` option with a 413. |
 | D31 | `deleteMessage` on an issue comment with a non-empty `changeLog` throws `UNSUPPORTED_OPERATION`, after one Get Comment | Backlog answers 200 but keeps any comment that records a change, emptying its content, and keeps an attached file on the issue (`backlog-api-facts.md`); resolving would fabricate a deletion, as in D-PR3. | Sending Delete Comment and resolving; refusing only a comment that added an attachment. |
-| D-PR1 | A pull-request thread's channel is its project | Webhooks carry `project.id`, and the formatting rule is per project. | The repository as channel. |
+| D32 | Markdown (GFM) only: the project's `textFormattingRule` is not read, and a project using Backlog notation is not supported | Notation projects exist (`backlog-api-facts.md`), but no consumer has asked for them, and the converter built for them covered only the common constructs: no `\` escaping (#92), inline code and table alignment dropped, several macros left unconverted, heading and list rules that disagreed between directions (#94), one input in 31 not surviving a round trip. Backlog's Markdown is GFM, which `chat` already parses and prints (maintainer decision, 2026-09-27). | Keeping the partial notation support; adding notation's `\` escape to it (#92); warning on a notation project (a Get Project per project for a message nobody asked for). |
+| D-PR1 | A pull-request thread's channel is its project | Webhooks carry `project.id`, and a project holds both kinds of thread. | The repository as channel. |
 | D-PR2 | The kind is explicit in every id, as one nested `BacklogSubjectRef` | Issues and pull requests have different endpoint families, coordinates and comment id sequences (`backlog-pull-request-facts.md`). | A flat optional-field shape; issues as the unmarked default. |
 | D-PR3 | `deleteMessage` on a pull-request thread throws `UNSUPPORTED_OPERATION` before any call | The endpoint does not exist (`backlog-pull-request-facts.md`); a `ValidationError` would blame a correct call; success would be fabricated. | `ValidationError`; a no-op; omitting `deleteMessage` (it is required). |
 | D-PR4 | No option selecting kinds | The webhook subscription already is that switch. | A `subjects` config. |

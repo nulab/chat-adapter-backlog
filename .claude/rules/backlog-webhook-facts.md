@@ -240,7 +240,7 @@ carries the key in question:
 - Linking an issue to a pull request → **type 3 on the issue**; see
   `backlog-pull-request-facts.md`.
 
-## Type 2 `changes[]` field names and value notation
+## Type 2 `changes[]` field names and value formats
 
 One `PATCH /issues/:id` per field, on a development space, 2026-09-06. The
 `field` name is an internal name matching neither the API parameter nor the
