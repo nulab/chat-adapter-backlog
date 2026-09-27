@@ -87,7 +87,7 @@ emphasis, it is the version that goes stale.
 | ---------------------------------------------------- | ---------------------------------------------------------------- |
 | How the adapter does something                       | the code: names, types, structure                                |
 | What it guarantees, member by member                 | the tests, named after the behaviour                             |
-| The consumer-visible contract and design decisions   | [the spec](./docs/specs/adapter.md), decisions in §12            |
+| The consumer-visible contract and design decisions   | [the spec](./docs/specs/adapter.md) and its decision table       |
 | What Backlog and the Chat SDK core do, with the date | `.claude/rules/*.md`                                             |
 | Why one change was made                              | the squash commit body                                           |
 | Why the obvious code would break                     | a comment on that code                                           |
@@ -137,7 +137,7 @@ volume is not care.
   plans are records, and an exported doc comment ships to a consumer who has
   neither document. When a Why-not rests on a recorded design decision, end
   it with the **decision id** alone — `(D14)`, `(D-PR3)` — which is stable and
-  leads straight to the rejected alternatives in §12.
+  leads straight to the rejected alternatives in the spec's decision table.
 - **Measured behaviour: the consequence in the comment, the evidence in the
   rules file.** Write `a comment edit emits no webhook (measured)` and stop.
   The date, the payload excerpt and the counts are written once, in
@@ -441,8 +441,9 @@ only on a stack branch — never on `main`.
 
 The interface is `Adapter<TThreadId, TRawMessage>` in `chat`'s own `.d.ts` —
 the authority, where the docs page is not fully in sync. Which members this
-adapter implements and why the rest are absent is spec §4; what the core does
-with each member is `.claude/rules/chat-sdk-core-facts.md`. The upstream
+adapter implements and why the rest are absent is the spec's "Adapter
+contract coverage"; what the core does with each member is
+`.claude/rules/chat-sdk-core-facts.md`. The upstream
 guides still govern new work:
 [Building an adapter](https://chat-sdk.dev/docs/contributing/building),
 [Publishing your adapter](https://chat-sdk.dev/docs/contributing/publishing),

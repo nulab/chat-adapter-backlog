@@ -11,7 +11,7 @@ an agent replies by commenting.
 
 Pre-1.0, starting at `0.1.0`: while the major is `0`, a breaking change ships as
 a minor release. All 17 required members of `chat@4.40.0`'s adapter contract
-are implemented, plus 10 of the 27 optional ones; **Features and limitations**
+are implemented, plus 8 of the 27 optional ones; **Features and limitations**
 says where Backlog stops short. Not yet listed in Chat SDK's adapter catalog.
 
 ## Installation
@@ -178,7 +178,7 @@ secret, and every delivery verifies and is then read with space A's
 credentials. That is not reliably a harmless 404: two spaces were measured
 minting issue ids from interleaving ranges, so an id from one can name a real,
 unrelated issue in the other, and the bot comments there. Nothing in the
-payload lets the adapter catch this (docs/specs/adapter.md D19), so register
+payload lets the adapter catch this ([spec D19](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#12-design-decisions)), so register
 the URL only in its own space. The trace of a misregistration is
 `project lookup failed` naming a project id the space does not have.
 
@@ -231,6 +231,10 @@ A field change arrives as a comment with empty `text` and the change in
 
 - **Comment edits fire no webhook**, so `onMessageUpdated` never fires and text
   placed by editing reaches nobody.
+- **Adding the bot as a recipient of an existing comment is not a mention.**
+  Backlog reports it as a separate activity carrying the original comment,
+  which the adapter ignores so the comment is not delivered twice; address the
+  bot when posting instead.
 - **A pull-request comment cannot be deleted.** Backlog has no endpoint, so
   `deleteMessage` there throws `AdapterError` with code
   `UNSUPPORTED_OPERATION` before any request.

@@ -38,5 +38,5 @@ nothing about live behavior. If the opt-in live suite ran, say so.
       State of the repo).
 
 <!-- Adapter design constraints: rate limits in .claude/rules/backlog-api-facts.md; webhook authenticity
-(D2) and `stream()` (D4) in docs/specs/adapter.md §12; how to comment and
+(D2) and `stream()` (D4) in docs/specs/adapter.md's decision table; how to comment and
 where each fact lives in CLAUDE.md. -->

@@ -319,7 +319,7 @@ says otherwise.
 | `scheduleMessage`, `reply` | absent | Core throws `NotImplementedError`. Comments are a flat list; there is no scheduling endpoint. |
 | `postObject`, `editObject` | absent | Core posts fallback text. |
 | `endTyping`, `disconnect` | absent | Core skips; nothing to end or close. |
-| `onThreadSubscribe`, `getChannelVisibility`, `lockScope`, `persistThreadHistory`, `supportsTurnCancellation`, `botUserId` | absent | Core defaults (`"unknown"` visibility, `"thread"` lock scope, no history cache, no cross-process abort). |
+| `onThreadSubscribe`, `getChannelVisibility`, `lockScope`, `persistThreadHistory`, `persistMessageHistory`, `supportsTurnCancellation`, `botUserId` | absent | Core defaults (`"unknown"` visibility, `"thread"` lock scope, no history cache, no cross-process abort). |
 
 An absent member is absent from the instance, so the core's own degradation
 applies; the adapter never throws a "not supported" of its own.
@@ -347,7 +347,7 @@ secret from a wrong one (D2).
 A 5xx is the only answer that could make Backlog redeliver; whether it does is
 undocumented and was not observed (§5.5). The request method is not checked:
 anything that is not a delivery fails row 1 or 2. The adapter sets no body-size
-limit of its own; the platform in front of it does (§11). No timestamp window
+limit of its own; the platform in front of it does (D30). No timestamp window
 is applied (D28).
 
 A body that passes its schema but carries an id the codec rejects
@@ -396,13 +396,13 @@ The only normalisations anywhere:
 | `type` | Backlog meaning | Message id | `text` | Attachments | Mention (§5.4), besides `notifications[]` |
 | --- | --- | --- | --- | --- | --- |
 | 1 | Issue Created | `<host>:issue:<issueId>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` | `content.assignee?.id === botUserId`, or text |
-| 2 | Issue Updated, with `content.comment.id` | `<host>:issue:<issueId>:c<commentId>` | `comment.content` | `content.attachments[]` | `assigner` change to `botUserName`, or text |
+| 2 | Issue Updated, with `content.comment.id` | `<host>:issue:<issueId>:c<commentId>` | `comment.content` | `content.attachments[]` | assignment change to `botUserName`, or text |
 | 2 | Issue Updated, no comment id | `<host>:issue:<issueId>:u:<created>` | `""` | none | as above |
 | 3 | Issue Commented | `<host>:issue:<issueId>:c<commentId>` | `comment.content` | `content.attachments[]` | text |
 | 4 | Issue Deleted | root `<host>:issue:<issueId>:r` | — | — | → `chat.processMessageDeleted({ adapter, channelId, threadId, messageId, raw, deletedAt: new Date(created) })` |
-| 14 | Issues updated in bulk | one per `content.link[]` entry: `…:issue:<link.id>:c<link.comment.id>`, or `…:u:<created>` without a comment | `link[].comment.content` | none | `assigner` change to `botUserName`, or text (D22) |
+| 14 | Issues updated in bulk | one per `content.link[]` entry: `…:issue:<link.id>:c<link.comment.id>`, or `…:u:<created>` without a comment | `link[].comment.content` | none | assignment change to `botUserName`, or text (D22) |
 | 18 | Pull Request Added | `<host>:pr:<repository.id>:<number>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` if present | `content.assignee?.id === botUserId`, or text including `<@U<botUserId>>` |
-| 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content` | `content.attachments[]` if present | `assignee` change to `botUserName`, or text |
+| 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content` | `content.attachments[]` if present | assignment change to `botUserName`, or text |
 | 19 | Pull Request Updated, no comment id | `…:u:<created>` | `""` | none | as above |
 | 20 | Comment Added on Pull Request | `…:c<commentId>` | `comment.content` | `content.attachments[]` if present; a `changes[field="attachment"]` entry (§6.6) | text |
 | 17, 21, 12, 13, other | Comment notification added, pull request deleted/merged, git, wiki, document, … | — | — | — | 200 Ignored (D10, D-PR5) |
@@ -460,10 +460,11 @@ mention when any rule holds:
    `@Chatbotさん` and `(@Chatbot)` match; `@Chatbot2`, `foo@Chatbot`,
    `@@Chatbot` and an unresolved `<@U999>` do not.
 2. **Assignment at creation.** Types 1 and 18: `content.assignee?.id === botUserId`.
-3. **Assignment by update.** Type 2 and 14: a `changes[]` entry with
-   `field === "assigner"` whose `new_value` equals `botUserName`; type 19: the
-   same with `field === "assignee"`. Backlog reports the new assignee by
-   display name.
+3. **Assignment by update.** A `changes[]` entry whose `field` is
+   `"assigner"` or `"assignee"` and whose `new_value` equals `botUserName`, on
+   every type. Backlog names the field `assigner` on issues (types 2 and 14)
+   and `assignee` on pull requests (type 19), and reports the new assignee by
+   display name; either name is accepted on either kind.
 4. **Raw notation in a pull-request summary.** Backlog leaves mention notation
    unrewritten in a pull request's summary, so type-18 text is also matched
    against `<@U<botUserId>>`. A handler that matches the display name in text
@@ -508,7 +509,7 @@ helper. `<@U<id>>` in content notifies the user without `notifiedUserId`;
 Every egress member decodes `threadId`, refuses a host other than the
 configured space, and reaches the issue or pull-request endpoints its subject
 selects (D-PR2). A root or update message id (`:r`, `:u:`) is refused with
-`ValidationError("backlog", "<id> is not a comment and cannot be edited, deleted or starred")`
+`ValidationError("backlog", "<id> is not a comment and cannot be <edited|deleted|starred>")`, naming the operation attempted
 (D12).
 
 ### 6.1 `postMessage(threadId, message)`
@@ -960,38 +961,39 @@ evidence for a measured reason is in the rules file named.
 
 | # | Decision | Why | Rejected |
 | --- | --- | --- | --- |
-| D1 | One Backlog space per adapter; every config field but the verifier and logger falls back to an environment variable | An API key belongs to one space, so a second space is a second adapter under its own webhook URL; zero-config construction is the Chat SDK factory convention. | `installations[]` for several spaces (built and removed: a `?host=` routing parameter, per-host names and duplicate checks for a deployment nobody ran). |
+| D1 | One Backlog space per adapter; every config field but the verifier and logger falls back to an environment variable | An API key belongs to one space, so a second space is a second adapter under its own webhook URL; zero-config construction is the Chat SDK factory convention. | `installations[]` for several spaces (built and removed: a `?host=` routing parameter, per-host names and duplicate checks for a deployment nobody ran); env-only configuration (no resolver functions). |
 | D2 | A webhook secret of at least 16 bytes, or a verifier, is required; every failure is one identical 401 | Backlog has no HMAC, so the URL secret is the whole check and a guessable one is a way in; config parsing has no logger to warn into. | An optional secret; a warning for a short one. |
 | D4 | `stream()` buffers and posts once; an empty buffer posts `" "` | The core's 500 ms edit loop spends about 120 updates a minute against a documented example of 150 (`backlog-api-facts.md`), and a comment edit emits no webhook anyway. `" "` keeps `stream()` resolving to a `SentMessage`, as the core does. | Omitting `stream`; throttled edits; returning `null` for an empty stream. |
-| D5 | One retry on a 429, waiting for the failing response's own reset for at most 60 s, as constants; no tracking of the limits | Limits are per user and per plan, and a 429 carries its own reset (`backlog-api-facts.md`); neither first-party reference adapter tracks limits or exposes retry tuning. | Per-bucket tracking and a public snapshot (built and removed: nothing read it); `rateLimit.*` options; no retry. |
+| D5 | One retry on a 429, waiting for the failing response's own reset for at most 60 s, as constants; no tracking of the limits | Limits are per user and per plan, and a 429 carries its own reset (`backlog-api-facts.md`); neither first-party reference adapter tracks limits or exposes retry tuning. | Hard-coded per-plan limits; unbounded backoff; per-bucket tracking and a public snapshot (built and removed: nothing read it); `rateLimit.*` options; no retry. |
 | D6 | Error class from `errors[].code` first, the status second; the detail as `cause` | Backlog maps meaning to codes and reuses statuses. | Status-only mapping; re-exporting `backlog-js` errors. |
 | D7 | No host-application hooks; `client()` is the only escape hatch | Engagement and subscription state is the `StateAdapter`'s. | An engagement callback, an inbound observer, dedupe-key helpers. |
 | D8 | Numeric ids; the host inside message and user ids | A project-key rename rewrites issue keys (`backlog-webhook-facts.md`); the core's dedupe key has no thread component. | Issue keys in ids; host-less message ids. |
 | D9 | A mention is a notification naming the bot (any `reason`), the display name in text, or an assignment to the bot | The notification list is the only signal for recipients chosen in the notification field, and a watcher never appears in it (`backlog-webhook-facts.md`). | Text and assignment only; filtering on `reason: 2`; a case-insensitive match. |
-| D10 | Types 1–4, 14 and 18–20 are processed and the rest ignored; `allEvent` is never registered | Only issue and pull-request activity maps to a thread. Type 17 repeats a comment already dispatched under the same id (`backlog-webhook-facts.md`). | `allEvent`; dispatching 17. |
-| D11 | Uploads in two steps; downloads through the client; `rehydrateAttachment` from the API URL | A Backlog attachment needs authentication, and a URL is the only handle that survives a queue. | Public URLs (none exist). |
+| D10 | Types 1–4, 14 and 18–20 are processed and the rest ignored; `allEvent` is never registered | Only issue and pull-request activity maps to a thread. Type 17 carries the original comment under the id already dispatched, and dedupe holds only for `dedupeTtlMs`, so a recipient added later would redeliver the same message (`backlog-webhook-facts.md`). The accepted cost: adding the bot as a recipient to an existing comment is never a mention. | `allEvent`; dispatching 17. |
+| D11 | Uploads in two steps; downloads through the client; `rehydrateAttachment` from the API URL | A Backlog attachment needs authentication, and a URL is the only handle that survives a queue. | Public URLs (none exist); `fetchMetadata` blobs. |
 | D12 | Root and update messages cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Editing what the bot posted does not extend to rewriting a person's issue, and an update has no resource. | `editMessage(:r)` as Update Issue. |
 | D13 | `listThreads` keeps Backlog's order and filters nothing | Sorting or filtering in the adapter would hide the search-limit cost. | "Open issues first". |
 | D14 | The formatting rule is cached per project for the process's lifetime; synchronous members read only the cache | A third of the projects on a measured space use notation (`backlog-api-facts.md`), and the setting rarely changes. | A TTL; `fetchChannelInfo` rewriting the cache (built and removed); Markdown only. |
 | D15 | `chat` peer `^4.40.0`, `@chat-adapter/shared` `^4.40.0`, `backlog-js` `^0.20.1`, `engines.node >=20`; the package's own semver from `0.1.0` | 4.40.0 is the contract verified; a caret range spares a consumer on a later minor a second core. | Exact pins; tracking `chat`'s version line. |
 | D18 | No `processMessageUpdated` | A comment edit emits no webhook (`backlog-webhook-facts.md`). | Polling for edits. |
 | D19 | Every authentic delivery is taken to be from the configured space | No body field identifies a space, and `projectKey` changes on a rename (`backlog-webhook-facts.md`). | Cross-checking `projectKey` (drops events after a rename). |
-| D22 | A type 14 fans out to one message per `content.link[]` entry, always; its `notifications[]` is carried whole | Each entry is a real comment `fetchMessages` returns, so ignoring 14 loses changes, and leaving it out of the subscription is the switch. An entry of `notifications[]` names no issue, so pairing by order would rest on nothing Backlog documents (`backlog-webhook-facts.md`). | Ignoring 14; a config flag; one summary message; a single-entry batch as a type 2; pairing `notifications[i]` with `link[i]`. |
-| D23 | The bot identity is optional: without `botUserId`, one `GET /users/myself`; with it, no request; a failed lookup is retried on demand, and a webhook without an id is 503 | Every serverless cold start runs `initialize`; the core never retries a rejected `initialize`; dispatching without the id lets the bot answer itself. | Both fields required; always looking up a missing name; rejecting `initialize`; dispatching without the id. |
+| D22 | A type 14 fans out to one message per `content.link[]` entry, always; its `notifications[]` is carried whole | Each entry is a real comment `fetchMessages` returns, so ignoring 14 loses changes, and leaving it out of the subscription is the switch. An entry of `notifications[]` names no issue, so pairing by order would rest on nothing Backlog documents (`backlog-webhook-facts.md`). | Ignoring 14; a config flag; one summary message; capping the batch; a single-entry batch as a type 2; pairing `notifications[i]` with `link[i]`; dropping `notifications` from `raw.payload`. |
+| D23 | The bot identity is optional: without `botUserId`, one `GET /users/myself`; with it, no request; a failed lookup is retried on demand, and a webhook without an id is 503 | Every serverless cold start runs `initialize`; the core never retries a rejected `initialize`; dispatching without the id lets the bot answer itself. | Both fields required; always looking up a missing name; a lazy lookup on the first webhook only; rejecting `initialize`; dispatching without the id. |
 | D24 | No `postChannelMessage`, no `markAsRead`; `ThreadInfo.metadata` names the thread only | No consumer needs them and neither first-party reference adapter has them; an issue created from a message had to guess its type and priority; a full copy in `metadata` duplicated `fetchSubject().raw`. | Keeping them because Backlog makes them possible. |
 | D25 | `raw.payload` is typed as `backlog-js`'s `Entity.Activity` with the measured deviations overlaid, discriminated on `type` | One type follows `backlog-js`, and only a measured deviation is declared here. | A loose envelope with `Record<string, unknown>`; hand-written per-type interfaces. |
 | D26 | Card fallback text uses the project's markup, and a Markdown divider stays `---` | `**` would reach a notation project as literal asterisks, and the card walk `chat` uses drops a link's URL; `---` is the byte the walk emitted before, so only the bug changes. | Markdown on every project; `***` for the divider. |
 | D27 | Notation's `\` escape is not applied to user text | Which characters `\` escapes, and whether a literal `¥` does, is undocumented; escaping by guess would eat a caller's backslashes or mangle prices (issue #92). | Escaping the documented characters only; escaping every marker. |
 | D28 | No timestamp window on webhooks | A Backlog timestamp is unsigned, so a window protects nothing, and redeliveries arrive about 20 minutes late (`backlog-webhook-facts.md`). | Rejecting payloads older than N minutes. |
 | D29 | The adapter does not dispatch the bot's own activity | `selfMessageContract` requires it; the core's `isMe` check is a second line. | Relying on the core alone. |
+| D30 | No webhook body-size limit of the adapter's own, and no 413 | Hosting platforms already cap request bodies, and no consumer needed a second, configurable cap (maintainer decision, 2026-09-27). | A `maxWebhookBodyBytes` option with a 413. |
 | D-PR1 | A pull-request thread's channel is its project | Webhooks carry `project.id`, and the formatting rule is per project. | The repository as channel. |
 | D-PR2 | The kind is explicit in every id, as one nested `BacklogSubjectRef` | Issues and pull requests have different endpoint families, coordinates and comment id sequences (`backlog-pull-request-facts.md`). | A flat optional-field shape; issues as the unmarked default. |
-| D-PR3 | `deleteMessage` on a pull-request thread throws `UNSUPPORTED_OPERATION` before any call | The endpoint does not exist (`backlog-pull-request-facts.md`); a `ValidationError` would blame a correct call; success would be fabricated. | `ValidationError`; a no-op. |
+| D-PR3 | `deleteMessage` on a pull-request thread throws `UNSUPPORTED_OPERATION` before any call | The endpoint does not exist (`backlog-pull-request-facts.md`); a `ValidationError` would blame a correct call; success would be fabricated. | `ValidationError`; a no-op; omitting `deleteMessage` (it is required). |
 | D-PR4 | No option selecting kinds | The webhook subscription already is that switch. | A `subjects` config. |
 | D-PR5 | Type 21 is ignored and not registered | It was never observed: merge and close arrive as type 19, and nothing deletes a pull request (`backlog-pull-request-facts.md`). | Dispatching a deletion on 21. |
 | D-PR6 | A pull request linked to an issue is its own thread | The link can change, and routing by it would move a thread. | Routing into the linked issue's thread. |
-| D-PR7 | `listThreads` lists issues only | A pull-request list is per repository, a coordinate a channel id lacks. | Interleaving every repository's pull requests. |
+| D-PR7 | `listThreads` lists issues only | A pull-request list is per repository, a coordinate a channel id lacks. | Interleaving every repository's pull requests; listing pull requests only. |
 | D-PR8 | `fetchSubject().type` is `"pull_request"` | The `@chat-adapter/github` convention bot authors already branch on. | `"pullRequest"`. |
 | D-PR9 | The root part is `r` for both kinds | A kind-named tag would mislead on the other kind. | `i`; no tag. |
 | D-PR10 | A pull-request comment's attachment resolves its id by name, the newest match winning, when read | Neither the webhook nor REST carries its id (`backlog-pull-request-facts.md`). | No `fetchData`; one list call per comment. |
-| D-API1 | The public surface is the adapter, its factory, the types reachable from them, two id decoders and `client()` | Every export is permanent, and the first-party adapters export the same kinds of thing and one client getter; the decoders read a grammar no `Adapter` member reads back. | A second escape hatch; free-function codecs; mention helpers; the converters. |
+| D-API1 | The public surface is the adapter, its factory, the types reachable from them, two id decoders and `client()` | Every export is permanent, and the first-party adapters export the same kinds of thing and one client getter; the decoders read a grammar no `Adapter` member reads back. | A second escape hatch; a `createApi` config field with an exported in-memory port; free-function codecs; mention helpers; the converters. |
