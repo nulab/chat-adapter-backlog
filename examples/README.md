@@ -54,7 +54,8 @@ Two things people get wrong here, both worth stating twice:
 
 - `BACKLOG_BOT_USER_ID` is the **numeric** `id`, not the login name. The
   adapter uses it to recognise its own activity, so a wrong value means the bot
-  answers itself.
+  answers itself. Set it: left out, every cold start spends a request reading
+  it again.
 - The bot needs permission to comment, and — for the examples that reassign an
   issue — to update issues in the project.
 
@@ -69,16 +70,15 @@ openssl rand -hex 32
 The URL you register in Backlog, once the deployment exists, is:
 
 ```
-https://<your-app>/api/webhooks/backlog?host=<host>&token=<secret>
+https://<your-app>/api/webhooks/backlog?token=<secret>
 ```
 
-`<host>` is the space host, exactly as in `BACKLOG_HOST`, and `<secret>` is the
-value above, exactly as in `BACKLOG_WEBHOOK_SECRET`.
+`<secret>` is the value above, exactly as in `BACKLOG_WEBHOOK_SECRET`.
 
 Read **Webhook authenticity** in the [root README](../README.md#webhook-authenticity--read-this)
 before you deploy anything. The short version: the URL is the credential, so
-keep it out of logs and issue trackers, and check the `host` you register
-against the space you register it in.
+keep it out of logs and issue trackers, and register it only in the space
+`BACKLOG_HOST` names.
 
 ### 3. A Vercel project whose Root Directory is the example
 
@@ -99,13 +99,13 @@ fine — each ignores the events it has nothing to say about.
 These five are read by `createBacklogAdapter()` and are the same in every
 example:
 
-| Variable                 | Meaning                                                            |
-| ------------------------ | ------------------------------------------------------------------ |
-| `BACKLOG_HOST`           | Space host, no scheme or path — for example `example.backlog.com`. |
-| `BACKLOG_API_KEY`        | The bot user's API key.                                            |
-| `BACKLOG_BOT_USER_ID`    | The bot user's numeric id.                                         |
-| `BACKLOG_BOT_USER_NAME`  | The bot user's display name.                                       |
-| `BACKLOG_WEBHOOK_SECRET` | The secret from step 2, also present in the hook URL you register. |
+| Variable                 | Meaning                                                                    |
+| ------------------------ | -------------------------------------------------------------------------- |
+| `BACKLOG_HOST`           | Space host, no scheme or path — for example `example.backlog.com`.         |
+| `BACKLOG_API_KEY`        | The bot user's API key.                                                    |
+| `BACKLOG_BOT_USER_ID`    | The bot user's numeric id.                                                 |
+| `BACKLOG_BOT_USER_NAME`  | The bot user's display name; required by an example that answers mentions. |
+| `BACKLOG_WEBHOOK_SECRET` | The secret from step 2, also present in the hook URL you register.         |
 
 Each example adds a few of its own on top, documented in its README and listed
 in its `.env.example`:
@@ -173,7 +173,7 @@ than boilerplate:
   `message.raw` reaches a handler as `unknown`, and parsing is also what makes
   keys the adapter's own schema does not name readable at all — the payload is
   the body Backlog sent, with its unknown keys intact.
-- **Backlog is called through `backlog.client(host)`**, the `backlog-js` client
+- **Backlog is called through `backlog.client()`**, the `backlog-js` client
   the adapter hands out, for the endpoints its port does not name. It is the
   same client the adapter makes its own calls with, so an example's requests
   are counted in the same rate-limit budget, retried on a 429 by the same rule,

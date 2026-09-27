@@ -1,43 +1,36 @@
 import { timingSafeEqual } from 'node:crypto';
 
-import type { BacklogWebhookVerifier, ResolvedInstallation } from '../types';
+import type { BacklogWebhookVerifier } from '../types';
 import type { Logger } from 'chat';
 
 export interface VerifyWebhookRequestInput {
   request: Request;
   webhookVerifier: BacklogWebhookVerifier | undefined;
-  installations: Map<string, ResolvedInstallation>;
+  webhookSecret: string | undefined;
   logger: Logger;
 }
 
 /**
- * The authenticated host and body, or `undefined` for every cause of a 401 —
- * one answer, so a caller cannot tell a wrong secret from an unknown host
- * (D2).
+ * The body, or `undefined` for every cause of a 401 (D2).
  *
  * Without a verifier the token is compared before the body is read, so an
  * unauthenticated caller never makes the process buffer a body.
  */
 export async function verifyWebhookRequest(
   input: VerifyWebhookRequestInput
-): Promise<{ host: string; rawBody: string } | undefined> {
-  const { request, webhookVerifier, installations, logger } = input;
-  const url = new URL(request.url);
+): Promise<string | undefined> {
+  const { request, webhookVerifier, webhookSecret, logger } = input;
 
   if (webhookVerifier === undefined) {
-    const host = hostOf(url, installations);
-    const expected =
-      host === undefined ? undefined : installations.get(host)?.webhookSecret;
-    const token = url.searchParams.get('token');
+    const token = new URL(request.url).searchParams.get('token');
     if (
-      host === undefined ||
-      expected === undefined ||
+      webhookSecret === undefined ||
       token === null ||
-      !tokenMatches(token, expected)
+      !tokenMatches(token, webhookSecret)
     ) {
       return undefined;
     }
-    return { host, rawBody: await request.text() };
+    return request.text();
   }
 
   const rawBody = await request.text();
@@ -52,26 +45,7 @@ export async function verifyWebhookRequest(
   }
   // Truthiness, not `=== true`: the verifier may hand back whatever its own
   // check produced.
-  if (!verified) {
-    return undefined;
-  }
-  const host = hostOf(url, installations);
-  return host === undefined ? undefined : { host, rawBody };
-}
-
-function hostOf(
-  url: URL,
-  installations: Map<string, ResolvedInstallation>
-): string | undefined {
-  const param = url.searchParams.get('host');
-  if (param !== null) {
-    const host = param.toLowerCase();
-    return installations.has(host) ? host : undefined;
-  }
-  // The parameter may be left out only when it is unambiguous (D3).
-  return installations.size === 1
-    ? installations.keys().next().value
-    : undefined;
+  return verified ? rawBody : undefined;
 }
 
 // `timingSafeEqual` throws on buffers of different lengths.

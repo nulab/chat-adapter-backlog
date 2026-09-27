@@ -6,7 +6,7 @@
  * this interface, and either can back any of them.
  *
  * The adapter as a whole is not `backlog-js`-free, and stopped being so on
- * purpose: `BacklogAdapter.client(host)` hands out the client the
+ * purpose: `BacklogAdapter.client()` hands out the client the
  * `backlog-js` implementation speaks through, for the endpoints this
  * interface does not name (docs/specs/adapter.md §3.1).
  */

@@ -67,8 +67,8 @@ trip the gate.
 
 **Reading the current value.** The webhook says what changed, not what the
 issue now holds, so the bot reads the issue back with
-`backlog.client(host).getIssue(issueId)` and looks through `customFields[]` for
-the configured id. `client(host)` hands out the `backlog-js` client the adapter
+`backlog.client().getIssue(issueId)` and looks through `customFields[]` for
+the configured id. `client()` hands out the `backlog-js` client the adapter
 makes its own calls with — the port names no custom fields — so this read is
 counted in the same rate-limit budget and fails with the same error classes as
 everything else the adapter does.

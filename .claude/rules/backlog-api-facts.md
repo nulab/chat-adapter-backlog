@@ -139,7 +139,7 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
 ## Notifications (per authenticated user)
 
 The adapter reads no notification feed; these are facts for a consumer that
-does, through `client(host)`.
+does, through `client()`.
 
 - `backlog-js` 0.20.1: `getNotifications({minId,maxId,count,order})` has no
   `senderId`; `getNotificationsCount({alreadyRead,resourceAlreadyRead})` types

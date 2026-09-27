@@ -16,12 +16,9 @@ import {
   decodeMessageId,
   decodeUserId,
   type Backlog,
-  type BacklogAdapter,
   type BacklogPostableExtras,
 } from '@nulab/chat-adapter-backlog';
 import { Chat, type PostableMarkdown } from 'chat';
-
-const HOST = 'example.backlog.com';
 
 const backlog = createBacklogAdapter();
 
@@ -66,41 +63,10 @@ export function POST(
   return chat.webhooks.backlog(request, { waitUntil });
 }
 
-export async function reachBacklogDirectly(): Promise<{
-  botUserName: string;
-}> {
-  const client: Backlog = backlog.client(HOST);
+export async function reachBacklogDirectly(): Promise<void> {
+  const client: Backlog = backlog.client();
   await client.getRateLimit();
   await client.getCustomFields(500);
   await client.getPullRequests(500, '700', { count: 20 });
   await client.patchIssue(8001, { assigneeId: 100 });
-
-  return { botUserName: backlog.botUserName(HOST) };
-}
-
-declare function readKey(space: string): Promise<string>;
-
-export function createMultiSpaceAdapter(): BacklogAdapter {
-  return createBacklogAdapter({
-    installations: [
-      {
-        host: 'one.backlog.com',
-        apiKey: () => readKey('one'),
-        botUserId: 999,
-        botUserName: 'Chatbot',
-        webhookSecret: 'one-webhook-secret-value',
-      },
-      {
-        host: 'two.backlog.jp',
-        apiKey: () => readKey('two'),
-        botUserId: 42,
-        botUserName: 'Helperbot',
-        webhookSecret: 'two-webhook-secret-value',
-      },
-    ],
-  });
-}
-
-export function botNameOnSecondSpace(): string {
-  return createMultiSpaceAdapter().botUserName('two.backlog.jp');
 }

@@ -953,6 +953,39 @@ describe('mention detection from notifications[] (§5.4 rule 6)', () => {
   });
 });
 
+describe('mention detection without a bot name', () => {
+  const isMention = (activity: MessageActivity) =>
+    buildInboundMessage(
+      activity,
+      { ...CONTEXT, botUserName: undefined },
+      issueSubject()
+    ).isMention;
+
+  it('a typed @name is not a mention', () => {
+    const activity = commented(
+      issueCommented({ text: `@${FIXTURE.bot.name} please help` })
+    );
+
+    expect(isMention(activity)).toBe(false);
+  });
+
+  it('a notification to the bot is still a mention', () => {
+    const activity = commented(
+      issueCommented({ notifications: [{ user: FIXTURE.bot, reason: 2 }] })
+    );
+
+    expect(isMention(activity)).toBe(true);
+  });
+
+  it('creating an issue assigned to the bot is still a mention', () => {
+    const activity = created(
+      issueCreated({ assignee: { id: FIXTURE.bot.id, name: FIXTURE.bot.name } })
+    );
+
+    expect(isMention(activity)).toBe(true);
+  });
+});
+
 describe('buildInboundMessage — author', () => {
   const author = (createdUser: {
     id: number;

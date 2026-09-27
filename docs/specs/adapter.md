@@ -20,8 +20,8 @@ Every Backlog API claim below cites a
 "measured on \<date\>".
 
 Conventions: "the core" is the `Chat` class in `chat@4.40.0`; "the port" is the
-internal `BacklogApi` interface (§8); "installation" is one configured Backlog
-space. `MUST`/`MUST NOT` are requirements; `SHOULD` is a default an implementer
+internal `BacklogApi` interface (§8); "the space" is the one Backlog space an
+adapter is configured for. `MUST`/`MUST NOT` are requirements; `SHOULD` is a default an implementer
 may deviate from with a Why-not comment. Items marked ⚑ are decisions the
 register in §15 tracks; each one has a verdict there — confirmed, changed or
 still open — so a ⚑ means "§15 has the answer", not "nobody has decided".
@@ -59,7 +59,7 @@ git repository as a channel (D-PR1), and listing pull requests through
 
 | Backlog | Chat SDK | Id grammar | Notes |
 | --- | --- | --- | --- |
-| Space | (installation) | `host` — a full hostname such as `example.backlog.com`, `example.backlog.jp`, `example.backlogtool.com` | Never a slug; the domain differs per space (`.claude/rules/backlog-api-facts.md` "Hosts"). |
+| Space | (the adapter's configuration) | `host` — a full hostname such as `example.backlog.com`, `example.backlog.jp`, `example.backlogtool.com` | Never a slug; the domain differs per space (`.claude/rules/backlog-api-facts.md` "Hosts"). |
 | Project | Channel | `backlog:<host>:<projectId>` | Numeric project id. Both kinds of thread belong to the project; a git repository is not a channel (D-PR1). |
 | Issue | Thread | `backlog:<host>:<projectId>:issue:<issueId>` | Numeric issue id, never the issue key: renaming a project key rewrites every issue key (measured, `.claude/rules/backlog-webhook-facts.md`). |
 | Pull request | Thread | `backlog:<host>:<projectId>:pr:<repositoryId>:<number>` | Numeric repository id, never the name (`repoIdOrName` accepts either; names can change); `number` is the per-repository number every pull-request endpoint is keyed by. The global pull-request `id` addresses no endpoint and appears only in raw data (`.claude/rules/backlog-pull-request-facts.md`). |
@@ -118,8 +118,7 @@ keyword takes — one posint after `issue:`, two after `pr:`; channel: exactly
 3), empty or invalid `host`, non-`posint` numeric segment, unknown subject
 keyword, a subject followed by nothing or by an unknown part, `r` or `c<id>`
 followed by further segments, `u:` with nothing after it. `decodeUserId`
-splits on the **last** `:`; a bare number is rejected even with a single
-installation.
+splits on the **last** `:`; a bare number is rejected.
 
 A `posint` whose **value** exceeds `Number.MAX_SAFE_INTEGER` is rejected as
 well, although its digits match the grammar: the segment is read with
@@ -127,19 +126,15 @@ well, although its digits match the grammar: the segment is read with
 decoded to `1e20` and re-encoded to `…:issue:1e+20` — a round trip that
 silently addressed something else.
 
-`encodeThreadId`, `encodeChannelId`, `encodeMessageId` and `encodeUserId`
-validate their input against **the same grammar** and throw the same
-`ValidationError`, because a value the grammar cannot express produces a
-string the matching decoder rejects: a non-lowercased host, a host with a
-scheme, path or port, a numeric field that is not a positive integer ≤ 2^53-1,
-and an `update` part whose `created` is empty. Nothing is normalised on the
-way out — a host is rejected, not lowercased in passing, since the config path
-(§3.2) is where lowercasing happens.
+The encoders do not re-validate: every value they receive was already parsed
+at a boundary — the webhook schema, a Backlog API response, a decoded id or
+the config schema (which lowercases the host through the same `host`
+grammar) — so a check there could only restate one that ran. Each grammar is
+one regular expression in `src/ids.ts`.
 
-A host
-that decodes correctly but is not a configured installation is a
-`ResourceNotFoundError("backlog", "installation", host)` at the point of use
-(not a decode error: the id is well-formed).
+A host that decodes correctly but is not the configured space is a
+`ResourceNotFoundError("backlog", "space", host)` at the point of use (not a
+decode error: the id is well-formed).
 
 ## 3. Public API
 
@@ -152,7 +147,7 @@ semver promise (D-API1).
 Runtime: `BacklogAdapter` (class), `createBacklogAdapter(config?)`,
 `decodeMessageId`, `decodeUserId`.
 
-Types: `BacklogAdapterConfig`, `BacklogInstallation`, `Resolvable`,
+Types: `BacklogAdapterConfig`, `Resolvable`,
 `BacklogWebhookVerifier` — the config and what it references;
 `BacklogThreadId` and `BacklogSubjectRef`; `BacklogRawMessage` and every
 type it reaches — `BacklogRawIssue`, `BacklogRawComment`,
@@ -163,7 +158,7 @@ able to name its type;
 decoders return; `BacklogPostableExtras`, without which the Backlog-only
 field of §3.4 cannot be typed at all;
 and `Backlog` — `backlog-js`'s own client class,
-re-exported so a consumer can name what `client(host)` returns without
+re-exported so a consumer can name what `client()` returns without
 depending on `backlog-js` itself.
 
 The two decoders are the only free functions, because they read a grammar
@@ -178,7 +173,7 @@ Not exported: the port (`BacklogApi`) and its domain types, the in-memory port
 (§8.3) and the seam that injects one, the id encoders and
 `channelIdFromThreadId` as free functions, the mention helpers and
 `mentionPattern`, the format converters (§9 — rendering is the adapter's
-`renderFormatted`), `ResolvedInstallation` and `ResolvedCredential`, the
+`renderFormatted`), the parsed config, the
 internal subject layer (`SubjectClient`, `subjectClientFor`) that selects
 the issue or pull-request endpoint family for a thread (D-PR2), the port's
 `backlog-js` wrapper factory, zod schemas, the plain-text fallback converter
@@ -191,7 +186,7 @@ do not export. The first rule is why `BacklogWebhookPayload` is declared in
 `src/types.ts` rather than aliased to a `z.infer` (§3.5).
 
 `backlog-js` does appear in one, and the exception is deliberate:
-`BacklogAdapter.client(host)` returns the configured `Backlog` client the
+`BacklogAdapter.client()` returns the configured `Backlog` client the
 adapter itself speaks through, for every endpoint the `Adapter` interface does
 not cover — changing an assignee, reading an issue's custom fields, listing a
 repository's pull requests, anything else a bot needs. Handing it out rather
@@ -203,45 +198,30 @@ types move with `backlog-js`'s, which is accepted because it is the library
 the adapter is built on and the same vendor ships both. It is the one escape
 hatch, as `octokit` is `@chat-adapter/github`'s.
 
-An unknown host is `ResourceNotFoundError("backlog", "installation", host)`.
-`client(host)` throws `AdapterError` (`code: 'NO_CLIENT'`) when the adapter
+`client()` throws `AdapterError` (`code: 'NO_CLIENT'`) when the adapter
 was built on the internal port seam, which only this repository's tests can
 reach: the port is then not `backlog-js`-backed and there is no client to
 hand out.
 
 ### 3.2 `createBacklogAdapter(config?)`
 
-Returns `new BacklogAdapter(config ?? {})`. The constructor validates
-synchronously and throws `ValidationError` on the first problem; it never calls
-`process.exit`, never logs a secret, and makes no network call.
-
-Two mutually exclusive shapes ⚑ D1:
+Returns `new BacklogAdapter(config ?? {})`. One adapter serves one Backlog
+space (D1). The constructor parses config and environment together with one
+zod schema (`src/config.ts`) and throws one `ValidationError` naming every
+problem; it never calls `process.exit`, never logs a secret, and makes no
+network call.
 
 ```ts
 type Resolvable = string | (() => string | Promise<string>);
 
-interface BacklogInstallation {
-  host: string;
+interface BacklogAdapterConfig {
+  host?: string;
   apiKey?: Resolvable;      // exactly one of apiKey / accessToken
   accessToken?: Resolvable;
-  botUserId?: number;       // either or both may be left to GET /users/myself (D23)
+  botUserId?: number;       // left out: GET /users/myself (D23)
   botUserName?: string;
-  webhookSecret?: string;   // required unless config.webhookVerifier is set
-}
-
-interface BacklogAdapterConfig {
-  // Shape A — one space, every field falls back to an environment variable.
-  host?: string;
-  apiKey?: Resolvable;
-  accessToken?: Resolvable;
-  botUserId?: number;
-  botUserName?: string;
-  webhookSecret?: string;
-  // Shape B — several spaces. Mutually exclusive with shape A's fields.
-  installations?: BacklogInstallation[];
-  // Shared
+  webhookSecret?: string;   // required unless webhookVerifier is set
   webhookVerifier?: BacklogWebhookVerifier;
-  userName?: string;
   logger?: Logger;
 }
 type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | Promise<unknown>;
@@ -249,100 +229,60 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 
 | Option | Type | Default | Env fallback | Validation |
 | --- | --- | --- | --- | --- |
-| `host` | `string` | — | `BACKLOG_HOST` | Matches `host` grammar after lowercasing; rejects `:`/`/`/scheme/whitespace. |
-| `apiKey` | `Resolvable` | — | `BACKLOG_API_KEY` | Non-empty when a string. Exactly one of `apiKey`/`accessToken` per installation; the pair falls back to the environment together (below). |
+| `host` | `string` | — | `BACKLOG_HOST` | Matches the `host` grammar after lowercasing, so a scheme, port, path or whitespace is rejected. |
+| `apiKey` | `Resolvable` | — | `BACKLOG_API_KEY` | Non-empty when a string. Exactly one of `apiKey`/`accessToken`; the pair falls back to the environment together (below). |
 | `accessToken` | `Resolvable` | — | `BACKLOG_ACCESS_TOKEN` | As above. Refresh is the caller's job (resolver form). |
-| `botUserId` | `number` | `GET /users/myself` → `id` | `BACKLOG_BOT_USER_ID` | Optional. When given: positive integer ≤ 2^53-1 (the §2.1 `posint` range, since it is encoded into user ids and mentions); env value must parse as one. |
-| `botUserName` | `string` | `GET /users/myself` → `name` | `BACKLOG_BOT_USER_NAME` | Optional. When given: non-empty after trim (an empty name would make every `@` a mention). |
-| `webhookSecret` | `string` | — | `BACKLOG_WEBHOOK_SECRET` | Non-empty and at least **16 bytes** (UTF-8), validated whether or not a verifier is configured. Required on every installation unless `webhookVerifier` is set (D2). |
-| `installations` | `BacklogInstallation[]` | — | none | Non-empty; no duplicate hosts (after lowercasing); each element validated as above. Rejected if any shape-A field is also present. |
-| `webhookVerifier` | function | — | none | When set, replaces the secret check for every installation (D2). |
-| `userName` | `string` | first installation's bot name, configured or fetched | none | Non-empty. Exposed to the core as `adapter.userName`. |
+| `botUserId` | `number` | `GET /users/myself` → `id` | `BACKLOG_BOT_USER_ID` | Optional. When given: positive integer ≤ 2^53-1 (the §2.1 `posint` range); the env value must be one in decimal. |
+| `botUserName` | `string` | `GET /users/myself` → `name`, only when `botUserId` is also unset | `BACKLOG_BOT_USER_NAME` | Optional. When given: not blank (an empty name would make every `@` a mention). |
+| `webhookSecret` | `string` | — | `BACKLOG_WEBHOOK_SECRET`, not read when `webhookVerifier` is set | At least **16 bytes** (UTF-8); a configured one is validated even beside a verifier. Required unless `webhookVerifier` is set (D2). |
+| `webhookVerifier` | function | — | none | When set, replaces the secret check (D2). |
 | `logger` | `Logger` (from `chat`) | `new ConsoleLogger("info").child("backlog")` | none | Replaced by `chat.getLogger("backlog")` in `initialize`. |
 
-Environment fallbacks apply **only** to shape A and only when the corresponding
-field is absent from `config` (an explicit empty string is a validation error,
-not a fallback trigger). Missing everything → `ValidationError` naming the
-first missing field and its environment variable. Internally the adapter always
-holds `Map<host, ResolvedInstallation>`; shape A is one entry.
+A fallback applies only when the field is absent from `config` (an explicit
+empty string is a validation error, not a fallback trigger). An option the
+schema does not name — a leftover `installations`, say — is rejected rather
+than ignored.
 
-**Bot identity (D23).** `botUserId` and `botUserName` are optional:
-whichever half is missing on an installation is read from `GET /users/myself`
-for that installation — the user its credential acts as
-(`.claude/rules/backlog-api-facts.md`). A configured half always wins
-over the fetched one, so a deployment can pin the display name its users type
-while leaving the id to the API.
+`apiKey` and `accessToken` are one mutually exclusive choice, so they fall
+back as a **pair**: an explicit `apiKey` or `accessToken` in `config`
+suppresses both variables, and only with neither in `config` are
+`BACKLOG_API_KEY` and `BACKLOG_ACCESS_TOKEN` read. Both given, from either
+source, is "exactly one of apiKey or accessToken is required". Otherwise a
+deployment that moved from OAuth to an API key, wrote `apiKey` in `config` and
+forgot to unset `BACKLOG_ACCESS_TOKEN` would be refused with a message blaming
+the config it had just written.
 
+**Bot identity (D23).** The id is what recognises the bot's own activity and
+an assignment to it; the name only recognises a hand-typed `@name` (§5.4).
+
+- **`botUserId` configured → no request at all**, ever, whether or not the
+  name is. This is what the `consumer` smoke job asserts (§13).
+- **Id configured, name missing → one `warn` from `initialize`**: the two
+  rules that compare the name are off — the typed `@name` in text and the
+  assignment reported by display name in `changes[]` (§5.4) — while
+  notifications and the assignee id still count. `userName` is `""`, which
+  the core reads as "use `chat.userName`" (`adapter.userName ||
+  chat.userName`); the `Adapter` type makes `userName` a string, so `""` is
+  the only way to say "no name", and a consumer must give `Chat` a non-empty
+  `userName` or the core's pattern matches every bare `@`.
+- **Id missing → one `GET /users/myself`**, made by `initialize`, on the
+  `read` bucket. It fills the id and, when unset, the name.
 - **A blank `BACKLOG_BOT_USER_ID=` or `BACKLOG_BOT_USER_NAME=` counts as
-  unset** and is looked up — the exception to "an explicit empty value is a
-  validation error", because a copied `.env.example` leaves those lines
-  blank. An empty `botUserName` in `config` is still an error.
-- **Both configured → no request at all**, ever. This is the only way to make
-  the adapter spend nothing on who it is, and what the `consumer` smoke job
-  asserts (§13).
-- **Either missing → one `GET /users/myself` per such installation**, made by
-  `initialize` for every one of them at once, on the `read` bucket. The
-  constructor still validates whatever *is* configured and still makes no
-  call.
+  unset** — the exception to "an explicit empty value is a validation error",
+  because a copied `.env.example` leaves those lines blank.
 - **A failed lookup does not fail `initialize`.** It is logged `warn`
   `bot identity lookup failed; retried on demand` `{host, error}` and leaves
   nothing cached. The core memoises its adapters' `initialize` and never
   retries a rejected one, so a rejection there would refuse every later
   webhook, for every adapter of the `Chat`, until the process restarts.
-- **The next caller that needs the identity asks again**; callers that
-  arrive together each ask. The webhook path is one such caller (§5.1
-  row 11): a delivery whose identity still cannot be learned is answered 503
-  and **not dispatched**, because dispatching it without the self-message
-  check would let the bot answer its own comments. The async members that
-  read the id (reactions, reads, `getUser`) reject with the lookup's error.
-- **The synchronous members cannot ask.** `parseMessage` and
-  `botUserName(host)` read the identity already known and throw
-  `AdapterError(…, "BOT_IDENTITY_UNRESOLVED")` for a host whose identity has
-  not been learned yet; `userName` is `""` until then, which the core reads as
-  "use `chat.userName`" (`adapter.userName || chat.userName`).
-
-`apiKey` and `accessToken` are the one exception to "field by field": they are
-a single mutually exclusive choice, so they fall back as a **pair**. An
-explicit `apiKey` *or* an explicit `accessToken` in `config` suppresses
-**both** `BACKLOG_API_KEY` and `BACKLOG_ACCESS_TOKEN`, and the four
-combinations resolve as:
-
-| `config` | Environment | Result |
-| --- | --- | --- |
-| `apiKey` | `BACKLOG_ACCESS_TOKEN` set | The explicit `apiKey`; the variable is ignored. |
-| `accessToken` | `BACKLOG_API_KEY` set | The explicit `accessToken`; the variable is ignored. |
-| both | either or neither | `ValidationError` — "exactly one of apiKey or accessToken is allowed, not both". |
-| neither | both set | `ValidationError` — "exactly one of BACKLOG_API_KEY or BACKLOG_ACCESS_TOKEN is allowed, not both", naming the **variables** rather than the config fields. |
-
-Otherwise a deployment that moved from OAuth to an API key, wrote `apiKey` in
-`config` and forgot to unset `BACKLOG_ACCESS_TOKEN` would be refused with a
-message blaming the config it had just written.
-
-`ResolvedInstallation` (internal) is what validation produced, not a second
-name for `BacklogInstallation`, and it says so in the type:
-
-```ts
-type ResolvedCredential =
-  | { apiKey: Resolvable; accessToken?: never }
-  | { accessToken: Resolvable; apiKey?: never };
-
-type ResolvedInstallation = {
-  host: string;             // lowercased, §2.1 host grammar
-  botUserId?: number;       // as configured; GET /users/myself fills the rest later (D23)
-  botUserName?: string;
-  webhookSecret?: string;
-} & ResolvedCredential;
-```
-
-So an installation carrying both credentials or neither is a type error, and
-the port factory receives a value whose exclusivity no reader has to take on trust.
-The input type stays permissive on purpose: config is assembled from
-`process.env` and JSON the compiler knows nothing about, and one
-`ValidationError` naming the field is a better report than a type error raised
-where the object was built. `host` stays a plain `string` rather than a brand
-— every construction site, fixtures and consumer test doubles included, would
-have to cast into one, and its only producer is the shared host validator in
-`src/ids.ts`.
+- **The next caller that needs the id asks again**; callers that arrive
+  together each ask. The webhook path is one such caller (§5.1 row 7): a
+  delivery whose id still cannot be learned is answered 503 and **not
+  dispatched**, because dispatching it without the self-message check would
+  let the bot answer its own comments. The async members that read the id
+  (reactions, reads, `getUser`) reject with the lookup's error.
+- **`parseMessage` cannot ask**: it is synchronous, and throws
+  `AdapterError(…, "BOT_IDENTITY_UNRESOLVED")` until the id is known.
 
 Credential resolvers are invoked on **every** outbound call and their result is
 never cached by the adapter (vendor-official requirement, verified in the
@@ -351,24 +291,15 @@ throws makes that call reject with `AuthenticationError` wrapping the cause.
 
 ### 3.3 Additional public members of `BacklogAdapter`
 
-- `readonly name = "backlog"`; `readonly userName: string` (a getter: `""`
-  until a bot name left to `GET /users/myself` has been fetched, §3.2).
-- `client(host: string): Backlog` — the `backlog-js` client for that
-  installation, the one escape hatch (§3.1, D7).
-- `botUserName(host: string): string` — the bot's display name on that
-  installation (D19). Unknown host → the same
-  `ResourceNotFoundError("backlog", "installation", host)`. Unaffected by a
-  `config.userName` override, which renames the adapter to the core and not
-  the bot in any space. Synchronous: a name left to `GET /users/myself`
-  throws `AdapterError(…, "BOT_IDENTITY_UNRESOLVED")` until `initialize` has
-  fetched it (§3.2, D23).
+- `readonly name = "backlog"`; `readonly userName: string` (a getter: the
+  configured or fetched `botUserName`, `""` while there is none, §3.2).
+- `client(): Backlog` — the `backlog-js` client the adapter speaks through,
+  the one escape hatch (§3.1, D7).
 - `renderFormatted(content, target?: string)` — see §4 and §9.3 ⚑.
 
-`botUserId` is **not** exposed on the adapter: it differs per installation, and
-the core's use of it (an extra `@<id>` mention pattern) would be wrong for
-every space but one. The display name **is**, through `botUserName(host)`,
-because a consumer that reads or writes a mention string needs it per space and
-Backlog has already published it in every rewritten comment body (D19).
+`botUserId` is **not** exposed on the adapter: the core's use of it is an extra
+`@<id>` / `<@id>` mention pattern, which no Backlog text ever contains, and it
+may not be known until `initialize` has run.
 
 ### 3.4 Postable extras
 
@@ -475,8 +406,8 @@ stated where it differs.
 | Member | Status | Behaviour | Core calls it |
 | --- | --- | --- | --- |
 | `name` | implemented | `"backlog"`. Config key in `new Chat({ adapters: { backlog } })` MUST equal it (thread-id prefix routing). | dedupe key, `Thread.toJSON`, logs |
-| `userName` | implemented | `config.userName ??` the first installation's bot name, configured or fetched (`""` until fetched, §3.2). One string for the whole adapter; the per-installation name is `botUserName(host)` (§3.3, D19). | fallback mention regex `(?<!\w)@<userName>(?![\w-])`, `SentMessage.author` |
-| `initialize(chat)` | implemented | Stores the `ChatInstance`, swaps logger to `chat.getLogger("backlog")`, and reads every bot identity left unconfigured from `GET /users/myself` — no API call when every installation configured both halves; a failed lookup is a `warn`, never a rejection (§3.2, D23). | first webhook / `chat.initialize()` |
+| `userName` | implemented | The configured or fetched `botUserName`; `""` while there is none (§3.2). | fallback mention regex `(?<!\w)@<userName>(?![\w-])`, `SentMessage.author` |
+| `initialize(chat)` | implemented | Stores the `ChatInstance`, swaps logger to `chat.getLogger("backlog")`, and reads the bot identity from `GET /users/myself` when `botUserId` is unset — no API call when it is set, and one `warn` when the name is not; a failed lookup is a `warn`, never a rejection (§3.2, D23). | first webhook / `chat.initialize()` |
 | `handleWebhook(request, options?)` | implemented | §5. | `chat.webhooks.backlog(req)` |
 | `encodeThreadId` / `decodeThreadId` | implemented | §2 grammar; exact round trip of `{ host, projectId, subject }`, the nested `BacklogSubjectRef` (D-PR2). | never (test kit) |
 | `channelIdFromThreadId` | implemented | First three segments: `backlog:<host>:<projectId>`. | `createThread`, lock key, history |
@@ -502,7 +433,7 @@ stated where it differs.
 | `listThreads(channelId, options?)` | implemented | §7.6; offset cursor; **issues only** (D-PR7). |
 | `getUser(userId)` | implemented | §7.7. |
 | `rehydrateAttachment(attachment)` | implemented | §6.6. |
-| `postChannelMessage` | absent | Core falls back to `postMessage(channelId)`, which throws `ValidationError`; an issue is created through `client(host).postIssue` (D24). |
+| `postChannelMessage` | absent | Core falls back to `postMessage(channelId)`, which throws `ValidationError`; an issue is created through `client().postIssue` (D24). |
 | `markAsRead` | absent | Core throws `NotImplementedError(…, "read-receipts")` (D24). |
 | `endTyping` | absent | Core skips. |
 | `disconnect` | absent | Nothing to close. |
@@ -523,18 +454,18 @@ adapter never throws its own "not supported".
 
 The first failure returns. Bodies are plain text. Every 401 uses the identical
 body, and nothing about which check failed reaches the response or the log
-line, so an unauthenticated caller cannot distinguish "wrong secret" from
-"unknown host" (D2).
+line, so an unauthenticated caller cannot distinguish a missing secret from a
+wrong one (D2).
 
 | # | Check | Failure → status, body | Log |
 | --- | --- | --- | --- |
-| 1 | Authenticity — with a `webhookVerifier`: the body is read and `await verifier(request, rawBody)` is truthy and does not throw, then the host resolves. Without one: the host resolves, and `?token=` is present and `timingSafeEqual` to that installation's `webhookSecret` after a byte-length check, **before the body is read**. The host resolves when `?host=` (lowercased) is a configured host, or is absent and exactly one installation is configured (D3) | 401 `Unauthorized` | warn `webhook rejected: unauthorized`; a throwing verifier also logs error `webhook verifier threw` `{error}` (never the body) |
+| 1 | Authenticity — with a `webhookVerifier`: the body is read and `await verifier(request, rawBody)` is truthy and does not throw. Without one: `?token=` is present and `timingSafeEqual` to `webhookSecret` after a byte-length check, **before the body is read**. The delivery is taken to be from the configured space (D19) | 401 `Unauthorized` | warn `webhook rejected: unauthorized`; a throwing verifier also logs error `webhook verifier threw` `{error}` (never the body) |
 | 2 | `JSON.parse(rawBody)` succeeds | 400 `Invalid JSON` | warn |
 | 3 | Envelope `{ type: number }` | 400 `Invalid payload` | warn with zod issue paths (no values) |
 | 4 | `type ∈ {1, 2, 3, 4, 14, 18, 19, 20}` — the types the schema in `src/webhook/payload.ts` names, with no switch: 4 is always dispatched when it arrives, 14 fans out to one message per issue (D22), and 21 never is (D-PR5) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
 | 5 | Type-specific schema (§5.2) | 400 `Invalid payload` | warn with zod issue paths (no values) |
 | 6 | `initialize()` has run | 503 `Adapter not initialized` ⚑ (a 5xx is the only answer that could make Backlog redeliver; whether it does is undocumented) | error |
-| 7 | The installation's bot identity is known — configured, fetched by `initialize`, or fetched now by one `GET /users/myself` (§3.2, D23) | 503 `Bot identity unavailable` (without the id the next row cannot run, and dispatching anyway would let the bot answer itself) | error `webhook rejected: bot identity unavailable` `{host, error}` |
+| 7 | The bot identity is known — configured, fetched by `initialize`, or fetched now by one `GET /users/myself` (§3.2, D23) | 503 `Bot identity unavailable` (without the id the next row cannot run, and dispatching anyway would let the bot answer itself) | error `webhook rejected: bot identity unavailable` `{host, error}` |
 | 8 | `createdUser.id !== botUserId` | 200 `OK` (self message, nothing dispatched) | debug `self message skipped` |
 | 9 | Success | 200 `OK`, returned **before** processing completes | — |
 
@@ -830,19 +761,15 @@ a hand-typed `@Chatbot`, and it errs toward the bot answering rather than
 staying silent.
 
 `message.isMention` is pre-set from these; the core additionally runs its own
-`@<userName>` regex which, because `userName` defaults to `botUserName`,
-agrees for the first installation — and only for it, so detection on every
-other space is the adapter's alone, and a consumer building its own mention
-string reads `botUserName(host)` rather than `userName` (§3.3, D19).
+`@<userName>` regex, with `userName` the adapter's `botUserName` or, without
+one, `chat.userName`.
 
 The two regexes do not agree on case. The core's is **case-insensitive** and
 ORs its result in (`message.isMention || detectMention(...)`,
 `.claude/rules/chat-sdk-core-facts.md`), so `@chatbot` reaches a handler with
 `isMention` true through a `chat` consumer while rule 1 alone answers false
-(measured 2026-09-06). Rule 1 stays case-sensitive: it is what the other
-spaces of a multi-installation deployment are decided by, and matching a
-display name loosely there widens the collision the paragraph below already
-accepts. Nothing is lost by the disagreement — the core can only ever add
+(measured 2026-09-06). Rule 1 stays case-sensitive: matching a display name
+loosely widens the collision the paragraph below already accepts. Nothing is lost by the disagreement — the core can only ever add
 mentions, never remove one — and it is documented in README's Mentions section
 because it is what a consumer observes.
 
@@ -876,8 +803,8 @@ that notifies without a visible mention.
 
 ## 6. Egress
 
-Every egress member decodes `threadId`, resolves the installation, and uses the
-port for that host through the subject client the thread id's `subject`
+Every egress member decodes `threadId`, refuses a host other than the
+configured space, and uses the port through the subject client the thread id's `subject`
 selects (issue endpoints or pull-request endpoints, D-PR2). The behaviour
 below is the same for both kinds unless a subsection says otherwise.
 Non-comment message ids (`:r`, `:u:`) are rejected with
@@ -1025,7 +952,7 @@ returns neither object's `attachments[]`: `getIssue` does not surface one, and
 them is one extra read on **every** root message — `GET /issues/:issueIdOrKey/attachments`
 and `GET /projects/:projectId/git/repositories/:repositoryId/pullRequests/:number/attachments`
 — for a source that matters only when a body has files, so the adapter does
-not spend it and a consumer that wants them asks through `client(host)`
+not spend it and a consumer that wants them asks through `client()`
 (§3.3): `getIssueAttachments` and `getPullRequestAttachments`.
 
 `fetchData()` calls `GET /issues/:issueId/attachments/:attachmentId`
@@ -1034,7 +961,7 @@ or `GET /projects/:projectId/git/repositories/:repositoryId/pullRequests/:number
 ([Download Pull Request Attachment](https://developer.nulab.com/docs/backlog/api/2/download-pull-request-attachment/))
 through the port and returns a `Buffer`. `rehydrateAttachment(attachment)`
 rebuilds `fetchData` from `attachment.url` after a JSON round trip; it accepts
-only URLs whose host is a configured installation and whose path matches
+only URLs whose host is the configured space and whose path matches
 `/api/v2/issues/<posint>/attachments/<posint>` or
 `/api/v2/projects/<posint>/git/repositories/<posint>/pullRequests/<posint>/attachments/<posint>`
 — anything else is returned unchanged (no `fetchData`), which keeps
@@ -1186,7 +1113,7 @@ with `projectId[]`, `count` (default 50, clamped `[1, 100]`, non-integer →
 (cursor, `^(0|[1-9]\d*)$` else `ValidationError`). This endpoint draws on the
 **search** bucket (150/min documented example), not read. **Pull requests are
 not listed** (D-PR7): a pull-request list is per repository, a coordinate the
-channel id does not carry; `client(host).getPullRequests(projectId, repositoryId, …)`
+channel id does not carry; `client().getPullRequests(projectId, repositoryId, …)`
 is the route to one, and it spends `read`, not `search` (measured
 2026-09-06). Ordering is Backlog's
 default for the endpoint (`order=desc` on its unstated default sort key); no
@@ -1292,7 +1219,7 @@ Wraps `backlog-js@^0.20.1`. Two constraints shape it:
   `this.fetch(url, init).then(this.checkStatus)`, 0.20.1). The 429 retry
   (§8.4) and the error mapping (§8.5) live there, so they apply whether the
   call came from this port's own `request()` or from a consumer holding
-  `client(host)` (§3.1). A non-2xx throws from the injected `fetch`, before
+  `client()` (§3.1). A non-2xx throws from the injected `fetch`, before
   `checkStatus` can turn it into a `backlog-js` error, so a mapped
   `@chat-adapter/shared` error is what escapes either route.
 - **Per-call credentials.** The client is constructed carrying **no**
@@ -1316,7 +1243,7 @@ outlive the request timeout.
 
 `createInMemoryBacklogApi(seed?)` backs this repository's own tests and is
 not exported (§3.1): a consumer tests its handlers with `@chat-adapter/tests`
-and mocks `client(host)`, as it would with any first-party adapter. Seed:
+and mocks `client()`, as it would with any first-party adapter. Seed:
 `projects`, `issues`, `comments`, `users`, `repositories`, `pullRequests`,
 `pullRequestComments` (keyed by `{ repositoryId, number }`), `me` (the bot
 user), `now()`. It exposes
@@ -1340,7 +1267,7 @@ copy, and a download of that id returns them.
   limits or has its `X-RateLimit-*` headers recorded: the one decision the
   adapter makes about a limit — how long to wait after a 429 — needs only the
   failing response's own `X-RateLimit-Reset` (UTC epoch **seconds**). A
-  consumer that wants the figures calls Get Rate Limit through `client(host)`.
+  consumer that wants the figures calls Get Rate Limit through `client()`.
 - On HTTP 429 or error code 13: trim and parse `X-RateLimit-Reset`; an empty or
   non-finite value is missing, not epoch zero. For a usable reset compute
   `waitMs = max(reset*1000 - now, 1000) + jitter`, where jitter is uniformly
@@ -1480,7 +1407,7 @@ caller through the resolver form; the adapter performs no OAuth flow
 ([Authentication](https://developer.nulab.com/docs/backlog/auth/)). Both
 identify the bot **user**; rate limits are per user, not per key.
 
-**Exactly one** of the two per installation. The `BacklogCredentials` union
+**Exactly one** of the two. The `BacklogCredentials` union
 says so, and says it with an `apiKey?: never` / `accessToken?: never` on its
 members, because a union target on its own rejects only a property that
 appears in **no** member — `{ apiKey, accessToken }` type-checks clean against
@@ -1754,8 +1681,8 @@ marker has `postMessage`'s `{ raw }` postable, which bypasses the converter
   `Backlog-API-Key` header, tokens in `Authorization`; never in a query string.
   Thrown errors and logs carry `BacklogApiErrorDetail.url` with the query
   string stripped.
-- **Webhook authenticity** (D2): every installation has a `webhookSecret` or a
-  `webhookVerifier` exists, enforced at construction. A secret shorter than 16
+- **Webhook authenticity** (D2): a `webhookSecret` or a `webhookVerifier` is
+  configured, enforced at construction. A secret shorter than 16
   bytes is a construction-time `ValidationError` — it is the whole of the
   check, so a guessable one is a way in, and config resolution has no logger to
   warn into. The secret is compared with `crypto.timingSafeEqual` after a
@@ -1766,11 +1693,11 @@ marker has `postMessage`'s `{ raw }` postable, which bypasses the converter
   check; README states this plainly and lists IP allowlisting and Basic auth
   in the hook URL as deployment-level additions pluggable through
   `webhookVerifier`.
-- **No host enumeration**: unknown or missing host, missing or wrong token,
-  and a failing verifier all produce the same 401 body.
-- **A misregistered `?host=` is authentic** (D19): a payload from space B sent
-  to space A's hook URL with space A's own secret passes every check on the
-  ladder, because nothing in a Backlog body identifies its space (measured,
+- **One 401**: a missing or wrong token and a failing verifier all produce
+  the same body.
+- **Another space's webhook pointed at this deployment is authentic** (D19):
+  a payload from space B sent to space A's hook URL with space A's own secret
+  passes every check on the ladder, because nothing in a Backlog body identifies its space (measured,
   `.claude/rules/backlog-webhook-facts.md`). The receiver then addresses space
   B's ids with space A's credentials, and cross-space ids are not reliably
   absent from one another (measured 2026-09-06: two spaces minting issue ids
@@ -1807,8 +1734,8 @@ Tests are colocated `src/**/*.test.ts`, named after the behaviour they specify.
 | Suite | What this adapter provides |
 | --- | --- |
 | `threadIdContract` | `encode`/`decode` bound to an instance; cases for `.backlog.com`, `.backlog.jp`, `.backlogtool.com` hosts with pinned encoded strings; `isDM` split omitted (always false) or asserted false for every case. |
-| `selfMessageContract` | `setup()` builds an adapter with the in-memory port and `botUserId: 999`, `createMockChatInstance()`; `makeOtherMessageRequest` = fixture type-3 comment by `Alice` with `?host=&token=`; `makeSelfMessageRequest` = same comment by `createdUser.id === 999`. Expects 200 + dispatched vs 200 + not dispatched. |
-| `connectWebhookContract` | `createAdapter({ webhookVerifier })` with installations lacking `webhookSecret`; `makeWebhookRequest` includes `?host=`; `createAdapterWithSecretAndVerifier` proves the verifier wins. |
+| `selfMessageContract` | `setup()` builds an adapter with the in-memory port and `botUserId: 999`, `createMockChatInstance()`; `makeOtherMessageRequest` = fixture type-3 comment by `Alice` with `?token=`; `makeSelfMessageRequest` = same comment by `createdUser.id === 999`. Expects 200 + dispatched vs 200 + not dispatched. |
+| `connectWebhookContract` | `createAdapter({ webhookVerifier })` without a `webhookSecret`; `createAdapterWithSecretAndVerifier` proves the verifier wins. |
 
 Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
 `toHaveDispatched`, `toBeSubscribedTo`, …) are registered via
@@ -1817,24 +1744,24 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
 ### 12.2 Unit and integration coverage (minimum)
 
 - **ids**: every grammar row round-trips; every rejection rule in §2.2 has a
-  case; `created` containing `:` survives `u:` round trip; user id splits on
-  the last `:`.
-- **config**: shape A from explicit fields, from env, mixed; each missing
-  field names its env var; empty-string field is an error; shape A + B →
-  error; duplicate hosts; host with scheme/port/path; `botUserId` non-integer
-  env; no secret and no verifier → error; resolver functions invoked per call
-  and not cached; `userName` default; `botUserName(host)` per installation,
-  bot identity (D23): both halves configured → no `GET /users/myself` at all;
-  either missing → one per installation missing it, with the configured half
-  winning; blank `BACKLOG_BOT_*` variables are looked up;
-  `botUserName(host)` before the identity is known throws; a failed lookup
-  resolves `initialize`, is retried by the next
-  webhook, and a webhook that still cannot learn it is 503 and not dispatched;
-  `parseMessage` before the identity is known throws; the fetched id
-  suppresses self messages and the fetched name is the mention the core
-  matches (a real `Chat` answers it once); construction from
-  `BACKLOG_HOST`, `BACKLOG_API_KEY` and `BACKLOG_WEBHOOK_SECRET` alone;
-  unchanged by a `userName` override, unknown host → `ResourceNotFoundError`.
+  case; `created` containing `:` survives `u:` round trip.
+- **config**, at `parseConfig`: explicit fields, env, and explicit over env;
+  a missing host names its variable; an empty-string field is an error, not a
+  fallback; host with scheme/port/path/whitespace; both or neither
+  credential, the pair fallback both ways; resolver functions invoked per call
+  and never at parse time; secret required without a verifier and at least
+  16 bytes with one, `BACKLOG_WEBHOOK_SECRET` not read beside a verifier;
+  `botUserId` range, in config and in env; blank
+  `BACKLOG_BOT_*` variables are unset; an unknown option is rejected.
+- **bot identity** (D23), at the adapter: `botUserId` configured → no
+  `GET /users/myself`, with or without the name, and one `warn` without it;
+  a typed `@name` is not a mention without a name while a notification is;
+  id missing → one lookup filling the id and the name, a configured name
+  winning; a failed lookup resolves `initialize`, is retried by the next
+  webhook, and a webhook that still cannot learn it is 503 and not
+  dispatched; `parseMessage` before the id is known throws; the fetched name
+  is the mention the core matches (a real `Chat` answers it once); a host
+  other than the configured space → `ResourceNotFoundError`.
 - **webhook**: every §5.1 row at `handleWebhook`; path-secret and verifier
   authentication, including the identical 401 and the body left unread on a
   failed token, at `verifyWebhookRequest`; each §5.2 normalisation once, at the
@@ -1891,7 +1818,7 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   by status; past reset has a one-second floor, empty
   reset is missing, retry jitter stays in `[0, 250)` ms under an injected
   random source; query string stripped from `cause.url`. The client
-  `client(host)` hands out is held to the same list where it can be: a call
+  `client()` hands out is held to the same list where it can be: a call
   through it gets its credential is resolved per call and never reaches the URL, a
   CR/LF credential is an `AuthenticationError`, a failure is a
   `@chat-adapter/shared` error rather than a `backlog-js` one, and a 429 is
@@ -1948,10 +1875,10 @@ for one scratch space is worse than requiring the two to share it.
   breaking change is a minor while the major is `0`), the contract coverage of
   §4, and the catalog-listing choice (§15.4 item 31); installation
   (`pnpm add @nulab/chat-adapter-backlog chat`);
-  quick start (shape A with explicit fields); environment-variable table (the
+  quick start (explicit fields); environment-variable table (the
   six `BACKLOG_*` variables, required/optional); configuration reference (§3.2
   table); platform setup (create bot user, add to project, issue API key,
-  register webhook `https://<app>/api/webhooks/backlog?host=<host>&token=<secret>`
+  register webhook `https://<app>/api/webhooks/backlog?token=<secret>`
   with `activityTypeIds` 1, 2, 3, 14, 18, 19, 20 (+4), never `allEvent`, and 21 in
   neither list because it was never observed (D-PR5); a project whose pull
   requests should not reach Chat omits 18–20 — that subscription is the only
@@ -1974,7 +1901,7 @@ for one scratch space is worse than requiring the two to share it.
   pull-request id; mentions (§5.4); stars (`commentId`
   or `pullRequestCommentId`); history paging (§7.1);
   `message.subject.type` being `"issue"` or `"pull_request"` (D-PR8); raw API
-  and errors (§3.6, §8.5), with `client(host)` named as the `backlog-js`
+  and errors (§3.6, §8.5), with `client()` named as the `backlog-js`
   client for everything the `Adapter` interface does not cover — a
   repository's pull requests included — carrying the same retry and errors;
   the two exported decoders; and the 429
@@ -1982,7 +1909,7 @@ for one scratch space is worse than requiring the two to share it.
   serverless deployment must allow more execution time than that, with the
   two `warn` lines
   named as how the wait becomes visible; testing with `@chat-adapter/tests`
-  and a mocked `client(host)`; license.
+  and a mocked `client()`; license.
   Every link into this repository is absolute
   (`https://github.com/nulab/chat-adapter-backlog/blob/main/…` for a file,
   `/tree/main/…` for a directory), never `./file`: README.md ships in the
@@ -2023,10 +1950,11 @@ for one scratch space is worse than requiring the two to share it.
   `name` is `"backlog"` and whose `userName` came from `BACKLOG_BOT_USER_NAME`
   (§3.2's env fallbacks, end to end). `globalThis.fetch` is replaced with a
   throw first, so "construction reaches no network" is asserted rather than
-  assumed — and so is "a configured bot identity reaches no network", since
-  the script then runs `initialize` and counts zero requests (D23). It also
-  constructs once more with the two `BACKLOG_BOT_*` variables unset, which is
-  the three-variable configuration README.md documents. The same job then compiles `scripts/consumer-smoke/documented-usage.ts`
+  assumed — and so is "a configured `botUserId` reaches no network", since
+  the script then runs `initialize`, with the name and again without it, and
+  counts zero requests (D23). It also constructs once more with both
+  `BACKLOG_BOT_*` variables unset, which is the three-variable configuration
+  README.md documents. The same job then compiles `scripts/consumer-smoke/documented-usage.ts`
   — the usage the README documents, strict under `NodeNext` — with
   `tsc --noEmit` against the installed declarations, and — on pushes and pull
   requests, not in the run `release.yml` calls — runs each `examples/*`'s own
@@ -2058,13 +1986,12 @@ for one scratch space is worse than requiring the two to share it.
 
 | # | Decision | Why | Rejected |
 | --- | --- | --- | --- |
-| D1 ⚑ | Shape A (single space, env fallbacks) **and** shape B (`installations[]`), always a host-keyed map inside | Zero-config construction is the Chat SDK factory convention and what the catalog's `env` spec assumes; several spaces in one process is a real deployment shape and the payload cannot identify a space. | Installations-only (fails zero-config); env-only (cannot do multi-space). |
-| D2 | Authenticity mandatory: secret per installation or global verifier; 401 on any failure; unknown host is also 401 | Backlog has no HMAC; a shared secret in the URL is the only sender-side control, and skipping verification "because Backlog cannot sign" is exactly the anti-pattern CLAUDE.md forbids. Same body for every failure avoids host enumeration. | Optional secret (silently insecure default); 404 for unknown host (leaks configuration). |
-| D3 | `?host=` required only with >1 installation | The path is fixed by Chat SDK routing (`/api/webhooks/backlog`), so the discriminator must be a query parameter; forcing it for one space is needless friction. | Path segment (framework-dependent); inferring from `project.id` (ids collide across spaces). |
+| D1 ⚑ | One Backlog space per adapter; every config field but the verifier and logger falls back to an environment variable | Zero-config construction is the Chat SDK factory convention and what the catalog's `env` spec assumes. A Backlog API key belongs to one space, so a second space is a second adapter under its own webhook URL, which is also what keeps each space's secret, bot identity and credentials apart without a per-host map. The host stays in every id (D8). | `installations[]` beside the single-space fields (built and removed: it needed shape exclusivity, duplicate-host checks, a `?host=` routing parameter with its own 401s and a per-host bot name, for a deployment no consumer ran); env-only (no resolver functions). |
+| D2 | Authenticity mandatory: a secret or a verifier; 401 on any failure | Backlog has no HMAC; a shared secret in the URL is the only sender-side control, and skipping verification "because Backlog cannot sign" is exactly the anti-pattern CLAUDE.md forbids. Same body for every failure. | Optional secret (silently insecure default). |
 | D4 | `stream()` buffers and posts once | The core's 500 ms edit loop is ~120 update calls per minute against a documented example limit of 150. | Omitting `stream` (falls into that loop); throttled edits (still wasteful, and a comment edit emits no webhook anyway). |
 | D5 | One retry on 429/13, waiting until the failing response's own `X-RateLimit-Reset` for at most 60 s; otherwise `AdapterRateLimitError` with that wait as `retryAfter`. No bucket classification, no per-bucket header capture, no rate-limit snapshot, and no configuration of either bound | Limits differ per plan and are per user, so a 429 is the only signal that matters and it carries its own reset. `backlog-js` turns a non-2xx into its own error before the headers are visible, so the retry lives in the injected `fetch`. One bounded retry converts most transient 429s into success without hiding sustained exhaustion. Tracking was built and removed: its only consumer was a public `rateLimit(host)` / `getRateLimit()` pair nothing in the adapter read, and neither first-party adapter for a comparable service (GitHub, Linear) tracks limits at all. The bounds were once `config.rateLimit.{maxRetries,maxWaitMs}` and were removed for the same reason: neither of those adapters exposes retry tuning, a one-minute window makes a 60 s ceiling sufficient, and the one caller need it served — a serverless timeout below the wait — is met by raising the timeout. | Hard-coded 600/150/150/60; unbounded backoff; no retry at all (every 429 becomes a failed reply); classifying each request into read/update/search/icon and recording per-(host, bucket) snapshots (cost without a consumer: the retry needs only the failing response); `rateLimit.{maxRetries,maxWaitMs}` options (surface and validation for a tuning no caller needs). |
 | D6 | Error class from `errors[].code` first, status second; detail as `cause` | The error-response page maps meaning to codes, not statuses; `cause` keeps `moreInfo` for operators without leaking `backlog-js` types. | Status-only mapping; re-exporting `backlog-js` errors. |
-| D7 | No host-application hooks; `client(host)` is the only escape hatch | Engagement/subscription state is the `StateAdapter`'s job; drop prediction depends on private core keys. | Engagement callback, inbound observer, dedupe-key helpers. |
+| D7 | No host-application hooks; `client()` is the only escape hatch | Engagement/subscription state is the `StateAdapter`'s job; drop prediction depends on private core keys. | Engagement callback, inbound observer, dedupe-key helpers. |
 | D8 | Numeric ids everywhere; host inside message and user ids | Issue keys change on project-key rename; the core's dedupe key has no thread component. | Issue keys in thread ids; host-less message ids. |
 | D9 | Mention = the bot in the webhook's `notifications[]` (any `reason`), display name in text (left-bounded, case-sensitive), or assignment to the bot | The webhook's `notifications[]` **is** populated (measured 2026-09-06) and is the only signal for a comment addressed through the notification field, which leaves no `@name` in the text; text and assignment still carry every delivery that has no notification, including an activity-API body replayed as a webhook. Assignee changes arrive by display name. Only explicit addressing lands in that list: an account merely **watching** an issue stayed out of `notifications[]` across a comment and two field-only `PATCH`es, while a non-watching user addressed on the same issue arrived with `reason: 2` (measured 2026-09-06), so no `reason` needs excluding. | Text and assignment only (silently ignores the notification field, the UI's normal way to address someone); filtering to `reason: 2` (drops reason codes not measured here for no gain, since assignment is already covered and watching was measured not to notify at all); case-insensitive match (Japanese names have no case, ASCII names would over-match). |
 | D10 | Types 1, 2, 3, 14 and 18, 19, 20 processed, 4 optional deletion, rest ignored; register `activityTypeIds`, never `allEvent` | Only issue and pull-request activity maps to a thread; 14 was ignored here until 2026-09-06 on the ground that it "has no per-issue comment", which measurement disproved — `content.link[].comment.id` is a comment that exists (D22); 17 carries the **original** comment, so dispatching it would re-deliver a message id already dispatched; 21 was never observed (D-PR5). | `allEvent` (wiki/git/document noise). Dispatching 17: `dedupe:backlog:<message.id>` suppresses the repeat only for `dedupeTtlMs` (§5.5), and a notification added a day later fires the same comment a second time. The accepted cost is a blind spot — a 17 whose `notifications[]` names the bot is the only signal that the bot was mentioned on a comment **after** it was posted, and acting on it needs a message id that distinguishes the notification from the comment it repeats. The pair was measured on a development space, 2026-09-06: a type 3 naming one recipient and, three seconds later, a type 17 naming another carry different activity ids but the same `content.comment.id`, the same text and an identical `content`, so `content.comment.id` cannot separate them and `notifications[]` — a delta, not the comment's recipient list — is the only field that names what the second delivery added (`.claude/rules/backlog-webhook-facts.md`). |
@@ -2076,22 +2003,21 @@ for one scratch space is worse than requiring the two to share it.
 | D16 | Layout `src/{adapter,ids,types,index}.ts`, `src/webhook/*`, `src/client/*`, `src/format/*`, `src/test/fixtures/*` | Directories mirror the PR scopes `adapter`/`webhook`/`client`/`format`, so a change's scope is its path. | Flat `src/`. |
 | D17 | Measurements live in `.claude/rules/*.md`, referenced here | One place to re-measure; this spec states consequences, not evidence. | Duplicating measurements here. |
 | D18 | `processMessageUpdated` unsupported | Comment edits emit no webhook (measured 2026-09-03; pull-request comment edits likewise, 2026-09-06); there is nothing to deliver. | Polling for edits (search-bucket cost, no cursor finer than a day). |
-| D19 | The space is taken from `?host=` alone; the payload is **not** cross-checked against it | No body field identifies the space, and the one candidate for a consistency check cannot carry it: `project.projectKey` would have to be compared against the configured host's own project, but `projectCache` holds `projectKey` for the process's lifetime (D14), so after a project-key rename a check that rejected would drop **every** event until the process restarted — trading a misconfiguration nobody has made for silent data loss on a supported operation. A check that only warned would also land inside the dispatched factory, after the 200 (§5.1), so it could never become a 401, and the misregistration already leaves a trace there: `ensureProject` fails on a project the host does not have and logs `textFormattingRule lookup failed`. Naming the trap where the URL is registered beats a heuristic that cannot reject and cannot report. | Rejecting on a `projectKey` mismatch (drops everything after a rename); warning on one (a second meaning for the project lookup, no new information); a `spaceId` config field to compare (no payload field to compare it with). |
+| D19 | Every delivery is taken to be from the configured space; the payload is **not** cross-checked against it | No body field identifies the space, and the one candidate for a consistency check cannot carry it: `project.projectKey` changes when a project key is renamed, so checking it would drop real events. | Cross-checking `projectKey` against a cached project (drops events after a rename). |
 | D22 | Type 14 fans out: one delivery becomes one `chat.processMessage` per `content.link[]` entry, always, with no adapter option to turn it off | The comments are real. A bulk update writes a comment per issue with a changelog, `link[].comment.id` is that comment, and `fetchMessages` hands it back — so ignoring 14 makes push and pull disagree in the direction of having missed a status change, silently. The fan-out's cost is real too (one webhook, N threads, and N API calls if a handler makes one per message, out of a per-minute bucket), which is why the way out is leaving 14 out of `activityTypeIds[]`: registration already is the switch (D-PR4), and not subscribing stops the delivery instead of discarding it after arrival. A one-issue batch takes the same path: a single issue updated from the issue list is a type 14 too (measured 2026-09-06), so there is no size at which the fan-out is skipped. The batch's `notifications[]` is carried whole on every message and split between none of them: it holds one reason-1 entry per issue when the batch changed the assignee, but an entry names no issue and repeats the same user, so any per-issue meaning would come from the array's order alone. One delivery carrying several indistinguishable entries is what makes 14 different here; other types carry the array too. | Ignoring 14 (loses events that exist); a `bulkFanout` config flag (duplicates the subscription, and the copy that arrives is still paid for); one summary message into the first issue's thread (invents a message with no id and picks a thread arbitrarily); capping the batch (silently drops the tail of a transaction Backlog reported in full); treating a single-entry `link[]` as a type 2 (a handler would read a different `raw.kind` for the same operation depending on how many issues were ticked); pairing `notifications[i]` with `link[i]` (an ordering guarantee Backlog never gave, wrong the moment a redelivery or a future field reorders either array); dropping `notifications` from `raw.payload` (loses a fact the delivery carried, to prevent a misreading a comment can prevent). |
-| D24 | No `postChannelMessage` and no `markAsRead`; `ThreadInfo.metadata` names the thread and no more | No consumer needs either member, and `@chat-adapter/github` and `@chat-adapter/linear` implement neither. Creating an issue from a chat message had to guess an issue type and a priority and retry once on a stale guess; a caller who wants an issue calls `client(host).postIssue` with the values it means. A read receipt cost up to three reads of the bot's notification feed per call. A full copy of the issue or pull request in `metadata` duplicated `fetchSubject().raw`. | Keeping them because Backlog makes them possible; `channel.post` creating an issue with guessed defaults. |
-| D23 | The bot identity is optional configuration: whichever of `botUserId`/`botUserName` is missing comes from `GET /users/myself`, eagerly in `initialize` for every installation missing one, with a failed lookup logged and retried on demand, never rethrown; a webhook whose identity cannot be learned is 503 | Zero-config construction needed five variables where the credential already names the bot; both first-party analogues discover it at startup (`@chat-adapter/github` `users.getAuthenticated`, `@chat-adapter/linear` `viewer`). Eager makes `userName` right before the first mention is matched, which a synchronous getter cannot fetch on demand. The core never retries a rejected `initialize`, so rethrowing would wedge the whole `Chat` on one transient failure; a missing id silently disables the self-message check, so the webhook path refuses to dispatch rather than continue as Linear does. Both halves configured is kept as the way to spend no request. | Keeping both required (five variables for zero-config); lazy only, on the first webhook per host (`userName` stays empty for a multi-installation adapter until its first host happens to receive one); warn-and-continue on the webhook path (the bot answers itself); rejecting `initialize` (one outage wedges every adapter until restart). |
+| D24 | No `postChannelMessage` and no `markAsRead`; `ThreadInfo.metadata` names the thread and no more | No consumer needs either member, and `@chat-adapter/github` and `@chat-adapter/linear` implement neither. Creating an issue from a chat message had to guess an issue type and a priority and retry once on a stale guess; a caller who wants an issue calls `client().postIssue` with the values it means. A read receipt cost up to three reads of the bot's notification feed per call. A full copy of the issue or pull request in `metadata` duplicated `fetchSubject().raw`. | Keeping them because Backlog makes them possible; `channel.post` creating an issue with guessed defaults. |
+| D23 | The bot identity is optional configuration: with `botUserId` unset, one `GET /users/myself` in `initialize` fills it and a missing name; with it set, no request at all, and a missing name only switches off the typed-`@name` rule with one `warn`. A failed lookup is logged and retried on demand, never rethrown; a webhook whose id cannot be learned is 503 | Rate limits are per user and tight, and on serverless every cold start runs `initialize`, so a lookup made only to learn a name many bots never need (they trigger on assignment or on a condition, and a real mention also arrives as a notification) is waste. Eager lookup of the id makes `userName` right before the first mention is matched. The core never retries a rejected `initialize`, so rethrowing would wedge the whole `Chat`; a missing id silently disables the self-message check, so the webhook path refuses to dispatch rather than continue as Linear does. | Always looking up a missing name (a request per cold start for a rule most bots do not use); keeping both required (five variables for zero-config); lazy only, on the first webhook; warn-and-continue on the webhook path (the bot answers itself); rejecting `initialize` (one outage wedges every adapter until restart). |
 | D-PR1 | The channel of a pull-request thread is its **project** | Webhooks carry `project.id`; the formatting rule is per project; `channelIdFromThreadId` stays "first three segments". | The repository as channel (N+1 channels per project, no formatting rule of its own). |
 | D-PR2 | Kind-explicit ids for **both** kinds; one nested `subject: BacklogSubjectRef` shared by thread ids, message ids, raws and the subject layer | Backlog addresses issues and pull requests through different endpoint families with different coordinates and separate comment id sequences; the GitHub adapter's "PR is the unmarked default" is back-compat debt its maintainers annotate as such. | Flat `{ kind, issueId?, repositoryId?, number? }`; keeping issues unmarked. |
 | D-PR3 | `deleteMessage` on a pull-request thread throws `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call | The endpoint does not exist (400/6 `Undefined resource`, measured); `ValidationError` would blame a correct call; silent success is a fabricated result; the member is required. | `ValidationError`; no-op; omitting `deleteMessage`. |
 | D-PR4 | No adapter option selecting kinds | The webhook subscription already is that switch; a mismatch between an option and the subscription would silently drop delivered events. | `subjects: ('issue' \| 'pullRequest')[]` config. |
 | D-PR5 | Type 21 is 200 Ignored and not in the registration guidance | It was not observed: merge (UI or git push) and close both arrive as type 19 status changes, no delete operation exists in the UI or the API, and the project's activity history holds none (measured 2026-09-06); the docs and `backlog-js` disagree on its very name. | `processMessageDeleted` on 21 (nothing to test it against). |
 | D-PR6 | A pull request linked to an issue is its own thread; the link is data on the pull request (`fetchSubject().raw.issue`, `raw.payload.content.issue`), never a route | The link can be changed (`changes[field="issue"]`, measured); routing by it would move a thread. | Routing pull-request activity into the linked issue's thread. |
-| D-PR7 | `listThreads` lists issues only | A pull-request list is per repository, a coordinate the channel id lacks; `client(host).getPullRequests` covers it. | Interleaving every repository's pull requests (N+1 reads, two cursor grammars); listing pull requests only. |
+| D-PR7 | `listThreads` lists issues only | A pull-request list is per repository, a coordinate the channel id lacks; `client().getPullRequests` covers it. | Interleaving every repository's pull requests (N+1 reads, two cursor grammars); listing pull requests only. |
 | D-PR8 | `fetchSubject().type` is `"pull_request"` | The `@chat-adapter/github` convention; the core types it as a free string, so bot authors already branch on that literal. | `"pullRequest"` (matches our `kind`, not the ecosystem). |
 | D-PR9 | Root part tag `r` for both kinds (was `i`) | `i` meant "issue" and would mislead on a pull request; a tagless root makes the grammar irregular. | Keep `i`; no tag. |
 | D-PR10 ⚑ | Pull-request comment attachments resolve their id by **name** through the attachment list, newest match first | Neither the type-20 `changes[]` nor the REST `changeLog` carries an attachment id for pull requests (measured 2026-09-06); the list is the only id source and names are not unique. | Omitting `fetchData` on pull-request comment attachments (loses the file entirely); one list call per comment eagerly (a read per message). |
-| D19 | `botUserName(host)` exposed; `botUserId` still private | `userName` is one string, so a consumer running spaces under different display names has no way to build or match its own mention string per space and must duplicate the installation config to get one; the name is already public in every rewritten comment body, while the id is not and would mislead the core's `@<id>` pattern. | Requiring one display name across all spaces (an operational constraint the adapter cannot enforce); exposing the whole `ResolvedInstallation` (leaks credentials and `botUserId`); a `userName(host)` name (reads like the core's `userName`, which it deliberately is not). |
-| D-API1 | The public surface is the adapter, its factory, the config and the types reachable from it, the thread-id and raw-message types, two id decoders and one escape hatch, `client(host)` | Every export is a semver promise, and the first-party adapters (`@chat-adapter/github@4.41.0`, `@chat-adapter/linear@4.41.0`) export the same kinds of thing and one client getter; the decoders stay because this adapter's id grammar is its own and no `Adapter` member reads a message or user id back. | A second escape hatch, `api(host)`, exposing the internal port and some thirty domain types; a `createApi` config field and an exported in-memory port (a test seam the references do not offer, and one that fixes the port's shape as public API); free-function copies of the `Adapter` members' id codec; mention helpers for a notation Backlog documents; the format converters, which `renderFormatted` already applies. |
+| D-API1 | The public surface is the adapter, its factory, the config and the types reachable from it, the thread-id and raw-message types, two id decoders and one escape hatch, `client()` | Every export is a semver promise, and the first-party adapters (`@chat-adapter/github@4.41.0`, `@chat-adapter/linear@4.41.0`) export the same kinds of thing and one client getter; the decoders stay because this adapter's id grammar is its own and no `Adapter` member reads a message or user id back. | A second escape hatch, `api(host)`, exposing the internal port and some thirty domain types; a `createApi` config field and an exported in-memory port (a test seam the references do not offer, and one that fixes the port's shape as public API); free-function copies of the `Adapter` members' id codec; mention helpers for a notation Backlog documents; the format converters, which `renderFormatted` already applies. |
 | — | Self messages are not dispatched by the adapter | `selfMessageContract` asserts nothing is dispatched; the core's own `isMe` skip is a second line of defence. | Relying on the core alone. |
 | — ⚑ | No timestamp-staleness window | See §5.1: unsigned timestamps give no protection and would drop measured late redeliveries. | Rejecting payloads older than N minutes. |
 
@@ -2125,7 +2051,7 @@ open list.
 
 | # | Decision | Verdict | Evidence |
 | --- | --- | --- | --- |
-| 1 | D1 config shape: single-space fields with env fallbacks **and** `installations[]` | **confirmed** — both shapes, mutually exclusive, a host-keyed map inside | The constructor rejects the two shapes together, an empty `installations[]`, two installations on one host, and both credential environment variables set together (`src/adapter.ts`) — while an explicit credential ignores the other's leftover variable rather than failing, which is #90's fix and not an oversight; `src/adapter.test.ts` "installations and single-space fields together are rejected", "two installations on the same host are rejected", "constructs from environment variables when config is empty", "rejects both credentials in the environment, naming the variables", "an explicit apiKey ignores an access token left in the environment" (#10, tightened by #88 and #90) |
+| 1 | D1 config shape | **changed** — one space per adapter; `installations[]`, `?host=` routing and `botUserName(host)` removed | `parseConfig` in `src/config.ts` is the one schema for config and environment; `src/config.test.ts` covers the pair fallback, the unknown-option rejection and every field rule |
 | 2 | D14 formatting-rule cache policy | **changed** — cache for the process's lifetime, no TTL; `fetchChannelInfo` no longer replaces the entry (D14, D24) | `ensureProject` in `src/adapter.ts` is the only writer of `projectCache`; `BacklogAdapter.fetchChannelInfo` reads and returns (#16, #24) |
 | 3 | `renderFormatted(content, target?)` second parameter | **confirmed** — accepted, and used: a cached rule for the target's channel picks the converter, otherwise Markdown, with one `warn` when the target names a channel whose rule is uncached | `BacklogAdapter.renderFormatted` and `channelOfTarget` (`src/adapter.ts`); `src/adapter.test.ts` "without a target renders Markdown", "rendering for a target that is neither a thread nor a channel id renders markdown" (#10, #83) |
 | 4 | Webhook before `initialize()` (§5.1 row 6) | **confirmed** — 503 `Adapter not initialized` | `BacklogAdapter.handleWebhook`; `src/adapter.test.ts` "answers 503 before initialize() has run" (#12) |

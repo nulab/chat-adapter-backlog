@@ -32,11 +32,11 @@ import {
 } from './test/fixtures/webhooks';
 import type { BacklogApi, BacklogComment } from './client/port';
 import type {
+  BacklogAdapterConfig,
   BacklogRawMessage,
   BacklogSubjectRef,
   BacklogThreadId,
   BacklogWebhookPayload,
-  ResolvedInstallation,
 } from './types';
 import type { Adapter, ChatInstance, FormattedContent, Message } from 'chat';
 
@@ -88,7 +88,7 @@ afterEach(() => {
   }
 });
 
-type ApiFactory = (installation: ResolvedInstallation) => BacklogApi;
+type ApiFactory = () => BacklogApi;
 
 /**
  * Runs `adapter` on the port `createApi` builds instead of the `backlog-js`
@@ -99,9 +99,7 @@ function onPort(
   adapter: BacklogAdapter,
   createApi: ApiFactory
 ): BacklogAdapter {
-  adapter['createTransport'] = (installation) => ({
-    api: createApi(installation),
-  });
+  adapter['createTransport'] = () => ({ api: createApi() });
   return adapter;
 }
 
@@ -131,316 +129,12 @@ function validConfig() {
 }
 
 describe('BacklogAdapter construction', () => {
-  it('constructing with no config and no environment names the first missing variable', () => {
+  it('refuses a config its schema rejects', () => {
     expect(() => new BacklogAdapter({})).toThrow(ValidationError);
-    expect(() => new BacklogAdapter({})).toThrow(/host/);
-    expect(() => new BacklogAdapter({})).toThrow(/BACKLOG_HOST/);
   });
 
-  it('an explicit empty apiKey is an error, not a fallback', () => {
-    process.env.BACKLOG_API_KEY = 'from-env';
-    expect(
-      () =>
-        new BacklogAdapter({
-          host: 'example.backlog.com',
-          apiKey: '',
-          botUserId: 999,
-          botUserName: 'Chatbot',
-          webhookSecret: 'test-webhook-secret',
-        })
-    ).toThrow(ValidationError);
-  });
-
-  it('installations and single-space fields together are rejected', () => {
-    expect(
-      () =>
-        new BacklogAdapter({
-          host: 'example.backlog.com',
-          installations: [
-            {
-              host: 'example.backlog.com',
-              apiKey: 'k',
-              botUserId: 999,
-              botUserName: 'Chatbot',
-              webhookSecret: 'first-webhook-secret',
-            },
-          ],
-        })
-    ).toThrow(ValidationError);
-  });
-
-  it('two installations on the same host are rejected', () => {
-    expect(
-      () =>
-        new BacklogAdapter({
-          installations: [
-            {
-              host: 'example.backlog.com',
-              apiKey: 'k1',
-              botUserId: 999,
-              botUserName: 'Chatbot',
-              webhookSecret: 'first-webhook-secret',
-            },
-            {
-              host: 'EXAMPLE.backlog.com',
-              apiKey: 'k2',
-              botUserId: 998,
-              botUserName: 'Chatbot2',
-              webhookSecret: 'second-webhook-secret',
-            },
-          ],
-        })
-    ).toThrow(ValidationError);
-  });
-
-  it('a host with a scheme is rejected', () => {
-    expect(
-      () =>
-        new BacklogAdapter({
-          ...validConfig(),
-          host: 'https://example.backlog.com',
-        })
-    ).toThrow(ValidationError);
-  });
-
-  it('a missing webhookSecret without a verifier is rejected', () => {
-    const config = validConfig();
-    expect(
-      () =>
-        new BacklogAdapter({
-          host: config.host,
-          apiKey: config.apiKey,
-          botUserId: config.botUserId,
-          botUserName: config.botUserName,
-        })
-    ).toThrow(ValidationError);
-  });
-
-  it('a webhookSecret shorter than 16 bytes is rejected', () => {
-    // The secret is the whole of webhook authenticity without a verifier, and
-    // Backlog signs nothing (§11), so a guessable one is a way in — not a
-    // preference the library leaves to a deployment.
-    expect(
-      () => new BacklogAdapter({ ...validConfig(), webhookSecret: 'short' })
-    ).toThrow(ValidationError);
-    expect(
-      () => new BacklogAdapter({ ...validConfig(), webhookSecret: 'short' })
-    ).toThrow(/16 bytes/);
-  });
-
-  it('a 16-byte webhookSecret is accepted', () => {
-    expect(
-      () =>
-        new BacklogAdapter({
-          ...validConfig(),
-          webhookSecret: '0123456789abcdef',
-        })
-    ).not.toThrow();
-  });
-
-  it('a short webhookSecret is rejected even when a webhookVerifier is set', () => {
-    // A verifier replaces the secret check on the ladder, but the secret is
-    // still there to be used the moment the verifier is removed, so a weak one
-    // is not made acceptable by configuring one.
-    expect(
-      () =>
-        new BacklogAdapter({
-          ...validConfig(),
-          webhookSecret: 'short',
-          webhookVerifier: () => true,
-        })
-    ).toThrow(ValidationError);
-  });
-
-  it('a missing webhookSecret is accepted when a webhookVerifier is set', () => {
-    const config = validConfig();
-    expect(
-      () =>
-        new BacklogAdapter({
-          host: config.host,
-          apiKey: config.apiKey,
-          botUserId: config.botUserId,
-          botUserName: config.botUserName,
-          webhookVerifier: () => true,
-        })
-    ).not.toThrow();
-  });
-
-  it('a bare numeric user id is rejected even with one installation', () => {
-    process.env.BACKLOG_BOT_USER_ID = 'not-a-number';
-    expect(
-      () =>
-        new BacklogAdapter({
-          host: 'example.backlog.com',
-          apiKey: 'k',
-          botUserName: 'Chatbot',
-          webhookSecret: 'first-webhook-secret',
-        })
-    ).toThrow(ValidationError);
-  });
-
-  it("userName defaults to the first installation's bot name", () => {
-    const adapter = new BacklogAdapter(validConfig());
-    expect(adapter.userName).toBe('Chatbot');
-  });
-
-  it("userName is overridable independently of the first installation's bot name", () => {
-    const adapter = new BacklogAdapter({
-      ...validConfig(),
-      userName: 'Support Bot',
-    });
-    expect(adapter.userName).toBe('Support Bot');
-  });
-
-  it("botUserName reports each installation's own display name", () => {
-    const adapter = new BacklogAdapter({
-      installations: [
-        {
-          host: 'one.backlog.com',
-          apiKey: 'k1',
-          botUserId: 999,
-          botUserName: 'Chatbot',
-          webhookSecret: 'first-webhook-secret',
-        },
-        {
-          host: 'two.backlog.jp',
-          apiKey: 'k2',
-          botUserId: 998,
-          botUserName: 'Helperbot',
-          webhookSecret: 'second-webhook-secret',
-        },
-      ],
-    });
-
-    expect(adapter.botUserName('one.backlog.com')).toBe('Chatbot');
-    expect(adapter.botUserName('two.backlog.jp')).toBe('Helperbot');
-    expect(adapter.userName).toBe('Chatbot');
-  });
-
-  it('botUserName ignores a userName override', () => {
-    const adapter = new BacklogAdapter({
-      ...validConfig(),
-      userName: 'Support Bot',
-    });
-
-    expect(adapter.userName).toBe('Support Bot');
-    expect(adapter.botUserName('example.backlog.com')).toBe('Chatbot');
-  });
-
-  it('botUserName("unknown.backlog.com") reports the installation as not found', () => {
-    const adapter = new BacklogAdapter(validConfig());
-    expect(() => adapter.botUserName('unknown.backlog.com')).toThrow(
-      ResourceNotFoundError
-    );
-  });
-
-  it('constructs from environment variables when config is empty', () => {
-    process.env.BACKLOG_HOST = 'example.backlog.com';
-    process.env.BACKLOG_API_KEY = 'env-api-key';
-    process.env.BACKLOG_BOT_USER_ID = '999';
-    process.env.BACKLOG_BOT_USER_NAME = 'Chatbot';
-    process.env.BACKLOG_WEBHOOK_SECRET = 'env-webhook-secret';
-
-    const adapter = createBacklogAdapter();
-    expect(adapter.userName).toBe('Chatbot');
-  });
-
-  /**
-   * The next four cases are every way the two credential sources can combine.
-   * They are pinned together because the two arms used to disagree: an
-   * explicit `accessToken` suppressed `BACKLOG_API_KEY`, while an explicit
-   * `apiKey` left `BACKLOG_ACCESS_TOKEN` in play — so it was the API-key half
-   * that was rejected and the OAuth half that worked.
-   */
-  it('rejects exactly one of apiKey or accessToken when both are given', () => {
-    expect(
-      () =>
-        new BacklogAdapter({
-          host: 'example.backlog.com',
-          apiKey: 'k',
-          accessToken: 'a',
-          botUserId: 999,
-          botUserName: 'Chatbot',
-          webhookSecret: 'first-webhook-secret',
-        })
-    ).toThrow(ValidationError);
-  });
-
-  it('an explicit apiKey ignores an access token left in the environment', () => {
-    process.env.BACKLOG_ACCESS_TOKEN = 'stale-oauth-token';
-    const createApi = vi.fn((_installation: ResolvedInstallation) =>
-      createInMemoryBacklogApi()
-    );
-    const adapter = onPort(
-      createBacklogAdapter({ ...validConfig() }),
-      createApi
-    );
-
-    portOf(adapter, 'example.backlog.com');
-
-    expect(createApi.mock.calls[0]?.[0].apiKey).toBe('test-api-key');
-    expect(createApi.mock.calls[0]?.[0].accessToken).toBeUndefined();
-  });
-
-  it('an explicit accessToken ignores an api key left in the environment', () => {
-    process.env.BACKLOG_API_KEY = 'stale-api-key';
-    const createApi = vi.fn((_installation: ResolvedInstallation) =>
-      createInMemoryBacklogApi()
-    );
-    const adapter = onPort(
-      createBacklogAdapter({
-        host: 'example.backlog.com',
-        accessToken: 'test-access-token',
-        botUserId: 999,
-        botUserName: 'Chatbot',
-        webhookSecret: 'test-webhook-secret',
-      }),
-      createApi
-    );
-
-    portOf(adapter, 'example.backlog.com');
-
-    expect(createApi.mock.calls[0]?.[0].accessToken).toBe('test-access-token');
-    expect(createApi.mock.calls[0]?.[0].apiKey).toBeUndefined();
-  });
-
-  it('rejects both credentials in the environment, naming the variables', () => {
-    process.env.BACKLOG_HOST = 'example.backlog.com';
-    process.env.BACKLOG_API_KEY = 'env-api-key';
-    process.env.BACKLOG_ACCESS_TOKEN = 'env-access-token';
-    process.env.BACKLOG_BOT_USER_ID = '999';
-    process.env.BACKLOG_BOT_USER_NAME = 'Chatbot';
-    process.env.BACKLOG_WEBHOOK_SECRET = 'env-webhook-secret';
-
-    expect(() => createBacklogAdapter()).toThrow(ValidationError);
-    expect(() => createBacklogAdapter()).toThrow(
-      /BACKLOG_API_KEY or BACKLOG_ACCESS_TOKEN/
-    );
-  });
-
-  it('rejects a botUserId no id string could round-trip', () => {
-    // 2^53 and beyond do not survive `Number(String(id))`, and this id is
-    // encoded into every user id and outbound mention (§2.1).
-    const botUserId = Number.MAX_SAFE_INTEGER + 2;
-    const config = { ...validConfig(), botUserId };
-
-    expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
-  });
-
-  it('rejects a BACKLOG_BOT_USER_ID no id string could round-trip', () => {
-    process.env.BACKLOG_HOST = 'example.backlog.com';
-    process.env.BACKLOG_API_KEY = 'env-api-key';
-    process.env.BACKLOG_BOT_USER_ID = '99999999999999999999';
-    process.env.BACKLOG_BOT_USER_NAME = 'Chatbot';
-    process.env.BACKLOG_WEBHOOK_SECRET = 'env-secret';
-
-    expect(() => createBacklogAdapter()).toThrow(ValidationError);
-  });
-
-  it('rejects an empty installations array', () => {
-    expect(() => new BacklogAdapter({ installations: [] })).toThrow(
-      ValidationError
-    );
+  it('reports the configured bot name as its userName', () => {
+    expect(new BacklogAdapter(validConfig()).userName).toBe('Chatbot');
   });
 });
 
@@ -664,25 +358,24 @@ describe('BacklogAdapter port wiring', () => {
     );
   });
 
-  it('reuses one port per host across calls', () => {
+  it('reuses one port across calls', () => {
     const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
     expect(portOf(adapter, 'example.backlog.com')).toBe(
       portOf(adapter, 'example.backlog.com')
     );
   });
 
-  it('reports an unknown host as a missing installation', () => {
+  it('refuses a host other than the configured space', () => {
     const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
     expect(() => portOf(adapter, 'other.backlog.com')).toThrow(
       ResourceNotFoundError
     );
   });
 
-  it('hands out one client per host, and it is the one the port speaks through', async () => {
+  it('hands out one client across calls', () => {
     const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-    const client = adapter.client('example.backlog.com');
 
-    expect(client).toBe(adapter.client('example.backlog.com'));
+    expect(adapter.client()).toBe(adapter.client());
   });
 
   it('a 429 through the handed-out client surfaces as a rate-limit error, like one through the port', async () => {
@@ -705,15 +398,8 @@ describe('BacklogAdapter port wiring', () => {
     );
 
     await expect(
-      adapter.client('example.backlog.com').getIssue(conformanceFixture.issueId)
+      adapter.client().getIssue(conformanceFixture.issueId)
     ).rejects.toBeInstanceOf(AdapterRateLimitError);
-  });
-
-  it('reports an unknown host as a missing installation when asked for a client', () => {
-    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-    expect(() => adapter.client('other.backlog.com')).toThrow(
-      ResourceNotFoundError
-    );
   });
 
   it('has no client to hand out when a custom port replaced the backlog-js one', () => {
@@ -725,64 +411,11 @@ describe('BacklogAdapter port wiring', () => {
       () => createInMemoryBacklogApi()
     );
 
-    expect(() => adapter.client('example.backlog.com')).toThrow(AdapterError);
-  });
-
-  it('passes the resolved installation to a supplied port factory', () => {
-    const createApi = vi.fn((_installation: ResolvedInstallation) =>
-      createInMemoryBacklogApi()
-    );
-    const adapter = onPort(
-      createBacklogAdapter({
-        ...base,
-        host: 'EXAMPLE.Backlog.com',
-        apiKey: 'key',
-      }),
-      createApi
-    );
-
-    portOf(adapter, 'example.backlog.com');
-
-    expect(createApi).toHaveBeenCalledTimes(1);
-    expect(createApi.mock.calls[0]?.[0]).toMatchObject({
-      host: 'example.backlog.com',
-      botUserId: 999,
-      botUserName: 'Chatbot',
-    });
-  });
-
-  it('hands the port the credential resolver itself, not a resolved value', () => {
-    // The port awaits the resolver on every request, so an adapter that
-    // resolved it once at construction would pin the first token for the
-    // lifetime of the process (docs/specs/adapter.md §3.2).
-    let calls = 0;
-    const createApi = vi.fn((_installation: ResolvedInstallation) =>
-      createInMemoryBacklogApi()
-    );
-    const adapter = onPort(
-      createBacklogAdapter({
-        ...base,
-        apiKey: () => {
-          calls += 1;
-          return `token-${calls}`;
-        },
-      }),
-      createApi
-    );
-
-    portOf(adapter, 'example.backlog.com');
-
-    const resolvable = createApi.mock.calls[0]?.[0].apiKey;
-    expect(typeof resolvable).toBe('function');
-    expect(calls).toBe(0);
-
-    const resolver = resolvable as () => string;
-    expect(resolver()).toBe('token-1');
-    expect(resolver()).toBe('token-2');
+    expect(() => adapter.client()).toThrow(AdapterError);
   });
 });
 
-function webhookAdapterConfig(overrides: Partial<ResolvedInstallation> = {}) {
+function webhookAdapterConfig(overrides: Partial<BacklogAdapterConfig> = {}) {
   return {
     host: FIXTURE.host,
     apiKey: 'test-api-key',
@@ -2396,7 +2029,7 @@ selfMessageContract({
 
 /**
  * A port whose `getMyself` answers the fixture bot and counts its calls, for
- * the installations below that leave the identity to the API.
+ * the configurations below that leave the identity to the API.
  */
 function myselfCountingApi(host: string = FIXTURE.host) {
   const api = createInMemoryBacklogApi({
@@ -2448,6 +2081,68 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
     expect(getMyself).not.toHaveBeenCalled();
   });
 
+  it('a configured botUserId without a name costs no GET /users/myself, and initialize warns once', async () => {
+    const { api, getMyself } = myselfCountingApi();
+    const logger = createMockLogger();
+    const adapter = onPort(
+      createBacklogAdapter({
+        ...identitylessConfig(),
+        botUserId: FIXTURE.bot.id,
+      }),
+      () => api
+    );
+    const chat = mockChat(undefined, logger);
+    await adapter.initialize(chat);
+
+    await adapter.handleWebhook(webhookRequest(selfAuthoredComment()));
+    await adapter.getUser(`${FIXTURE.host}:${FIXTURE.bot.id}`);
+
+    expect(getMyself).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('BACKLOG_BOT_USER_NAME')
+    );
+    expect(chat).not.toHaveDispatched('processMessage');
+    expect(adapter.userName).toBe('');
+  });
+
+  it('without a botUserName, a typed @name is not a mention but a notification to the bot is', async () => {
+    const adapter = onPort(
+      createBacklogAdapter({
+        ...identitylessConfig(),
+        botUserId: FIXTURE.bot.id,
+      }),
+      fixturePort
+    );
+    const dispatched = await initializeCapturingDispatches(adapter);
+
+    await adapter.handleWebhook(
+      webhookRequest(
+        issueCommented({ text: `@${FIXTURE.bot.name} please help` })
+      )
+    );
+    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
+    await adapter.handleWebhook(
+      webhookRequest(
+        issueCommented({
+          commentId: 3002,
+          notifications: [
+            {
+              user: { id: FIXTURE.bot.id, name: FIXTURE.bot.name },
+              reason: 2,
+            },
+          ],
+        })
+      )
+    );
+    await vi.waitFor(() => expect(dispatched).toHaveLength(2));
+
+    expect(dispatched.map(({ message }) => message.isMention)).toEqual([
+      false,
+      true,
+    ]);
+  });
+
   it('constructing without a bot identity validates synchronously and calls nothing', () => {
     const createApi = vi.fn(() => myselfCountingApi().api);
 
@@ -2468,27 +2163,6 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
     expect(() => createBacklogAdapter()).not.toThrow();
   });
 
-  it('a configured half is still validated when the other half is left to the API', () => {
-    expect(() =>
-      onPort(
-        createBacklogAdapter({
-          ...identitylessConfig(),
-          botUserName: '  ',
-        }),
-        () => myselfCountingApi().api
-      )
-    ).toThrow(ValidationError);
-    expect(() =>
-      onPort(
-        createBacklogAdapter({
-          ...identitylessConfig(),
-          botUserId: 0,
-        }),
-        () => myselfCountingApi().api
-      )
-    ).toThrow(ValidationError);
-  });
-
   it('blank BACKLOG_BOT_USER_ID and BACKLOG_BOT_USER_NAME are looked up rather than rejected', async () => {
     process.env.BACKLOG_BOT_USER_ID = '';
     process.env.BACKLOG_BOT_USER_NAME = '';
@@ -2501,24 +2175,7 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
     await adapter.initialize(mockChat());
 
     expect(getMyself).toHaveBeenCalledTimes(1);
-    expect(adapter.botUserName(FIXTURE.host)).toBe(FIXTURE.bot.name);
-  });
-
-  it('botUserName before the identity is known is refused rather than guessed', () => {
-    const adapter = onPort(
-      createBacklogAdapter(identitylessConfig()),
-      () => myselfCountingApi().api
-    );
-
-    let failure: unknown;
-    try {
-      adapter.botUserName(FIXTURE.host);
-    } catch (cause) {
-      failure = cause;
-    }
-
-    expect(failure).toBeInstanceOf(AdapterError);
-    expect((failure as AdapterError).code).toBe('BOT_IDENTITY_UNRESOLVED');
+    expect(adapter.userName).toBe(FIXTURE.bot.name);
   });
 
   it('with neither configured, initialize reads both from one GET /users/myself', async () => {
@@ -2533,7 +2190,6 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
 
     expect(getMyself).toHaveBeenCalledTimes(1);
     expect(adapter.userName).toBe(FIXTURE.bot.name);
-    expect(adapter.botUserName(FIXTURE.host)).toBe(FIXTURE.bot.name);
   });
 
   it('the fetched id suppresses the bot’s own comments and the lookup is not repeated', async () => {
@@ -2570,62 +2226,9 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
     const chat = mockChat();
     await adapter.initialize(chat);
 
-    expect(adapter.botUserName(FIXTURE.host)).toBe('Support Bot');
+    expect(adapter.userName).toBe('Support Bot');
     await adapter.handleWebhook(webhookRequest(selfAuthoredComment()));
     expect(chat).not.toHaveDispatched('processMessage');
-  });
-
-  it('a configured botUserId wins over the fetched id, and the name still comes from the API', async () => {
-    const { api } = myselfCountingApi();
-    const adapter = onPort(
-      createBacklogAdapter({
-        ...identitylessConfig(),
-        botUserId: FIXTURE.alice.id,
-      }),
-      () => api
-    );
-    const chat = mockChat();
-    await adapter.initialize(chat);
-
-    expect(adapter.botUserName(FIXTURE.host)).toBe(FIXTURE.bot.name);
-    // Alice is the configured bot now, so her comment is the one skipped.
-    await adapter.handleWebhook(webhookRequest(issueCommented()));
-    expect(chat).not.toHaveDispatched('processMessage');
-  });
-
-  it('only the installations missing an identity are looked up, once each', async () => {
-    const first = myselfCountingApi(FIXTURE.host);
-    const second = myselfCountingApi(FIXTURE.otherHost);
-    const ports = new Map([
-      [first.host, first.api],
-      [second.host, second.api],
-    ]);
-    const adapter = onPort(
-      createBacklogAdapter({
-        installations: [
-          {
-            host: FIXTURE.host,
-            apiKey: 'k1',
-            botUserId: FIXTURE.bot.id,
-            botUserName: FIXTURE.bot.name,
-            webhookSecret: FIXTURE.webhookSecret,
-          },
-          {
-            host: FIXTURE.otherHost,
-            apiKey: 'k2',
-            webhookSecret: 'other-webhook-secret',
-          },
-        ],
-      }),
-      (installation) => ports.get(installation.host) as BacklogApi
-    );
-    const chat = mockChat();
-
-    await adapter.initialize(chat);
-
-    expect(first.getMyself).not.toHaveBeenCalled();
-    expect(second.getMyself).toHaveBeenCalledTimes(1);
-    expect(adapter.botUserName(FIXTURE.otherHost)).toBe(FIXTURE.bot.name);
   });
 
   it('a failed lookup does not fail initialize; it is logged and retried by the next webhook', async () => {

@@ -20,12 +20,6 @@ import {
  */
 const env = z
   .object({
-    // Lower-cased because the adapter keys its installations by the lower-cased
-    // host, and `client()` below looks one up by this string.
-    BACKLOG_HOST: z
-      .string()
-      .min(1)
-      .transform((host) => host.toLowerCase()),
     BACKLOG_BOT_USER_NAME: z.string().min(1),
     DONE_STATUS_ID: z.coerce.number().int().positive().default(4),
     REQUIRED_CUSTOM_FIELD_ID: z.coerce.number().int().positive(),
@@ -84,7 +78,7 @@ async function gateOnClose(thread: Thread, message: Message): Promise<void> {
   // Through the client the adapter hands out rather than a second one built
   // here: the port names no custom fields, but this request still spends the
   // adapter's own rate-limit budget and fails with its error classes.
-  const issue = await backlog.client(env.BACKLOG_HOST).getIssue(issueId);
+  const issue = await backlog.client().getIssue(issueId);
   const field = requiredFieldState(
     issue.customFields,
     env.REQUIRED_CUSTOM_FIELD_ID
@@ -110,9 +104,7 @@ async function gateOnClose(thread: Thread, message: Message): Promise<void> {
   }
 
   await thread.post(comment);
-  await backlog
-    .client(env.BACKLOG_HOST)
-    .patchIssue(issueId, { assigneeId: closedBy });
+  await backlog.client().patchIssue(issueId, { assigneeId: closedBy });
 }
 
 /**

@@ -521,7 +521,7 @@ function listedIssueRoot(
  * `listThreads` (docs/specs/adapter.md §7.6). Lists the project's **issues**
  * and deliberately not its pull requests (D-PR7): a pull-request list is per
  * repository, a coordinate a channel id does not carry, and
- * `client(host).getPullRequests(projectId, repositoryId, …)` is the route to
+ * `client().getPullRequests(projectId, repositoryId, …)` is the route to
  * one — a `read`-bucket call, not a `search` one (measured 2026-09-06,
  * `.claude/rules/backlog-pull-request-facts.md` "Rate limit"), so merging the
  * two lists here would also mix two budgets behind one cursor.
@@ -616,14 +616,14 @@ export async function getUser(input: GetUserInput): Promise<UserInfo | null> {
 
 export interface RehydrateAttachmentInput {
   attachment: Attachment;
-  configuredHosts: ReadonlySet<string>;
-  apiFor: (host: string) => BacklogApi;
+  host: string;
+  api: () => BacklogApi;
 }
 
 /**
  * `rehydrateAttachment` (docs/specs/adapter.md §6.6): synchronous, and a
- * security boundary — it accepts only a URL whose host is one of this
- * adapter's **configured** installations and whose path is one this adapter
+ * security boundary — it accepts only a URL whose host is the adapter's
+ * **configured** space and whose path is one this adapter
  * builds (`src/subject/url.ts`, which owns both directions of the grammar);
  * anything else (a foreign host, a malformed path, no URL at all) is returned
  * unchanged, without `fetchData`, which is what keeps a rehydrated attachment
@@ -633,7 +633,7 @@ export interface RehydrateAttachmentInput {
 export function rehydrateAttachment(
   input: RehydrateAttachmentInput
 ): Attachment {
-  const { attachment, configuredHosts, apiFor } = input;
+  const { attachment, host, api } = input;
   if (attachment.url === undefined) {
     return attachment;
   }
@@ -645,14 +645,12 @@ export function rehydrateAttachment(
     return attachment;
   }
 
-  if (!configuredHosts.has(parsed.hostname)) {
+  if (parsed.hostname !== host) {
     return attachment;
   }
   const download = parseAttachmentPath(parsed.pathname);
   if (download === null) {
     return attachment;
   }
-  const api = apiFor(parsed.hostname);
-
-  return { ...attachment, fetchData: () => download(api) };
+  return { ...attachment, fetchData: () => download(api()) };
 }

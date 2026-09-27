@@ -67,7 +67,6 @@ describe('package entry point', () => {
       'decodeThreadId',
       'channelIdFromThreadId',
       'encodeMessageId',
-      'encodeUserId',
       'BacklogMarkdownConverter',
       'BacklogNotationConverter',
       'mentionUser',

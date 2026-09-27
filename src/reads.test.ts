@@ -679,7 +679,6 @@ describe('fetchSubject', () => {
 });
 
 describe('rehydrateAttachment', () => {
-  const configuredHosts = new Set([HOST]);
   const pullRequestAttachmentUrl = (host: string) =>
     `https://${host}/api/v2/projects/${PROJECT_ID}/git/repositories/${REPOSITORY_ID}/pullRequests/${PULL_REQUEST_NUMBER}/attachments/4242`;
 
@@ -689,7 +688,7 @@ describe('rehydrateAttachment', () => {
       contentType: 'text/plain',
       data: Buffer.from('trace'),
     });
-    const apiFor = vi.fn(
+    const api = vi.fn(
       () => ({ downloadPullRequestAttachment }) as unknown as BacklogApi
     );
     const rehydrated = rehydrateAttachment({
@@ -698,13 +697,13 @@ describe('rehydrateAttachment', () => {
         name: 'trace.log',
         url: pullRequestAttachmentUrl(HOST),
       },
-      configuredHosts,
-      apiFor,
+      host: HOST,
+      api,
     });
 
     const data = await rehydrated.fetchData?.();
     expect(data?.toString()).toBe('trace');
-    expect(apiFor).toHaveBeenCalledWith(HOST);
+    expect(api).toHaveBeenCalledTimes(1);
     expect(downloadPullRequestAttachment).toHaveBeenCalledWith(
       {
         projectId: PROJECT_ID,
@@ -724,8 +723,8 @@ describe('rehydrateAttachment', () => {
     expect(
       rehydrateAttachment({
         attachment,
-        configuredHosts,
-        apiFor: () => {
+        host: HOST,
+        api: () => {
           throw new Error('no download expected');
         },
       })
