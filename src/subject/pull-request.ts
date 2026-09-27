@@ -1,9 +1,8 @@
 /**
- * The pull-request half of the subject layer
- * (docs/plans/pull-request-support.md §3.4). Every difference from an issue is
- * a measured Backlog fact, not a design choice: three-coordinate addressing,
- * no Get Pull Request Comment, no Delete Pull Request Comment, and comment
- * attachments that carry a name but no id
+ * The pull-request half of the subject layer (D-PR2). Every difference from an
+ * issue is a measured Backlog fact, not a design choice: three-coordinate
+ * addressing, no Get Pull Request Comment, no Delete Pull Request Comment, and
+ * comment attachments that carry a name but no id
  * (`.claude/rules/backlog-pull-request-facts.md`, measured 2026-09-06).
  */
 

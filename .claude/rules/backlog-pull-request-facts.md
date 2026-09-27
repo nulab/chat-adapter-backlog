@@ -59,11 +59,9 @@ Consequences, in the order they matter:
   `{ id, userId, name, roleType, lang } | null` — no `mailAddress`, no
   `nulabAccount`. On 18 it is the assignment: creating a pull request with
   `assigneeId` and no mention text in summary or description is a mention of
-  the assignee (measured — the bot answered), which is what §5.4 rule 4 of
-  `docs/specs/adapter.md` had left open. On 19 and 20 it is the **current**
-  assignee, repeated on every delivery whether or not the assignment changed:
-  a standing state, not an event, so the adapter does not read it there
-  (`src/webhook/inbound.ts`).
+  the assignee (measured — the bot answered). On 19 and 20 it is the
+  **current** assignee, repeated on every delivery whether or not the
+  assignment changed: a standing state, not an event.
 - **A `PATCH` of other fields mentions nobody**, even when the bot is already
   the assignee (measured 2026-09-06): a `summary` + `description` + `issue`
   `PATCH` on a pull request assigned to the bot emitted a 19 carrying
@@ -71,8 +69,8 @@ Consequences, in the order they matter:
   `notifications[]`** — nobody was notified. An assignment reports itself in
   `changes[]`, and that is the only structural evidence of one on 19.
 - `roleType` inside `content.assignee` was **94** while the same user under
-  `notifications[].user` was **2** in the same body (measured 2026-09-06).
-  Nothing reads either; do not treat one as a source for the other.
+  `notifications[].user` was **2** in the same body (measured 2026-09-06), so
+  neither is a source for the other.
 - `base` and `branch` are the branch names, on every type and every delivery.
   `diff` is a diff(1)-style body of a description edit and `null` everywhere
   else — measured non-null on exactly one delivery, the 19 that changed the
@@ -81,23 +79,15 @@ Consequences, in the order they matter:
   and 3 carry `assignee` and `diff` too, with the same meanings (measured
   2026-09-06 on 26 issue deliveries; `assignee` present on every one,
   `diff` non-null only on a description edit). What is genuinely
-  pull-request-only is `base` and `branch`. The issue side reads neither, for
-  the same reason the pull-request side does not.
-- `base`, `branch` and `diff` are read by nothing, and `diff` is named by no
-  Backlog document. They are named by the schema as the record of the
-  measurement, and they reach a consumer regardless: `raw.payload` is built
-  from the parsed JSON, not from a schema's output
-  (`src/webhook/payload.ts`), so a key the adapter does not read is not a key
-  it loses.
+  pull-request-only is `base` and `branch`. `diff` is named by no Backlog
+  document.
 - **`notifications[]` is populated on a pull-request webhook**, exactly as it
   is on an issue webhook (`backlog-webhook-facts.md` § Payload envelope) and
   unlike the activity API, which returned `[]` for the very same activities
   (measured 2026-09-06). What differs is only the reason code for the same
   act: assignment notifies with **reason 10** and a comment mention or a
   `notifiedUserId[]` comment with **reason 11**, where the issue side uses 1
-  and 2. That array is the exact evidence `changes[]` only approximates, and
-  §5.4 rule 6 reads it for both kinds without a pull-request-specific branch,
-  so nothing here needs to (docs/specs/adapter.md §5.4).
+  and 2. That array is the exact evidence `changes[]` only approximates.
 
 | Operation | Activity | `content.comment` | `changes[]` |
 | --- | --- | --- | --- |
@@ -106,7 +96,7 @@ Consequences, in the order they matter:
 | Comment with `attachmentId[]` | **20** | `{ id, content }` | `[{ field: "attachment", new_value: "<file name>", old_value: "" }]` — name only, no id |
 | Summary / description / linked-issue change (`PATCH` with `comment`) | **19** | `{ id, content: <the comment text> }` | `summary`, `description` (both full bodies), `issue` (`new_value: "PROJ-54"`, `old_value: "PROJ-47"` — issue **keys**) |
 | Assignee change alone | **19** | `{ id, content: "" }` | `[{ field: "assignee", new_value: "<new display name>", old_value: "<old display name>" }]` — **`assignee`**, not the issue side's `assigner`; `old_value` carries the previous display name on a reassignment and `""` when nobody was assigned before, and unassign is `new_value: ""` with the old name still in `old_value` (all measured 2026-09-06) |
-| Assignee change **together with** other fields in one `PATCH` | 19 | as above | the `assignee` entry was **absent** while the reason-10 notification was still created (measured once, 2026-09-06); two later `PATCH`es the same day — `assigneeId` + `description`, and `summary` + `description` + `issue` — both reported every field they changed. One unreproduced observation against two reproductions, and reading `content.assignee` as a fallback costs a **measured false positive** — a multi-field `PATCH` that changes no assignee carries the standing one and notifies nobody (above) — so the adapter reports the assignment from `changes[]` alone. An assignment `changes[]` leaves out is caught by `notifications[]` reason 10 instead, which is what §5.4 rule 6 reads |
+| Assignee change **together with** other fields in one `PATCH` | 19 | as above | the `assignee` entry was **absent** while the reason-10 notification was still created (measured once, 2026-09-06); two later `PATCH`es the same day — `assigneeId` + `description`, and `summary` + `description` + `issue` — both reported every field they changed. One unreproduced observation against two reproductions. `content.assignee` is no fallback: a multi-field `PATCH` that changes no assignee carries the standing one and notifies nobody (above). `notifications[]` reason 10 records the assignment either way |
 | Merge (measured via a `git push` of the merge to the base branch) | **19** | `{ id, content: "" }` | `[{ field: "status", new_value: "3", old_value: "1" }]` — status by **id string**, like issues; the changelog comment is authored by the pusher; `mergeCommit` stays `null`, `mergeAt`/`closeAt` are set |
 | Close (from history, UI) | 19 | `{ id, content: "" }` | `[{ field: "status", new_value: "2", old_value: "1" }]` |
 | Comment edit (`PATCH …/comments/:id`) | **none** — no new activity (measured; same as issue comments) | | |
@@ -119,9 +109,9 @@ Consequences, in the order they matter:
   stored summary keeps the literal `<@U999>` — in the REST object, in the
   activity `content.summary` and in the **webhook** `content.summary` alike
   (measured 2026-09-06 in all three). So the raw form is what a type-18
-  message's text actually contains, not merely what storage holds, and a
-  consumer matching only `@<display name>` finds nothing in such a summary
-  even though the adapter set `isMention`. The activity's `changes[]` entry
+  message's text actually contains, not merely what storage holds, and
+  matching only `@<display name>` finds nothing in such a summary. The
+  activity's `changes[]` entry
   for `summary` shows the **resolved** form while the REST `changeLog` shows
   the raw form (measured) — the two value systems differ, as for issues. One
   webhook body holds both at once: a 19 that rewrote the summary carried
@@ -131,8 +121,7 @@ Consequences, in the order they matter:
 - `notifiedUserId[]` on a comment leaves `comment.content` without any
   `@name`, so **no textual rule can see it** (measured 2026-09-06). It is not
   invisible: the delivery names the recipient in the top-level
-  `notifications[]` with reason 11, so §5.4 rule 6 reads it as a mention —
-  which is the whole reason that rule exists. It is the counterpart of the
+  `notifications[]` with reason 11. It is the counterpart of the
   `<@U…>` rule above: a visible mention without a notification is impossible,
   a notification without a visible mention is not.
 - Creating a pull request with `notifiedUserId[]` (or a `<@project>` in the
@@ -151,7 +140,7 @@ Consequences, in the order they matter:
   `changes[]` is `[]` (measured 2026-09-06). A pull-request operation can
   therefore reach a consumer as an issue-thread message; nothing in that
   type 3 says a pull request caused it except the comment text, which is
-  localized, so no code may key on it.
+  localized.
 
 ## Comments
 
@@ -181,15 +170,14 @@ Consequences, in the order they matter:
 - `POST …/comments` accepts `attachmentId[]` (documented; `backlog-js`
   0.20.1 omits it from `PostPullRequestCommentsParams`).
 
-## Paging (same code path as issue comments)
+## Paging
 
-Measured on six comments with consecutive ids `n…n+5`:
-
-- `minId` and `maxId` are **exclusive**: `minId=n+2&maxId=n+5` → `[n+3,
-  n+4]`; adjacent `minId=n+2&maxId=n+3` → `[]`.
-- `count` cuts from the head of `order`: `order=asc&maxId=n+5&count=2` →
-  `[n, n+1]` (the two oldest), `order=desc&maxId=n+5&count=2` → `[n+4, n+3]`.
-- Default is `order=desc`, all comments, changelog comments included.
+- Same semantics as issue comments (`backlog-api-facts.md` § Comment listing
+  and paging), re-measured here on six consecutive ids `n…n+5`:
+  `minId=n+2&maxId=n+5` → `[n+3, n+4]`, adjacent ids → `[]`,
+  `order=asc&maxId=n+5&count=2` → `[n, n+1]`,
+  `order=desc&maxId=n+5&count=2` → `[n+4, n+3]`. Default is `order=desc`,
+  changelog comments included.
 - A **single comment** is fetched as `minId=id-1&maxId=id+1&count=1` →
   exactly `[id]` (measured). There is no other way.
 

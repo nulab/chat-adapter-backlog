@@ -1,11 +1,11 @@
 /**
- * The seam between the adapter's members and the HTTP port
- * (docs/plans/pull-request-support.md §3.4). The port stays endpoint-shaped —
- * one method per Backlog endpoint, conformance-tested twice — while a
- * `SubjectClient` presents *one* comment stream regardless of whether the
- * thread is an issue or a pull request, so `src/egress.ts` and `src/reads.ts`
- * have one code path each instead of six `if (kind === "pullRequest")`
- * branches with a different exception behind every one.
+ * The seam between the adapter's members and the HTTP port (D-PR2). The port
+ * stays endpoint-shaped — one method per Backlog endpoint, conformance-tested
+ * twice — while a `SubjectClient` presents *one* comment stream regardless of
+ * whether the thread is an issue or a pull request, so `src/egress.ts` and
+ * `src/reads.ts` have one code path each instead of six
+ * `if (kind === "pullRequest")` branches with a different exception behind
+ * every one.
  *
  * `subjectClientFor` at the bottom of this file is the only place in `src/`
  * where a subject's kind selects **behaviour**. `src/ids.ts` also reads it, to
@@ -175,10 +175,10 @@ export interface SubjectClient {
 }
 
 /**
- * The one place a subject's kind selects behaviour (D-PR2,
- * docs/plans/pull-request-support.md §6). Every member of the adapter reaches
- * Backlog as `decode -> subjectClientFor -> the same code for both kinds`, so
- * a fix to egress or reads lands once rather than twice.
+ * The one place a subject's kind selects behaviour (D-PR2). Every member of
+ * the adapter reaches Backlog as
+ * `decode -> subjectClientFor -> the same code for both kinds`, so a fix to
+ * egress or reads lands once rather than twice.
  */
 export function subjectClientFor(
   api: BacklogApi,

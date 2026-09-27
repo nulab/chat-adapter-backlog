@@ -107,7 +107,7 @@ export function buildRestAuthor(
  * Everything a `Message` needs beyond the record it is built from. `subject`
  * carries both the addressing (`subject.ref`) and every call the two kinds
  * answer differently, so nothing below this line names an issue or a pull
- * request (docs/plans/pull-request-support.md §3.4).
+ * request (D-PR2).
  */
 export interface MessageBuilders {
   host: string;
@@ -294,7 +294,7 @@ export async function fetchMessages(
  * Whether a decoded message id addresses the thread's own subject. Compared
  * through the grammar rather than field by field because a field-by-field
  * comparison needs a `kind` branch, and `subjectClientFor` is the only place
- * in `src/` allowed to have one (docs/plans/pull-request-support.md §6); the
+ * in `src/` allowed to have one (D-PR2); the
  * encoding is injective over subjects, so string equality is a total
  * comparison with no branch to keep in step with `BacklogSubjectRef`.
  *

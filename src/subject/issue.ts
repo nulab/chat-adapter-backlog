@@ -1,7 +1,7 @@
 /**
- * The issue half of the subject layer (docs/plans/pull-request-support.md
- * §3.4): today's issue behaviour behind the `SubjectClient` interface, so
- * `src/egress.ts` and `src/reads.ts` never name an issue endpoint again.
+ * The issue half of the subject layer (D-PR2): today's issue behaviour behind
+ * the `SubjectClient` interface, so `src/egress.ts` and `src/reads.ts` never
+ * name an issue endpoint again.
  */
 
 import { AdapterError } from '@chat-adapter/shared';

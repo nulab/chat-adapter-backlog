@@ -111,7 +111,7 @@ jobs:
       # The target is fixed before anything is written, and a tag already on
       # HEAD wins over the bump: this is what lets a re-run after a late
       # failure aim at the version the first attempt was making instead of
-      # the one after it (docs/plans/release-mechanism.md §6.1).
+      # the one after it.
       #
       # `git describe` returns the nearest tag reachable from HEAD, not the
       # highest semver. Those are the same tag only because `main` is linear
@@ -165,7 +165,7 @@ jobs:
       # Before anything is built, and writing nothing. Bumping from a tag whose
       # version never reached the registry would skip that version for good,
       # and a tag for the computed version on another commit means `publish`
-      # could only fail at it after the build (release-mechanism.md §6.1).
+      # could only fail at it after the build.
       - name: Check the tags against the registry
         env:
           VERSION: ${{ steps.target.outputs.version }}
@@ -232,9 +232,8 @@ jobs:
 
   # Each step checks whether its effect already exists and skips if it does,
   # so re-running this run after a failure at any step finishes the release
-  # rather than colliding with the half of it that already happened
-  # (docs/plans/release-mechanism.md §6.1). Nothing here checks out or runs
-  # the repository's code.
+  # rather than colliding with the half of it that already happened. Nothing
+  # here checks out or runs the repository's code.
   publish:
     needs: [pack]
     if: ${{ !inputs.dry-run }}
@@ -311,7 +310,7 @@ jobs:
       # repository and workflow published it — rather than skipped on trust.
       # Not against the tarball's digest: neither the build nor `npm pack` is
       # established to be byte-reproducible, so a digest check would fail the
-      # very re-runs it exists to let through (release-mechanism.md §6.1).
+      # very re-runs it exists to let through.
       #
       # NODE_AUTH_TOKEN is for the first publish only, which cannot use
       # trusted publishing because npm will not configure it for a package
