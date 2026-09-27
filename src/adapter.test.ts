@@ -833,6 +833,26 @@ describe('BacklogAdapter.postMessage', () => {
     expect(backlog.postIssueComments).not.toHaveBeenCalled();
   });
 
+  it('a Blob that cannot be read is rejected as a backlog error carrying the read failure, and the comment does not reach Backlog', async () => {
+    const { adapter, backlog } = egressAdapter();
+    const readFailure = new TypeError('The blob could not be read');
+    const unreadable = new Blob(['gone']);
+    unreadable.arrayBuffer = () => Promise.reject(readFailure);
+
+    const rejection = adapter.postMessage(EGRESS_THREAD_ID, {
+      markdown: 'See attached',
+      files: [{ filename: 'detached.png', data: unreadable }],
+    });
+
+    await expect(rejection).rejects.toThrow(ValidationError);
+    await expect(rejection).rejects.toThrow(/detached\.png/);
+    await expect(rejection).rejects.toMatchObject({
+      adapter: 'backlog',
+      cause: readFailure,
+    });
+    expect(backlog.postIssueComments).not.toHaveBeenCalled();
+  });
+
   it('a bold reply on a notation project uses two quotes', async () => {
     const { adapter, backlog } = egressAdapter({
       textFormattingRule: 'backlog',

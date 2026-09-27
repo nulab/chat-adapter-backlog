@@ -516,8 +516,9 @@ selects (D-PR2). A root or update message id (`:r`, `:u:`) is refused with
 
 1. Upload every `extractFiles(message)` entry, one at a time, through
    [Post Attachment File](https://developer.nulab.com/docs/backlog/api/2/post-attachment-file/).
-   `file.data` must be a `Buffer`, an `ArrayBuffer` or a `Blob`; anything else
-   is a `ValidationError` naming the file, raised when that file's turn comes.
+   `file.data` must be a `Buffer`, an `ArrayBuffer` or a `Blob`; anything else,
+   or a `Blob` whose bytes cannot be read, is a `ValidationError` naming the
+   file, raised when that file's turn comes; a read failure is its `cause`.
 2. Render `converter.renderPostable(message)` with the project's converter
    (§9). A `string` and `{ raw }` pass through untouched; `{ markdown }` is
    converted; a card renders as fallback text in the project's markup (§9.2),

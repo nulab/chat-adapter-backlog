@@ -448,7 +448,7 @@ export class BacklogAdapter implements Adapter<
 
   /**
    * `toBuffer`'s `platform: PlatformName` has no `"backlog"` member
-   * (`@chat-adapter/shared@4.39.0`) and its default `throwOnUnsupported: true`
+   * (`@chat-adapter/shared@4.41.0`) and its default `throwOnUnsupported: true`
    * throws a `ValidationError` named after whichever platform was passed, so
    * the default would blame `"slack"` for a caller's unsupported `file.data`
    * and never reach the error below. `throwOnUnsupported: false` turns the
@@ -457,10 +457,20 @@ export class BacklogAdapter implements Adapter<
    * `"backlog"`.
    */
   private toFileBuffer = async (file: FileUpload): Promise<Buffer> => {
-    const buffer = await toBuffer(file.data, {
-      platform: 'slack',
-      throwOnUnsupported: false,
-    });
+    let buffer: Buffer | null;
+    try {
+      buffer = await toBuffer(file.data, {
+        platform: 'slack',
+        throwOnUnsupported: false,
+      });
+    } catch (cause) {
+      const error = new ValidationError(
+        'backlog',
+        `file "${file.filename}" could not be read: ${errorMessage(cause)}`
+      );
+      error.cause = cause;
+      throw error;
+    }
     if (buffer === null) {
       throw new ValidationError(
         'backlog',
