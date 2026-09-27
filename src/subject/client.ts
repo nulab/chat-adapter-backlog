@@ -10,9 +10,8 @@
  * `subjectClientFor` at the bottom of this file is the only place in `src/`
  * where a subject's kind selects **behaviour**. `src/ids.ts` also reads it, to
  * write `issue:<id>` versus `pr:<repo>:<n>` — that is a codec's whole job and
- * it has no port to route through, so the containment test allowlists exactly
- * those two files and fails on any third. The rule is executable rather than a
- * comment somebody has to remember.
+ * it has no port to route through. No third module asks; that is a convention
+ * a reviewer holds, not something a test enforces.
  *
  * This layer imports the port and nothing else from `src/`, which is what
  * keeps `src/reads.ts` free to import it back.

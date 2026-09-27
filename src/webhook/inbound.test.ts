@@ -8,6 +8,7 @@ import {
   FIXTURE,
   issueCommented,
   issueCreated,
+  issueMultiUpdated,
   issueUpdatedWithoutComment,
   pullRequestAdded,
   pullRequestAssigneeChanged,
@@ -21,10 +22,14 @@ import {
   statusChanged,
 } from '../test/fixtures/webhooks';
 import { createPullRequestSubjectClient } from '../subject/pull-request';
-import { buildAuthor, buildInboundMessageFields } from './inbound';
-import { parseActivity } from './payload';
+import { buildBulkUpdateMessage, buildInboundMessage } from './inbound';
+import { parseDelivery } from './payload';
 
-import type { BuildInboundMessageInput, InboundActivity } from './inbound';
+import type {
+  BulkUpdateActivity,
+  InboundContext,
+  MessageActivity,
+} from './inbound';
 import type { BacklogApi, BacklogComment } from '../client/port';
 import type { SubjectClient } from '../subject/client';
 import type { BacklogChange } from '../types';
@@ -99,60 +104,80 @@ function pullRequestSubject(): SubjectClient {
   } as unknown as SubjectClient;
 }
 
-function input(
-  overrides: Partial<BuildInboundMessageInput> = {}
-): BuildInboundMessageInput {
-  return {
-    host: FIXTURE.host,
-    botUserId: FIXTURE.bot.id,
-    botUserName: FIXTURE.bot.name,
-    subject: issueSubject(),
-    ...overrides,
-  };
+interface Input {
+  subject: SubjectClient;
 }
 
-function pullRequestInput(
-  overrides: Partial<BuildInboundMessageInput> = {}
-): BuildInboundMessageInput {
+function input(overrides: Partial<Input> = {}): Input {
+  return { subject: issueSubject(), ...overrides };
+}
+
+function pullRequestInput(overrides: Partial<Input> = {}): Input {
   return input({ subject: pullRequestSubject(), ...overrides });
 }
 
-/**
- * A fixture body as the response ladder hands it on: validated by the schema
- * for its type, so a test can never assert on a field the schema would have
- * stripped before the mapping saw it.
- */
-function activityOfType(type: number, payload: object): InboundActivity {
-  const result = parseActivity(type, payload);
-  if (!('activity' in result)) {
-    throw new Error(
-      `fixture failed to validate as type ${type}: ${result.issuePaths.join(', ')}`
-    );
+const CONTEXT: InboundContext = {
+  host: FIXTURE.host,
+  botUserId: FIXTURE.bot.id,
+  botUserName: FIXTURE.bot.name,
+  format: (text) => ({
+    type: 'root',
+    children: [
+      { type: 'paragraph', children: [{ type: 'text', value: text }] },
+    ],
+  }),
+};
+
+function mapped(activity: MessageActivity, { subject }: Input) {
+  const message = buildInboundMessage(activity, CONTEXT, subject);
+  return {
+    message,
+    messageId: message.id,
+    text: message.text,
+    attachments: message.attachments,
+    isMention: message.isMention,
+    changes: message.raw.changes,
+  };
+}
+
+function parsed(payload: object) {
+  const delivery = parseDelivery(payload);
+  if (!delivery.ok || !('activity' in delivery)) {
+    throw new Error(`fixture failed to parse: ${JSON.stringify(delivery)}`);
   }
-  const activity = result.activity;
-  if (activity.type === 4) {
-    throw new Error('type 4 is a deletion, not a message');
-  }
-  if (activity.type === 14) {
-    throw new Error('type 14 fans out; see bulk.test.ts');
+  return delivery.activity;
+}
+
+function activityOfType(type: number, payload: object): MessageActivity {
+  const activity = parsed(payload);
+  if (activity.type !== type || activity.type === 4 || activity.type === 14) {
+    throw new Error(`fixture is not a type ${type} message activity`);
   }
   return activity;
 }
 
-const created = (payload: object): InboundActivity =>
+function bulkActivity(payload: object): BulkUpdateActivity {
+  const activity = parsed(payload);
+  if (activity.type !== 14) {
+    throw new Error('fixture is not a bulk update');
+  }
+  return activity;
+}
+
+const created = (payload: object): MessageActivity =>
   activityOfType(1, payload);
-const updated = (payload: object): InboundActivity =>
+const updated = (payload: object): MessageActivity =>
   activityOfType(2, payload);
-const commented = (payload: object): InboundActivity =>
+const commented = (payload: object): MessageActivity =>
   activityOfType(3, payload);
 
-describe('buildInboundMessageFields — type 1 Issue Created', () => {
+describe('buildInboundMessage — type 1 Issue Created', () => {
   it('the message id is the issue root and text is summary + description', () => {
     const activity = created(
       issueCreated({ summary: 'Deploy fails', description: 'Repro steps' })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.messageId).toBe(`${FIXTURE.host}:issue:${FIXTURE.issueId}:r`);
     expect(fields.text).toBe('Deploy fails\n\nRepro steps');
@@ -167,7 +192,7 @@ describe('buildInboundMessageFields — type 1 Issue Created', () => {
     (payload['content'] as Record<string, unknown>)['description'] = null;
     const activity = created(payload);
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.text).toBe('Deploy fails');
   });
@@ -177,7 +202,7 @@ describe('buildInboundMessageFields — type 1 Issue Created', () => {
       issueCreated({ assignee: { id: FIXTURE.bot.id, name: FIXTURE.bot.name } })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.isMention).toBe(true);
   });
@@ -189,7 +214,7 @@ describe('buildInboundMessageFields — type 1 Issue Created', () => {
       })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.isMention).toBe(false);
   });
@@ -199,7 +224,7 @@ describe('buildInboundMessageFields — type 1 Issue Created', () => {
       issueCreated({ summary: 'cc @Chatbot please review' })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.isMention).toBe(true);
   });
@@ -211,7 +236,7 @@ describe('buildInboundMessageFields — type 1 Issue Created', () => {
       })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.attachments).toHaveLength(1);
     expect(fields.attachments[0]).toMatchObject({
@@ -230,7 +255,7 @@ describe('buildInboundMessageFields — type 1 Issue Created', () => {
       })
     );
 
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activity,
       input({ subject: issueSubject(fetchAttachmentSpy) })
     );
@@ -243,13 +268,13 @@ describe('buildInboundMessageFields — type 1 Issue Created', () => {
   });
 });
 
-describe('buildInboundMessageFields — types 2 and 3, comment id present', () => {
+describe('buildInboundMessage — types 2 and 3, comment id present', () => {
   it('a plain comment (type 3) arrives with the comment message id and its text', () => {
     const activity = commented(
       issueCommented({ commentId: 3001, text: 'Any progress on this?' })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.messageId).toBe(
       `${FIXTURE.host}:issue:${FIXTURE.issueId}:c3001`
@@ -261,7 +286,7 @@ describe('buildInboundMessageFields — types 2 and 3, comment id present', () =
   it('a status-only change arrives as a comment message with empty text and a status change', () => {
     const activity = updated(statusChanged());
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.text).toBe('');
     expect(fields.changes).toEqual([
@@ -274,7 +299,7 @@ describe('buildInboundMessageFields — types 2 and 3, comment id present', () =
       commentWithStatusChange({ text: 'Fixed in the latest build.' })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.text).toBe('Fixed in the latest build.');
     expect(fields.changes).toEqual([
@@ -283,14 +308,11 @@ describe('buildInboundMessageFields — types 2 and 3, comment id present', () =
   });
 
   it('assigning the bot is a mention, a status change alone is not', () => {
-    const mentionFields = buildInboundMessageFields(
+    const mentionFields = mapped(
       updated(assigneeChanged({ assigneeName: FIXTURE.bot.name })),
       input()
     );
-    const statusOnlyFields = buildInboundMessageFields(
-      updated(statusChanged()),
-      input()
-    );
+    const statusOnlyFields = mapped(updated(statusChanged()), input());
 
     expect(mentionFields.isMention).toBe(true);
     expect(mentionFields.text).toBe('');
@@ -302,7 +324,7 @@ describe('buildInboundMessageFields — types 2 and 3, comment id present', () =
   });
 
   it('assigning someone other than the bot is not a mention', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       updated(assigneeChanged({ assigneeName: FIXTURE.alice.name })),
       input()
     );
@@ -315,7 +337,7 @@ describe('buildInboundMessageFields — types 2 and 3, comment id present', () =
       descriptionEdited({ before: 'old body', after: 'new body' })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.text).toBe('');
     expect(fields.changes).toEqual([
@@ -330,7 +352,7 @@ describe('buildInboundMessageFields — types 2 and 3, comment id present', () =
       })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.text).toBe('');
     expect(fields.changes).toEqual([]);
@@ -342,11 +364,11 @@ describe('buildInboundMessageFields — types 2 and 3, comment id present', () =
   });
 });
 
-describe('buildInboundMessageFields — type 2 without a comment id', () => {
+describe('buildInboundMessage — type 2 without a comment id', () => {
   it('uses the :u: message id and empty text', () => {
     const activity = updated(issueUpdatedWithoutComment());
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.messageId).toBe(
       `${FIXTURE.host}:issue:${FIXTURE.issueId}:u:2026-09-03T04:05:06Z`
@@ -355,7 +377,7 @@ describe('buildInboundMessageFields — type 2 without a comment id', () => {
   });
 });
 
-describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
+describe('buildInboundMessage — type 18 Pull Request Added', () => {
   it('the message id is the pull request root and text is summary + description', () => {
     const activity = activityOfType(
       18,
@@ -365,7 +387,7 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
       })
     );
 
-    const fields = buildInboundMessageFields(activity, pullRequestInput());
+    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.messageId).toBe(
       `${FIXTURE.host}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}:r`
@@ -377,11 +399,11 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
   });
 
   it('a linked issue is display data: it changes neither the ids nor the text', () => {
-    const withLink = buildInboundMessageFields(
+    const withLink = mapped(
       activityOfType(18, pullRequestAdded({ linkedIssue: true })),
       pullRequestInput()
     );
-    const withoutLink = buildInboundMessageFields(
+    const withoutLink = mapped(
       activityOfType(18, pullRequestAdded()),
       pullRequestInput()
     );
@@ -396,7 +418,7 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
       pullRequestAdded({ description: 'cc @Chatbot please review' })
     );
 
-    const fields = buildInboundMessageFields(activity, pullRequestInput());
+    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.isMention).toBe(true);
   });
@@ -407,7 +429,7 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
       pullRequestAdded({ summary: `cc <@U${FIXTURE.bot.id}> please review` })
     );
 
-    const fields = buildInboundMessageFields(activity, pullRequestInput());
+    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.isMention).toBe(true);
   });
@@ -417,7 +439,7 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
       issueCreated({ summary: `cc <@U${FIXTURE.bot.id}> please review` })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.isMention).toBe(false);
   });
@@ -428,13 +450,13 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
       pullRequestAdded({ summary: `cc <@U${FIXTURE.alice.id}> please review` })
     );
 
-    const fields = buildInboundMessageFields(activity, pullRequestInput());
+    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.isMention).toBe(false);
   });
 
   it('opening a pull request assigned to the bot is a mention', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(18, pullRequestAdded({ assignee: FIXTURE.bot })),
       pullRequestInput()
     );
@@ -443,7 +465,7 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
   });
 
   it('opening a pull request assigned to someone else is not a mention', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(18, pullRequestAdded({ assignee: FIXTURE.alice })),
       pullRequestInput()
     );
@@ -452,7 +474,7 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
   });
 
   it('opening a pull request assigned to nobody is not a mention', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(18, pullRequestAdded({ assignee: null })),
       pullRequestInput()
     );
@@ -467,10 +489,7 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
     const payload = pullRequestAdded();
     delete (payload['content'] as Record<string, unknown>)['assignee'];
 
-    const fields = buildInboundMessageFields(
-      activityOfType(18, payload),
-      pullRequestInput()
-    );
+    const fields = mapped(activityOfType(18, payload), pullRequestInput());
 
     expect(fields.isMention).toBe(false);
   });
@@ -481,10 +500,7 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
       { id: 9002, name: 'trace.log', size: 2048 },
     ];
 
-    const fields = buildInboundMessageFields(
-      activityOfType(18, payload),
-      pullRequestInput()
-    );
+    const fields = mapped(activityOfType(18, payload), pullRequestInput());
 
     expect(fields.attachments).toHaveLength(1);
     expect(fields.attachments[0]).toMatchObject({
@@ -499,7 +515,7 @@ describe('buildInboundMessageFields — type 18 Pull Request Added', () => {
   });
 });
 
-describe('buildInboundMessageFields — types 19 and 20, comment id present', () => {
+describe('buildInboundMessage — types 19 and 20, comment id present', () => {
   it('a plain comment (type 20) arrives with the comment message id and its text', () => {
     const activity = activityOfType(
       20,
@@ -509,7 +525,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
       })
     );
 
-    const fields = buildInboundMessageFields(activity, pullRequestInput());
+    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.messageId).toBe(
       `${FIXTURE.host}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}:c7000001`
@@ -524,7 +540,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
       pullRequestUpdated({ commentId: 7000002 })
     );
 
-    const fields = buildInboundMessageFields(activity, pullRequestInput());
+    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.messageId).toBe(
       `${FIXTURE.host}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}:c7000002`
@@ -542,7 +558,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
   it('a merge arrives as a status change with empty text, not as a type of its own', () => {
     const activity = activityOfType(19, pullRequestStatusChanged());
 
-    const fields = buildInboundMessageFields(activity, pullRequestInput());
+    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.text).toBe('');
     expect(fields.changes).toEqual([
@@ -552,7 +568,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
   });
 
   it('assigning the bot to a pull request is a mention', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(
         19,
         pullRequestAssigneeChanged({ assigneeName: FIXTURE.bot.name })
@@ -569,7 +585,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
   });
 
   it('assigning someone other than the bot to a pull request is not a mention', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(
         19,
         pullRequestAssigneeChanged({ assigneeName: FIXTURE.alice.name })
@@ -581,7 +597,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
   });
 
   it('editing a field of a pull request the bot is assigned to is not a mention', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(19, pullRequestUpdated({ assignee: FIXTURE.bot })),
       pullRequestInput()
     );
@@ -591,7 +607,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
   });
 
   it('a description edit carries its diff and mentions nobody', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(
         19,
         pullRequestDescriptionEdited({ assignee: FIXTURE.bot })
@@ -606,7 +622,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
   });
 
   it('a multi-field update that changed no assignee and notified nobody is not a mention', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(
         19,
         pullRequestMultiFieldUpdated({ assignee: FIXTURE.bot })
@@ -623,7 +639,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
   });
 
   it('a multi-field update naming no assignee change is a mention when the delivery notified the bot', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(
         19,
         pullRequestMultiFieldUpdated({
@@ -641,7 +657,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
   });
 
   it('a comment on a pull request the bot is assigned to is not a mention', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(20, pullRequestCommented({ assignee: FIXTURE.bot })),
       pullRequestInput()
     );
@@ -650,7 +666,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
   });
 
   it('merging a pull request the bot is assigned to is not a mention', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(19, pullRequestStatusChanged({ assignee: FIXTURE.bot })),
       pullRequestInput()
     );
@@ -660,7 +676,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
   });
 
   it('unassigning the bot from a pull request is not a mention', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activityOfType(
         19,
         pullRequestAssigneeChanged({
@@ -686,7 +702,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
       name: FIXTURE.bot.name,
     };
 
-    const fields = buildInboundMessageFields(updated(payload), input());
+    const fields = mapped(updated(payload), input());
 
     expect(fields.isMention).toBe(false);
   });
@@ -697,7 +713,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
       pullRequestCommented({ text: `cc <@U${FIXTURE.bot.id}>` })
     );
 
-    const fields = buildInboundMessageFields(activity, pullRequestInput());
+    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.isMention).toBe(false);
   });
@@ -708,7 +724,7 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
       pullRequestCommentWithAttachment({ fileName: 'trace.log' })
     );
 
-    const fields = buildInboundMessageFields(activity, pullRequestInput());
+    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.attachments).toEqual([{ type: 'file', name: 'trace.log' }]);
     expect(fields.changes).toEqual([
@@ -726,13 +742,13 @@ describe('buildInboundMessageFields — types 19 and 20, comment id present', ()
       })
     );
 
-    const fields = buildInboundMessageFields(activity, pullRequestInput());
+    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.attachments).toEqual([]);
   });
 });
 
-describe('buildInboundMessageFields — type 19 without a comment id', () => {
+describe('buildInboundMessage — type 19 without a comment id', () => {
   it('uses the :u: message id and empty text', () => {
     // Every measured pull-request update carried a changelog comment, so the
     // fixture builder always attaches one; the `:u:` path exists for a body
@@ -740,10 +756,7 @@ describe('buildInboundMessageFields — type 19 without a comment id', () => {
     const payload = pullRequestUpdated();
     (payload['content'] as Record<string, unknown>)['comment'] = null;
 
-    const fields = buildInboundMessageFields(
-      activityOfType(19, payload),
-      pullRequestInput()
-    );
+    const fields = mapped(activityOfType(19, payload), pullRequestInput());
 
     expect(fields.messageId).toBe(
       `${FIXTURE.host}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}:u:2026-09-03T04:05:06Z`
@@ -752,9 +765,9 @@ describe('buildInboundMessageFields — type 19 without a comment id', () => {
   });
 });
 
-describe('buildInboundMessageFields — the subject the caller resolved', () => {
+describe('buildInboundMessage — the subject the caller resolved', () => {
   it('builds every id from that subject, whatever kind it is', () => {
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       commented(issueCommented({ commentId: 7000001 })),
       pullRequestInput()
     );
@@ -779,7 +792,7 @@ describe('buildInboundMessageFields — the subject the caller resolved', () => 
       })
     );
 
-    const fields = buildInboundMessageFields(
+    const fields = mapped(
       activity,
       input({
         subject: {
@@ -806,7 +819,7 @@ describe('mention regex negative cases (§5.4)', () => {
     (text) => {
       const activity = commented(issueCommented({ text }));
 
-      const fields = buildInboundMessageFields(activity, input());
+      const fields = mapped(activity, input());
 
       expect(fields.isMention).toBe(false);
     }
@@ -817,7 +830,7 @@ describe('mention regex negative cases (§5.4)', () => {
     (text) => {
       const activity = commented(issueCommented({ text }));
 
-      const fields = buildInboundMessageFields(activity, input());
+      const fields = mapped(activity, input());
 
       expect(fields.isMention).toBe(true);
     }
@@ -833,7 +846,7 @@ describe('mention detection from notifications[] (§5.4 rule 6)', () => {
       })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.text).not.toContain('@');
     expect(fields.isMention).toBe(true);
@@ -850,7 +863,7 @@ describe('mention detection from notifications[] (§5.4 rule 6)', () => {
       })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.isMention).toBe(false);
   });
@@ -863,7 +876,7 @@ describe('mention detection from notifications[] (§5.4 rule 6)', () => {
       })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.isMention).toBe(true);
   });
@@ -878,7 +891,7 @@ describe('mention detection from notifications[] (§5.4 rule 6)', () => {
         })
       );
 
-      const fields = buildInboundMessageFields(activity, input());
+      const fields = mapped(activity, input());
 
       expect(fields.isMention).toBe(true);
     }
@@ -892,7 +905,7 @@ describe('mention detection from notifications[] (§5.4 rule 6)', () => {
       })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.isMention).toBe(true);
     expect(fields.changes[0]).toMatchObject({ field: 'assigner' });
@@ -913,7 +926,7 @@ describe('mention detection from notifications[] (§5.4 rule 6)', () => {
       })
     );
 
-    const fields = buildInboundMessageFields(activity, pullRequestInput());
+    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.changes.map((change) => change.field)).toEqual(['summary']);
     expect(fields.isMention).toBe(true);
@@ -925,10 +938,8 @@ describe('mention detection from notifications[] (§5.4 rule 6)', () => {
     );
     const fieldOnlyUpdate = updated(descriptionEdited({ notifications: [] }));
 
-    expect(buildInboundMessageFields(comment, input()).isMention).toBe(false);
-    expect(buildInboundMessageFields(fieldOnlyUpdate, input()).isMention).toBe(
-      false
-    );
+    expect(mapped(comment, input()).isMention).toBe(false);
+    expect(mapped(fieldOnlyUpdate, input()).isMention).toBe(false);
   });
 
   it('an activity body replayed from the activity API carries no notifications and falls back to the text', () => {
@@ -937,22 +948,23 @@ describe('mention detection from notifications[] (§5.4 rule 6)', () => {
       issueCommented({ text: `${RESOLVED_MENTION} please look` })
     );
 
-    expect(buildInboundMessageFields(withoutText, input()).isMention).toBe(
-      false
-    );
-    expect(buildInboundMessageFields(withText, input()).isMention).toBe(true);
+    expect(mapped(withoutText, input()).isMention).toBe(false);
+    expect(mapped(withText, input()).isMention).toBe(true);
   });
 });
 
-describe('buildAuthor', () => {
-  it('maps a Nulab-account user (no userId) to userName = display name', () => {
-    const author = buildAuthor(FIXTURE.host, FIXTURE.bot.id, {
-      id: FIXTURE.alice.id,
-      name: FIXTURE.alice.name,
-      userId: null,
-    });
+describe('buildInboundMessage — author', () => {
+  const author = (createdUser: {
+    id: number;
+    name: string;
+    userId: string | null;
+  }) =>
+    mapped(commented(issueCommented({ createdUser })), input()).message.author;
 
-    expect(author).toEqual({
+  it('names a Nulab-account user, who has no login id, by display name', () => {
+    expect(
+      author({ id: FIXTURE.alice.id, name: FIXTURE.alice.name, userId: null })
+    ).toEqual({
       userId: `${FIXTURE.host}:${FIXTURE.alice.id}`,
       userName: FIXTURE.alice.name,
       fullName: FIXTURE.alice.name,
@@ -961,25 +973,90 @@ describe('buildAuthor', () => {
     });
   });
 
-  it('maps a user with a login id to userName = that id', () => {
-    const author = buildAuthor(FIXTURE.host, FIXTURE.bot.id, {
-      id: FIXTURE.alice.id,
-      name: FIXTURE.alice.name,
-      userId: FIXTURE.alice.userId,
-    });
-
-    expect(author.userName).toBe(FIXTURE.alice.userId);
+  it('names a user with a login id by that id', () => {
+    expect(author(FIXTURE.alice).userName).toBe(FIXTURE.alice.userId);
   });
 
-  it('the bot authoring a message is isMe and isBot both true', () => {
-    const author = buildAuthor(FIXTURE.host, FIXTURE.bot.id, {
-      id: FIXTURE.bot.id,
-      name: FIXTURE.bot.name,
-      userId: FIXTURE.bot.userId,
-    });
+  it('marks the bot as both me and a bot', () => {
+    expect(author(FIXTURE.bot)).toMatchObject({ isMe: true, isBot: true });
+  });
+});
 
-    expect(author.isMe).toBe(true);
-    expect(author.isBot).toBe(true);
+describe('buildBulkUpdateMessage', () => {
+  function messages(payload: object) {
+    const activity = bulkActivity(payload);
+    return activity.content.link.map((link) =>
+      buildBulkUpdateMessage(activity, link, CONTEXT)
+    );
+  }
+
+  it('puts each issue in its own thread under the comment the batch wrote on it', () => {
+    expect(
+      messages(issueMultiUpdated()).map(({ threadId, id }) => ({
+        threadId,
+        id,
+      }))
+    ).toEqual([
+      {
+        threadId: `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`,
+        id: `${FIXTURE.host}:issue:${FIXTURE.issueId}:c3101`,
+      },
+      {
+        threadId: `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.otherIssueId}`,
+        id: `${FIXTURE.host}:issue:${FIXTURE.otherIssueId}:c3102`,
+      },
+    ]);
+  });
+
+  it('falls back to the update message id for an issue the batch wrote no comment on', () => {
+    const payload = issueMultiUpdated();
+    for (const link of (payload['content'] as { link: object[] }).link) {
+      delete (link as Record<string, unknown>)['comment'];
+    }
+
+    expect(messages(payload)[0]?.id).toBe(
+      `${FIXTURE.host}:issue:${FIXTURE.issueId}:u:2026-09-03T04:05:06Z`
+    );
+  });
+
+  it('repeats the typed text and the batch changes on every message', () => {
+    const built = messages(
+      issueMultiUpdated({
+        text: 'Moving these to done.',
+        changes: [{ field: 'status', new_value: '4' }],
+      })
+    );
+
+    for (const message of built) {
+      expect(message.text).toBe('Moving these to done.');
+      expect(message.raw.changes).toEqual([
+        { field: 'status', newValue: '4', oldValue: null },
+      ]);
+    }
+  });
+
+  it('names the issue each message is about, beside the whole delivery', () => {
+    const [first] = messages(issueMultiUpdated());
+
+    expect(first?.raw).toMatchObject({
+      kind: 'bulkUpdate',
+      issueId: FIXTURE.issueId,
+      payload: { type: 14, content: { tx_id: '9876' } },
+    });
+  });
+
+  it('mentions the bot on every message when the delivery notified it, the notifications naming no issue', () => {
+    const built = messages(
+      issueMultiUpdated({ notifications: [{ user: FIXTURE.bot, reason: 1 }] })
+    );
+
+    expect(built.map((message) => message.isMention)).toEqual([true, true]);
+  });
+
+  it('does not mention the bot for a batch that neither names nor notifies it', () => {
+    expect(
+      messages(issueMultiUpdated()).map((message) => message.isMention)
+    ).toEqual([false, false]);
   });
 });
 
@@ -1043,7 +1120,7 @@ describe('one pull request comment seen twice (§6.6)', () => {
       { host: FIXTURE.host, projectId: FIXTURE.projectId }
     );
 
-    const fromWebhook = buildInboundMessageFields(
+    const fromWebhook = mapped(
       activityOfType(
         20,
         pullRequestCommentWithAttachment({ fileName: 'trace.log' })
@@ -1090,7 +1167,7 @@ describe('a comment naming the bot in its text and its notifications[] (§5.3, �
       })
     );
 
-    const fields = buildInboundMessageFields(activity, input());
+    const fields = mapped(activity, input());
 
     expect(fields.isMention).toBe(true);
     expect(fields.text).toBe(`${RESOLVED_MENTION} mention in text`);

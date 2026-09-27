@@ -34,8 +34,6 @@ import {
   validateHost,
 } from './ids';
 import {
-  buildCommentMessage,
-  buildRootMessage,
   fetchChannelInfo as fetchChannelInfoRead,
   fetchMessage as fetchMessageRead,
   fetchMessages as fetchMessagesRead,
@@ -48,36 +46,28 @@ import {
 import type { MessageBuilders } from './reads';
 import { subjectClientFor } from './subject/client';
 import type { SubjectClient, SubjectNames } from './subject/client';
-import { fromRawComment } from './subject/raw';
 import type {
   BacklogAdapterConfig,
-  BacklogBulkUpdatePayload,
   BacklogChannelId,
   BacklogInstallation,
   BacklogRawMessage,
   BacklogSubjectRef,
   BacklogThreadId,
-  BacklogWebhookPayload,
+  BacklogWebhookVerifier,
   Resolvable,
   ResolvedCredential,
   ResolvedInstallation,
 } from './types';
+import { buildBulkUpdateMessage, buildInboundMessage } from './webhook/inbound';
+import type { InboundContext } from './webhook/inbound';
 import {
-  buildBulkUpdateMessage,
-  bulkMessageId,
-  bulkUpdateTargets,
-  parseBulkUpdatePayload,
-} from './webhook/bulk';
-import type { BulkUpdateTarget } from './webhook/bulk';
-import { buildInboundMessage } from './webhook/inbound';
-import type { IssueMultiUpdatedActivity } from './webhook/payload';
-import {
-  DISPATCHED_ACTIVITY_TYPES,
-  parseActivity,
-  parseEnvelope,
+  activityOf,
+  parseDelivery,
+  payloadOf,
   repositoryNameOf,
   subjectOfActivity,
 } from './webhook/payload';
+import type { SubjectActivity } from './webhook/payload';
 import { verifyWebhookRequest } from './webhook/verify';
 import type {
   Adapter,
@@ -179,8 +169,6 @@ const ENV_ACCESS_TOKEN = 'BACKLOG_ACCESS_TOKEN';
 const ENV_BOT_USER_ID = 'BACKLOG_BOT_USER_ID';
 const ENV_BOT_USER_NAME = 'BACKLOG_BOT_USER_NAME';
 const ENV_WEBHOOK_SECRET = 'BACKLOG_WEBHOOK_SECRET';
-
-const DEFAULT_MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024;
 
 function fail(message: string): never {
   throw new ValidationError('backlog', message);
@@ -460,72 +448,6 @@ function resolveShapeB(
   return resolved;
 }
 
-function validateMaxWebhookBodyBytes(value: number | undefined): number {
-  if (value === undefined) {
-    return DEFAULT_MAX_WEBHOOK_BODY_BYTES;
-  }
-  if (!Number.isInteger(value) || value <= 0) {
-    fail('maxWebhookBodyBytes must be a positive integer');
-  }
-  return value;
-}
-
-/**
- * The `BacklogRawMessage` variants the adapter's own reads and writes hand
- * back, as opposed to the two the webhook path builds (docs/specs/adapter.md
- * §3.5). `parseMessage` accepts all five, and these three are the ones it
- * answers without touching a payload schema — they were already validated on
- * the way out of the port.
- */
-type BacklogRestRawMessage = Extract<
-  BacklogRawMessage,
-  { kind: 'comment' | 'issue' | 'pullRequest' }
->;
-
-/**
- * Which project and subject a `BacklogRawMessage` belongs to
- * (docs/specs/adapter.md §7.4): every variant already names both, so
- * `fetchSubject` reaches its subject client without an API call. The webhook
- * variant delegates to `subjectOfActivity` instead of reading `content`
- * itself, so the activity-type-to-subject mapping stays in
- * `src/webhook/payload.ts` alone.
- *
- * This switches on the **raw-message variant**, not on a subject's kind: the
- * four variants carry their coordinates in four different places, which is a
- * fact about `BacklogRawMessage`'s shape rather than kind-specific behaviour,
- * so moving it onto `SubjectClient` would need a subject client before there
- * is anything to build one from.
- */
-/**
- * The `messageId` field of a failed-dispatch log line, or nothing when the
- * delivery cannot produce one.
- *
- * `handleWebhook` owes its caller a response from the §5.1 ladder and holds
- * no `try/catch` outside the body parse, so an encoder throwing while
- * building a **log** value would take the response with it: when `created`
- * was `z.string()` on the way in, a delivery carrying `""` left the
- * consumer's function rejecting — a 500 the ladder has no entry for — over
- * one field of one log line. The id of the message *itself* is built inside
- * the lazy factory, where the `.catch` on `processMessage` already turns a
- * throw into an error log after the 200 (§5.1 step 13), so nothing is
- * loosened where a failure can be reported.
- *
- * No payload can reach the failing branch today: the root and comment forms
- * are built from ids `identitySchema` already validated as positive safe
- * integers at step 9, and `createdSchema` rejects the empty timestamp the
- * `part: 'update'` form would have tripped on (§5.2). It is written to be
- * total anyway — the value it guards is a log field and the response is not,
- * so the next encoder rule to name a field step 9 does not constrain costs a
- * log line rather than a delivery.
- */
-function messageIdForLog(build: () => string): { messageId?: string } {
-  try {
-    return { messageId: build() };
-  } catch {
-    return {};
-  }
-}
-
 function subjectOfRaw(raw: BacklogRawMessage): {
   projectId: number;
   subject: BacklogSubjectRef;
@@ -534,7 +456,8 @@ function subjectOfRaw(raw: BacklogRawMessage): {
     case 'webhook':
       return {
         projectId: raw.payload.project.id,
-        subject: subjectOfActivity(raw.payload),
+        // A type-14 delivery travels as a `bulkUpdate` raw.
+        subject: subjectOfActivity(activityOf(raw.payload) as SubjectActivity),
       };
     case 'bulkUpdate':
       return {
@@ -624,16 +547,7 @@ export class BacklogAdapter implements Adapter<
   private createTransport: (
     installation: ResolvedInstallation
   ) => AdapterTransport;
-  /**
-   * `maxWebhookBodyBytes`/`webhookVerifier` are validated in the constructor
-   * (docs/specs/adapter.md §3.2) and read by `handleWebhook`; grouped into one
-   * field rather than two, since they travel together as "config the
-   * constructor validates for someone else".
-   */
-  private readonly ingressConfig: {
-    maxWebhookBodyBytes: number;
-    webhookVerifier: BacklogAdapterConfig['webhookVerifier'];
-  };
+  private readonly webhookVerifier: BacklogWebhookVerifier | undefined;
   private readonly apiCache = new Map<string, AdapterTransport>();
   /**
    * Keyed by channel id and cached for the process's lifetime (D14). The
@@ -705,12 +619,7 @@ export class BacklogAdapter implements Adapter<
       }
     }
 
-    this.ingressConfig = {
-      maxWebhookBodyBytes: validateMaxWebhookBodyBytes(
-        config.maxWebhookBodyBytes
-      ),
-      webhookVerifier: config.webhookVerifier,
-    };
+    this.webhookVerifier = config.webhookVerifier;
     this.logger = config.logger ?? new ConsoleLogger('info').child('backlog');
     this.createTransport = defaultCreateTransport(() => this.logger);
   }
@@ -747,8 +656,7 @@ export class BacklogAdapter implements Adapter<
     this.logger.debug(
       `initialized for host(s) ${[...this.installations.keys()].join(', ')}` +
         ` (chat=${this.chat !== undefined},` +
-        ` maxWebhookBodyBytes=${this.ingressConfig.maxWebhookBodyBytes},` +
-        ` webhookVerifier=${this.ingressConfig.webhookVerifier !== undefined})`
+        ` webhookVerifier=${this.webhookVerifier !== undefined})`
     );
   }
 
@@ -1078,69 +986,48 @@ export class BacklogAdapter implements Adapter<
     request: Request,
     options?: WebhookOptions
   ): Promise<Response> {
-    const verification = await verifyWebhookRequest({
+    const verified = await verifyWebhookRequest({
       request,
-      maxWebhookBodyBytes: this.ingressConfig.maxWebhookBodyBytes,
-      webhookVerifier: this.ingressConfig.webhookVerifier,
+      webhookVerifier: this.webhookVerifier,
       installations: this.installations,
       logger: this.logger,
     });
-
-    if (!verification.ok) {
-      return new Response(verification.body, { status: verification.status });
+    if (verified === undefined) {
+      this.logger.warn('webhook rejected: unauthorized');
+      return new Response('Unauthorized', { status: 401 });
     }
+    const { host, rawBody } = verified;
 
-    const { host, rawBody } = verification;
-
-    let parsedBody: unknown;
+    let body: unknown;
     try {
-      parsedBody = JSON.parse(rawBody);
+      body = JSON.parse(rawBody);
     } catch {
-      this.logger.warn('webhook rejected', { reason: 'invalid_json' });
-      return new Response('Invalid JSON', { status: 400 });
-    }
-    if (typeof parsedBody !== 'object' || parsedBody === null) {
-      this.logger.warn('webhook rejected', { reason: 'invalid_json' });
+      this.logger.warn('webhook rejected: invalid JSON');
       return new Response('Invalid JSON', { status: 400 });
     }
 
-    const envelope = parseEnvelope(parsedBody);
-    if (envelope === null) {
-      this.logger.warn('webhook rejected', { reason: 'invalid_envelope' });
-      return new Response('Invalid payload', { status: 400 });
-    }
-
-    if (
-      !(DISPATCHED_ACTIVITY_TYPES as readonly number[]).includes(envelope.type)
-    ) {
-      this.logger.info('webhook ignored', { host, type: envelope.type });
-      return new Response('Ignored', { status: 200 });
-    }
-
-    const parsed = parseActivity(envelope.type, parsedBody);
-    if ('issuePaths' in parsed) {
-      this.logger.warn('webhook rejected', {
-        reason: 'invalid_payload',
-        issuePaths: parsed.issuePaths,
+    const delivery = parseDelivery(body);
+    if (!delivery.ok) {
+      this.logger.warn('webhook rejected: invalid payload', {
+        issuePaths: delivery.issuePaths,
       });
       return new Response('Invalid payload', { status: 400 });
     }
-    const { activity } = parsed;
-    // `raw.payload` must be the body as Backlog sent it, unknown keys
-    // included (docs/specs/adapter.md §5.2 "not a stripped copy") — `zod`
-    // strips fields a schema does not name, so `activity` above (its output)
-    // is never what reaches a message; `parsedBody` is.
-    const rawPayload = parsedBody as BacklogWebhookPayload;
+    if ('ignoredType' in delivery) {
+      this.logger.info('webhook ignored', { host, type: delivery.ignoredType });
+      return new Response('Ignored', { status: 200 });
+    }
+    const { activity } = delivery;
 
-    if (this.chat === undefined) {
+    const chat = this.chat;
+    if (chat === undefined) {
       this.logger.error('webhook rejected: adapter not initialized');
       return new Response('Adapter not initialized', { status: 503 });
     }
-    const chat = this.chat;
 
-    let botUserId: number;
+    let identity: BotIdentity;
     try {
-      botUserId = (await this.botIdentity(host)).id;
+      identity = await this.botIdentity(host);
     } catch (cause) {
       this.logger.error('webhook rejected: bot identity unavailable', {
         host,
@@ -1149,39 +1036,74 @@ export class BacklogAdapter implements Adapter<
       return new Response('Bot identity unavailable', { status: 503 });
     }
 
-    if (activity.type === 14) {
-      // Answered before `subjectOfActivity` rather than inside it: a bulk
-      // update names one issue per `content.link[]` entry, so there is no
-      // single subject to build a thread id from, and the narrowing this
-      // branch performs is what lets everything below keep assuming there is.
-      return this.dispatchBulkUpdate({
-        activity,
-        payload: parsedBody as BacklogBulkUpdatePayload,
-        host,
-        botUserId,
-        chat,
-        options,
-      });
-    }
-
-    const subject = subjectOfActivity(activity);
-    const threadId = encodeThreadIdStruct({
-      host,
-      projectId: activity.project.id,
-      subject,
-    });
-
-    if (activity.createdUser.id === botUserId) {
-      this.logger.debug('self message skipped', { host, threadId });
+    if (activity.createdUser.id === identity.id) {
+      this.logger.debug('self message skipped', { host, type: activity.type });
       return new Response('OK', { status: 200 });
     }
 
-    // Every pull-request delivery carries `content.repository.name`, which the
-    // REST pull-request object carries nowhere and the §7.3 web URL needs
-    // (measured 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`
-    // "Addressing"). Caching it here rather than on the read side is what
-    // spares the next `fetchThread` a Get Git Repository, so it happens before
-    // the response returns, not inside the dispatched factory.
+    const projectId = activity.project.id;
+
+    if (activity.type === 4) {
+      const subject = subjectOfActivity(activity);
+      const threadId = encodeThreadIdStruct({ host, projectId, subject });
+      chat
+        .processMessageDeleted(
+          {
+            adapter: this,
+            platform: 'backlog',
+            channelId: decodeChannelIdFromThreadId(threadId),
+            threadId,
+            messageId: encodeMessageId({ host, subject, part: 'root' }),
+            raw: {
+              kind: 'webhook',
+              host,
+              payload: payloadOf(activity),
+              changes: [],
+            },
+            deletedAt: new Date(activity.created),
+          },
+          options
+        )
+        .catch((cause: unknown) =>
+          this.logInboundFailure(host, threadId, cause)
+        );
+      return new Response('OK', { status: 200 });
+    }
+
+    // One lookup for every factory: a bulk update's run concurrently, and
+    // each would otherwise miss the same cold cache.
+    const projectReady = this.ensureProject(host, projectId);
+    const dispatch = (
+      threadId: string,
+      build: (context: InboundContext) => Message<BacklogRawMessage>
+    ): void => {
+      const factory = async () => {
+        await projectReady;
+        return build(this.inboundContext(host, projectId, identity));
+      };
+      chat
+        .processMessage(this, threadId, factory, options)
+        .catch((cause: unknown) =>
+          this.logInboundFailure(host, threadId, cause)
+        );
+    };
+
+    if (activity.type === 14) {
+      for (const link of activity.content.link) {
+        const threadId = encodeThreadIdStruct({
+          host,
+          projectId,
+          subject: { kind: 'issue', issueId: link.id },
+        });
+        dispatch(threadId, (context) =>
+          buildBulkUpdateMessage(activity, link, context)
+        );
+      }
+      return new Response('OK', { status: 200 });
+    }
+
+    // Cached before the response, not in the factory: it is what spares the
+    // next `fetchThread` a Get Git Repository.
     const repository = repositoryNameOf(activity);
     if (repository !== undefined) {
       this.repositoryNameCache.set(
@@ -1190,377 +1112,82 @@ export class BacklogAdapter implements Adapter<
       );
     }
 
-    if (activity.type === 4) {
-      const channelId = decodeChannelIdFromThreadId(threadId);
-      const messageId = encodeMessageId({ host, subject, part: 'root' });
-      // The core registers this promise with `options.waitUntil` itself
-      // (docs/specs/adapter.md §5.1); the response below returns
-      // immediately regardless of how long that processing takes.
-      // Wrapped in `Promise.resolve` because `ChatInstance` is an interface,
-      // not a guarantee: `createMockChatInstance`'s default `processMessageDeleted`
-      // is `vi.fn()` with no implementation, which returns `undefined` rather
-      // than a promise, and `undefined.catch` throws synchronously.
-      void Promise.resolve(
-        chat.processMessageDeleted(
-          {
-            adapter: this,
-            platform: 'backlog',
-            channelId,
-            threadId,
-            messageId,
-            raw: { kind: 'webhook', host, payload: rawPayload, changes: [] },
-            deletedAt: new Date(activity.created),
-          },
-          options
-        )
-      ).catch((cause: unknown) => {
-        this.logger.error('inbound processing failed', {
-          host,
-          threadId,
-          messageId,
-          error: cause instanceof Error ? cause.message : String(cause),
-        });
-      });
-      return new Response('OK', { status: 200 });
-    }
-
-    const factory = async (): Promise<Message<BacklogRawMessage>> => {
-      await this.ensureProject(host, activity.project.id);
-      return this.parseMessage({
-        kind: 'webhook',
-        host,
-        payload: rawPayload,
-        changes: [],
-      });
-    };
-
-    const idForLog = messageIdForLog(() =>
-      activity.type === 1 || activity.type === 18
-        ? encodeMessageId({ host, subject, part: 'root' })
-        : activity.content.comment !== null &&
-            activity.content.comment !== undefined
-          ? encodeMessageId({
-              host,
-              subject,
-              part: 'comment',
-              commentId: activity.content.comment.id,
-            })
-          : encodeMessageId({
-              host,
-              subject,
-              part: 'update',
-              created: activity.created,
-            })
+    const subject = subjectOfActivity(activity);
+    const subjectClient = this.subjectClient(host, projectId, subject);
+    dispatch(encodeThreadIdStruct({ host, projectId, subject }), (context) =>
+      buildInboundMessage(activity, context, subjectClient)
     );
+    return new Response('OK', { status: 200 });
+  }
 
-    // Dispatched, not awaited: the response below must return before
-    // processing completes (docs/specs/adapter.md §5.1 step 13). A factory
-    // that throws is logged here rather than left to reject unhandled,
-    // because the core swallows the rejection for `waitUntil` but this is
-    // the only place that knows which host/issue/message it was for.
-    // `Promise.resolve(...)` guards the same mock-return-value gap noted on
-    // the type-4 branch above.
-    void Promise.resolve(
-      chat.processMessage(this, threadId, factory, options)
-    ).catch((cause: unknown) => {
-      this.logger.error('inbound processing failed', {
-        host,
-        threadId,
-        ...idForLog,
-        error: cause instanceof Error ? cause.message : String(cause),
-      });
+  private logInboundFailure(
+    host: string,
+    threadId: string,
+    cause: unknown
+  ): void {
+    this.logger.error('inbound processing failed', {
+      host,
+      threadId,
+      error: cause instanceof Error ? cause.message : String(cause),
     });
+  }
 
-    return new Response('OK', { status: 200 });
+  private inboundContext(
+    host: string,
+    projectId: number,
+    identity: BotIdentity
+  ): InboundContext {
+    const converter = CONVERTERS[this.ruleFor(host, projectId)];
+    return {
+      host,
+      botUserId: identity.id,
+      botUserName: identity.name,
+      format: (text) => converter.toAst(text),
+    };
   }
 
   /**
-   * Type 14 — one delivery, one message per issue it touched
-   * (docs/specs/adapter.md §5.3, D22).
-   *
-   * The loop dispatches N times into N threads, which is the whole point: a
-   * bulk update of twelve issues is twelve issues whose status changed, and a
-   * handler that reacts per thread has to be told twelve times. It is also the
-   * cost — a handler that calls the API per message spends N calls out of a
-   * per-minute bucket from a single webhook — which is why the README says so
-   * where activity type 14 is registered, and why leaving 14 unregistered is
-   * the documented way out (D-PR4).
-   *
-   * The self-message check is repeated here rather than being hoisted above
-   * this branch: §5.1 step 12 logs the thread id it skipped, and this branch
-   * has no single thread id to log.
-   */
-  private dispatchBulkUpdate(input: {
-    activity: IssueMultiUpdatedActivity;
-    payload: BacklogBulkUpdatePayload;
-    host: string;
-    botUserId: number;
-    chat: ChatInstance;
-    options: WebhookOptions | undefined;
-  }): Response {
-    const { activity, payload, host, botUserId, chat, options } = input;
-
-    if (activity.createdUser.id === botUserId) {
-      this.logger.debug('self message skipped', {
-        host,
-        projectId: activity.project.id,
-        type: 14,
-      });
-      return new Response('OK', { status: 200 });
-    }
-
-    const targets = bulkUpdateTargets(activity);
-    if (targets.length === 0) {
-      return new Response('OK', { status: 200 });
-    }
-
-    // One lookup shared by every factory, rather than `ensureProject` per
-    // factory as the single-subject path does. The factories run concurrently
-    // in separate threads, so on a cold cache each of them would miss and a
-    // batch of fifty issues would spend fifty Get Project calls on one
-    // project. `ensureProject` never rejects (it logs and falls back), so this
-    // promise needs no `.catch` of its own; it is started rather than awaited,
-    // so the response below still does not wait for it.
-    const projectReady = this.ensureProject(host, activity.project.id);
-
-    for (const target of targets) {
-      const subject: BacklogSubjectRef = {
-        kind: 'issue',
-        issueId: target.issueId,
-      };
-      const threadId = encodeThreadIdStruct({
-        host,
-        projectId: activity.project.id,
-        subject,
-      });
-      const factory = async (): Promise<Message<BacklogRawMessage>> => {
-        await projectReady;
-        return this.buildValidatedBulkUpdateMessage(
-          activity,
-          target,
-          host,
-          payload
-        );
-      };
-      // The same function the message itself is built with, so the id logged
-      // for a failed dispatch is the id the handler would have seen — and
-      // guarded, because this one runs before the response rather than inside
-      // the factory (see `messageIdForLog`).
-      const idForLog = messageIdForLog(() =>
-        bulkMessageId(host, subject, target, activity.created)
-      );
-
-      // Dispatched per issue and never awaited, exactly as the single-subject
-      // path below; the response returns before any of them completes.
-      void Promise.resolve(
-        chat.processMessage(this, threadId, factory, options)
-      ).catch((cause: unknown) => {
-        this.logger.error('inbound processing failed', {
-          host,
-          threadId,
-          ...idForLog,
-          error: cause instanceof Error ? cause.message : String(cause),
-        });
-      });
-    }
-
-    return new Response('OK', { status: 200 });
-  }
-
-  /**
-   * All five raw shapes (docs/specs/adapter.md §3.5), by two routes. A
-   * `webhook` or `bulkUpdate` raw carries a delivery whose declared type was
-   * reached by a cast, so it is parsed again here; the three the adapter
-   * produced itself were validated on the way out of the port and are rebuilt
-   * through the read path's own builders (`parseRestMessage`).
+   * Only the two kinds a webhook builds: the core never calls `parseMessage`,
+   * and a message read over REST already is a `Message`.
    */
   parseMessage(raw: BacklogRawMessage): Message<BacklogRawMessage> {
-    if (raw.kind === 'bulkUpdate') {
-      return this.parseBulkUpdateMessage(raw);
-    }
-    if (raw.kind !== 'webhook') {
-      return this.parseRestMessage(raw);
-    }
-
-    const { host, payload } = raw;
-    const identity = this.knownBotIdentity(host);
-
-    // Re-validated rather than read through its declared type, for the reason
-    // `parseBulkUpdatePayload` re-parses a bulk delivery: `raw.payload` is the
-    // body as received (§5.2 "not a stripped copy") and that type is reached
-    // by a cast, so nothing the schema decided has reached this value. Reading
-    // it directly made `notifications`' `[]` fallback unreachable at run time
-    // — a delivery without the key threw inside the dispatched factory, after
-    // the 200 had been sent, and the message was lost rather than falling back
-    // to the textual and assignment rules (§5.4 rule 6).
-    const parsed = parseActivity(payload.type, payload);
-    if ('issuePaths' in parsed) {
+    if (raw.kind !== 'webhook' && raw.kind !== 'bulkUpdate') {
       throw new ValidationError(
         'backlog',
-        `parseMessage: raw.payload is not a valid type ${payload.type} activity`
+        `parseMessage: a ${raw.kind} raw message is not a webhook delivery`
       );
     }
-    const { activity } = parsed;
-    // Stated as "not a deletion, not a bulk update" rather than as the list of
-    // types §5.3 does map, although either form narrows: a positive list
-    // silently drops a type added to `ParsedActivity` later, while excluding
-    // these two lets it through to `buildInboundMessage` below, where it is a
-    // compile error until §5.3 has a mapping row for it.
-    if (activity.type === 4 || activity.type === 14) {
+    const activity = activityOf(raw.payload);
+    const context = this.inboundContext(
+      raw.host,
+      activity.project.id,
+      this.knownBotIdentity(raw.host)
+    );
+    if (activity.type === 14) {
+      const issueId = raw.kind === 'bulkUpdate' ? raw.issueId : undefined;
+      const link = activity.content.link.find((entry) => entry.id === issueId);
+      if (link === undefined) {
+        throw new ValidationError(
+          'backlog',
+          'parseMessage: the raw message names no issue of this bulk update'
+        );
+      }
+      return buildBulkUpdateMessage(activity, link, context);
+    }
+    if (activity.type === 4) {
       throw new ValidationError(
         'backlog',
-        `parseMessage: activity type ${activity.type} produces no message`
+        'parseMessage: a deletion produces no message'
       );
     }
-
-    const converter = CONVERTERS[this.ruleFor(host, activity.project.id)];
-
     return buildInboundMessage(
       activity,
-      {
-        host,
-        botUserId: identity.id,
-        botUserName: identity.name,
-        subject: this.subjectClient(
-          host,
-          activity.project.id,
-          subjectOfActivity(activity)
-        ),
-        payload,
-        format: (text) => converter.toAst(text),
-      },
-      MessageCtor
-    );
-  }
-
-  /**
-   * The three shapes the adapter's own reads and writes hand back: a REST
-   * comment, and an issue or a pull request as its thread's root
-   * (docs/specs/adapter.md §3.5). `parseMessage(m.raw)` reproduces the
-   * `Message` `fetchMessages`, `fetchMessage`, `listThreads`, `postMessage`
-   * and `editMessage` produced, which is the point of
-   * accepting them at all: a consumer that persisted a `Message` and kept
-   * only `raw` — the core serialises exactly that into the state adapter —
-   * gets its message back without a Backlog call.
-   *
-   * It therefore goes through `buildRootMessage`/`buildCommentMessage`
-   * (`src/reads.ts`) rather than assembling a message here. A second builder
-   * producing "the same" shape is what would let the two drift apart, and the
-   * round trip is asserted rather than assumed
-   * (`src/adapter.test.ts`, docs/specs/adapter.md §12.2).
-   *
-   * Two fidelity limits are the raw shapes', not this method's, and both are
-   * documented on `fromRawComment` (`src/subject/raw.ts`): an issue comment's
-   * attachments cannot be rebuilt because `attachmentInfo.id` is not carried,
-   * and a rebuilt root's `formatted` follows the **cached** formatting rule
-   * like every other `parseMessage` call (§9.1), so a cold cache renders
-   * Markdown and warns.
-   */
-  private parseRestMessage(
-    raw: BacklogRestRawMessage
-  ): Message<BacklogRawMessage> {
-    const { host } = raw;
-    const { projectId, subject } = subjectOfRaw(raw);
-    // Built before the converter is resolved, because this is the call that
-    // rejects a host no installation was configured for; the other order
-    // would warn about an uncached formatting rule for a host that is about
-    // to throw.
-    const subjectClient = this.subjectClient(host, projectId, subject);
-    const builders: MessageBuilders = {
-      ...this.messageBuilders(
-        host,
-        CONVERTERS[this.ruleFor(host, projectId)],
-        this.knownBotIdentity(host)
-      ),
-      projectId,
-      subject: subjectClient,
-    };
-
-    if (raw.kind === 'comment') {
-      return buildCommentMessage(builders, fromRawComment(raw.comment));
-    }
-
-    const root = subjectClient.rootFrom(raw);
-    if (root === undefined) {
-      // Unreachable: `subjectOfRaw` derived the ref from this very raw, so
-      // the client it built reads this variant. Asking the subject client
-      // rather than branching on which root variant arrived is what keeps
-      // this method from naming either kind (D-PR2).
-      throw new AdapterError(
-        'a root raw message did not describe its own subject',
-        'backlog',
-        'INVALID_SUBJECT_ROOT'
-      );
-    }
-    return buildRootMessage(builders, root);
-  }
-
-  /**
-   * One issue of a bulk update as a `Message` (docs/specs/adapter.md §5.3).
-   *
-   * `raw.issueId` selects the `content.link[]` entry instead of an index into
-   * it, so a `raw` that outlived its delivery — through the core's
-   * queue/debounce JSON round trip, or a redelivery arriving in another order
-   * — still resolves to the same issue. An id that is no longer in the batch
-   * is a `raw` that was assembled by hand, not a payload defect.
-   */
-  private parseBulkUpdateMessage(
-    raw: Extract<BacklogRawMessage, { kind: 'bulkUpdate' }>
-  ): Message<BacklogRawMessage> {
-    const { host, payload, issueId } = raw;
-
-    const activity = parseBulkUpdatePayload(payload);
-    if (activity === null) {
-      throw new ValidationError(
-        'backlog',
-        'parseMessage: raw.payload is not a type 14 activity'
-      );
-    }
-
-    const target = bulkUpdateTargets(activity).find(
-      (candidate) => candidate.issueId === issueId
-    );
-    if (target === undefined) {
-      throw new ValidationError(
-        'backlog',
-        `parseMessage: issue ${issueId} is not in this bulk update`
-      );
-    }
-
-    return this.buildValidatedBulkUpdateMessage(
-      activity,
-      target,
-      host,
-      payload
-    );
-  }
-
-  /**
-   * Builds one type-14 message from the activity and target already validated
-   * by ingress. The webhook factories close over these values, so an N-item
-   * delivery pays one schema pass and one O(N) target projection in total;
-   * `parseMessage(raw)` still revalidates serialised or hand-built raw input.
-   */
-  private buildValidatedBulkUpdateMessage(
-    activity: IssueMultiUpdatedActivity,
-    target: BulkUpdateTarget,
-    host: string,
-    payload: BacklogBulkUpdatePayload
-  ): Message<BacklogRawMessage> {
-    const identity = this.knownBotIdentity(host);
-    const converter = CONVERTERS[this.ruleFor(host, activity.project.id)];
-
-    return buildBulkUpdateMessage(
-      activity,
-      target,
-      {
-        host,
-        botUserId: identity.id,
-        botUserName: identity.name,
-        payload,
-        format: (text) => converter.toAst(text),
-      },
-      MessageCtor
+      context,
+      this.subjectClient(
+        raw.host,
+        activity.project.id,
+        subjectOfActivity(activity)
+      )
     );
   }
 

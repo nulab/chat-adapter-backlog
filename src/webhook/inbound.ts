@@ -1,3 +1,5 @@
+import { Message } from 'chat';
+
 import {
   encodeMessageId,
   encodeThreadId,
@@ -5,230 +7,77 @@ import {
   mentionUser,
 } from '../ids';
 
-import type {
-  ActivityAttachment,
-  ActivityChange,
-  ActivityCreatedUser,
-  ActivityNotification,
-  IssueCreatedActivity,
-  IssueUpdatedOrCommentedActivity,
-  PullRequestAddedActivity,
-  PullRequestUpdatedOrCommentedActivity,
-} from './payload';
+import { payloadOf } from './payload';
+
+import type { WebhookActivity } from './payload';
 import type { SubjectClient } from '../subject/client';
 import type {
   BacklogChange,
+  BacklogMessagePart,
   BacklogRawMessage,
-  BacklogWebhookPayload,
+  BacklogSubjectRef,
 } from '../types';
-import type { Attachment, Author, Message, MessageData } from 'chat';
+import type { Attachment, Author, MessageData } from 'chat';
 
-/**
- * The activity types whose message is a subject's **root**: an issue's
- * creation (1) and a pull request's (18). Both carry `summary`,
- * `description`, `attachments[]` and — on a webhook body, not on the activity
- * form — the `assignee` the subject was opened for (docs/specs/adapter.md
- * §5.3; measured 2026-08-28 for type 1 and 2026-09-06 for type 18).
- */
-type RootActivity = IssueCreatedActivity | PullRequestAddedActivity;
+export type MessageActivity = Exclude<WebhookActivity, { type: 4 | 14 }>;
+export type BulkUpdateActivity = Extract<WebhookActivity, { type: 14 }>;
+type PullRequestActivity = Extract<WebhookActivity, { type: 18 | 19 | 20 }>;
+export type BulkUpdateLink = BulkUpdateActivity['content']['link'][number];
 
-/**
- * The activity types whose message is a **comment** — or a field change whose
- * changelog comment Backlog left out: issues (2, 3) and pull requests
- * (19, 20).
- */
-type CommentOrUpdateActivity =
-  | IssueUpdatedOrCommentedActivity
-  | PullRequestUpdatedOrCommentedActivity;
-
-/** Every activity type §5.3 maps to a `Message`; type 4 is a deletion, not one. */
-export type InboundActivity = RootActivity | CommentOrUpdateActivity;
-
-/**
- * One §5.3 row's outcome before it becomes a `Message`: everything the
- * Message/Author shapes need, kept separate from `Message` construction so
- * a test can assert on the mapping without also depending on the `formatted`
- * AST the caller's converter produces.
- */
-export interface InboundMessageFields {
-  messageId: string;
-  text: string;
-  attachments: Attachment[];
-  isMention: boolean;
-  changes: BacklogChange[];
-  dateSent: Date;
+export interface InboundContext {
+  host: string;
+  botUserId: number;
+  botUserName: string;
+  format: (text: string) => MessageData['formatted'];
 }
 
-/**
- * The `content` fields the mapping reads off an activity of either kind, as
- * the widest shape that carries them. Written structurally rather than as a
- * union of the schemas' types so a field one schema does not declare — the
- * standing `assignee` a webhook puts on issue types 2 and 3, which the issue
- * schemas do not name because nothing reads it (measured 2026-09-06) — costs
- * a `undefined` here instead of a second builder.
- */
-interface OptionalContent {
-  assignee?: { id: number } | null | undefined;
-  attachments?: ActivityAttachment[] | undefined;
-}
+type Notification = WebhookActivity['notifications'][number];
 
-function assigneeIdOf(content: OptionalContent): number | undefined {
-  return content.assignee?.id;
-}
-
-function toAttachments(
-  subject: SubjectClient,
-  content: OptionalContent
-): Attachment[] {
-  return (content.attachments ?? []).map((attachment) =>
-    subject.webhookAttachment(attachment)
-  );
-}
-
-/**
- * The files a comment's `changes[]` names, for the kind that names any there
- * (§6.6). A pull-request comment posted with `attachmentId[]` arrives as type
- * 20 with `changes: [{ field: "attachment", new_value: "<file name>" }]` and
- * **no `content.attachments` key at all** (measured 2026-09-06,
- * `.claude/rules/backlog-pull-request-facts.md` "What each pull-request
- * operation emits"), so a webhook message that read only `content.attachments`
- * would drop the file the same comment hands back through `fetchMessages`.
- * An empty `newValue` is a removal, which names a file the subject no longer
- * has.
- */
-function changeAttachments(
-  subject: SubjectClient,
-  changes: readonly BacklogChange[]
-): Attachment[] {
-  const attachments: Attachment[] = [];
-  for (const change of changes) {
-    if (
-      change.field !== 'attachment' ||
-      change.newValue === null ||
-      change.newValue.length === 0
-    ) {
-      continue;
-    }
-    const attachment = subject.webhookChangeAttachment(change);
-    if (attachment !== undefined) {
-      attachments.push(attachment);
-    }
-  }
-  return attachments;
-}
-
-/**
- * An absent key, an explicit `null` and a value in a shape the schema could
- * not read (`src/webhook/payload.ts` `changeValueSchema`) all mean the same
- * thing: this entry names no such value. `String()` alone would turn the last
- * two into the text `"null"`, which `changeAttachments` above then reports as
- * a file called `null`.
- */
-function changeValue(value: string | number | null | undefined): string | null {
-  return value === undefined || value === null ? null : String(value);
-}
-
-export function normaliseChanges(
-  raw: ActivityChange[] | undefined
-): BacklogChange[] {
-  return (raw ?? []).map((change) => ({
-    field: change.field,
-    newValue: changeValue(change.new_value),
-    oldValue: changeValue(change.old_value),
-  }));
-}
-
-/**
- * The `changes[]` field name reporting a new assignee is `assigner` on an
- * issue (measured 2026-08-02) and `assignee` on a pull request (measured
- * 2026-09-06); both carry the new assignee's **display name**, not an id.
- * Neither name is used for anything else, so both are read for every activity
- * type rather than branching on which one is being mapped.
- */
-const ASSIGNMENT_CHANGE_FIELDS: readonly string[] = ['assigner', 'assignee'];
-
-/** What §5.4 decides `isMention` from. */
 export interface MentionEvidence {
   botUserName: string;
   botUserId: number;
   text: string;
   /**
-   * An assignee id only where it is evidence that an **assignment happened**:
-   * `content.assignee` on a root activity, and nowhere else. `undefined`
-   * means "this activity says nothing about an assignment", never
-   * "unassigned".
-   *
-   * Types 2, 3, 19 and 20 all carry the same key as the **standing**
-   * assignee, repeated on every delivery whether or not the assignment
-   * changed (measured 2026-09-06 on both kinds), so it is not read there: a
-   * multi-field `PATCH` on a bot-assigned pull request carries the bot in
-   * `content.assignee` and notified nobody. An assignment on those types
-   * reports itself in `changes[]` instead, and one `changes[]` leaves out is
-   * caught by the `notifications[]` rule, so the two kinds answer the same
-   * operation the same way without reading a standing state as an event.
+   * Only a root activity's `content.assignee`. On every other type the key is
+   * the standing assignee, repeated whether or not it changed (measured), so
+   * reading it there turns an unrelated edit into a mention.
    */
   assigneeId: number | undefined;
-  changes: BacklogChange[];
-  /** The activity's top-level `notifications[]`: who Backlog notified. */
-  notifications: readonly ActivityNotification[];
+  changes: readonly BacklogChange[];
+  notifications: readonly Notification[];
   /**
-   * Whether `text` was assembled from a field Backlog stores **without**
-   * rewriting `<@U<id>>` into `@<display name>` — a pull request's summary,
-   * and nothing else measured so far (§5.4 rule 5, measured 2026-09-06).
+   * A pull request's summary is stored without `<@U<id>>` being rewritten to
+   * `@<display name>` (measured); everywhere else a literal `<@U…>` is a
+   * mention that notified nobody.
    */
   rawMentionNotationSurvives: boolean;
 }
 
-/**
- * Notification, textual and assignment mention detection
- * (docs/specs/adapter.md §5.4). `notifications[]` is the one rule that reads
- * what Backlog decided rather than guessing from text: `mentionPattern` only
- * proves a hand-typed `@name` is present, and the assignment checks only
- * cover the two events Backlog signals structurally. A comment whose
- * recipients were picked in the notification field carries neither — no
- * `@name` survives in `text` at all — so without this rule it reads as an
- * unaddressed comment.
- */
-export function detectMention(evidence: MentionEvidence): boolean {
-  const {
-    botUserName,
-    botUserId,
-    text,
-    assigneeId,
-    changes,
-    notifications,
-    rawMentionNotationSurvives,
-  } = evidence;
+// An issue reports a new assignee as `assigner`, a pull request as `assignee`,
+// both by display name (measured).
+const ASSIGNMENT_CHANGE_FIELDS: readonly string[] = ['assigner', 'assignee'];
 
-  // Not narrowed to `reason: 2` (Issue Commented). An assignment (reason 1)
-  // is already a mention through the rules below, so a reason allowlist
-  // could only ever drop a directed notification whose code this adapter has
-  // not measured — the pull-request codes 12-13 and the document ones among
-  // them — while adding a second place that has to be kept in step with
-  // Backlog's reason table.
-  if (
-    notifications.some((notification) => notification.user.id === botUserId)
-  ) {
+export function detectMention(evidence: MentionEvidence): boolean {
+  const { botUserName, botUserId, text, assigneeId, changes } = evidence;
+  // Not narrowed to one `reason`: an allowlist could only drop a directed
+  // notification whose code nobody has measured yet.
+  if (evidence.notifications.some((entry) => entry.user.id === botUserId)) {
     return true;
   }
   if (mentionPattern(botUserName).test(text)) {
     return true;
   }
-  // Not applied to every text: everywhere but a pull request's summary the
-  // server has already rewritten the notation, so a literal `<@U999>` there is
-  // an unresolvable mention that notified nobody (§5.4 rule 1's negative case)
-  // rather than a mention of the bot.
-  if (rawMentionNotationSurvives && text.includes(mentionUser(botUserId))) {
+  if (
+    evidence.rawMentionNotationSurvives &&
+    text.includes(mentionUser(botUserId))
+  ) {
     return true;
   }
   if (assigneeId === botUserId) {
     return true;
   }
-  // A pull-request `PATCH` touching several fields at once was measured once
-  // to omit the `assignee` entry while still notifying the new assignee, so
-  // this rule under-reports on its own; the notification rule above is what
-  // covers that case, and it is kept for a delivery whose `notifications[]`
-  // is empty (every `GET /space/activities` body replayed as a webhook).
+  // Kept beside the notification rule for a body replayed from the activity
+  // API, whose `notifications[]` is always empty (measured).
   return changes.some(
     (change) =>
       ASSIGNMENT_CHANGE_FIELDS.includes(change.field) &&
@@ -236,193 +85,194 @@ export function detectMention(evidence: MentionEvidence): boolean {
   );
 }
 
-export interface BuildInboundMessageInput {
-  host: string;
-  botUserId: number;
-  botUserName: string;
-  /**
-   * The subject the activity is about, already resolved by the caller through
-   * `subjectOfActivity` (D-PR2). It supplies
-   * both the ref every id is built from and the attachment mapping, which
-   * differs per kind: an issue attachment carries its id, a pull-request one
-   * resolves it by name (D-PR10).
-   */
-  subject: SubjectClient;
+function normaliseChanges(
+  changes: {
+    field: string;
+    new_value: string | null;
+    old_value: string | null;
+  }[]
+): BacklogChange[] {
+  return changes.map((change) => ({
+    field: change.field,
+    newValue: change.new_value,
+    oldValue: change.old_value,
+  }));
 }
 
 /**
- * Types 1 and 18 — Issue Created and Pull Request Added (docs/specs/adapter.md
- * §5.3 rows 1 and 18). The message id is the subject's root
- * (`<host>:issue:<issueId>:r`, `<host>:pr:<repositoryId>:<number>:r`); mention
- * text is `summary + description`, so a mention placed in the summary counts.
+ * A pull-request comment posted with files names them only in `changes[]`,
+ * with no `content.attachments` key (measured). An empty value is a removal.
  */
-function buildRootFields(
-  activity: RootActivity,
-  input: BuildInboundMessageInput
-): InboundMessageFields {
-  const { host, botUserId, botUserName, subject } = input;
-  const text = [
-    activity.content.summary ?? '',
-    activity.content.description ?? '',
-  ]
-    .filter((part) => part.length > 0)
-    .join('\n\n')
-    .trim();
-  const changes: BacklogChange[] = [];
-  return {
-    messageId: encodeMessageId({
-      host,
-      subject: subject.ref,
-      part: 'root',
-    }),
-    text,
-    attachments: toAttachments(subject, activity.content),
-    isMention: detectMention({
-      botUserName,
-      botUserId,
-      text,
-      assigneeId: assigneeIdOf(activity.content),
-      changes,
-      notifications: activity.notifications,
-      rawMentionNotationSurvives: activity.type === 18,
-    }),
-    changes,
-    dateSent: new Date(activity.created),
-  };
+function changeAttachments(
+  subject: SubjectClient,
+  changes: readonly BacklogChange[]
+): Attachment[] {
+  return changes
+    .filter((change) => change.field === 'attachment' && change.newValue)
+    .flatMap((change) => subject.webhookChangeAttachment(change) ?? []);
 }
 
 /**
- * Types 2, 3, 19 and 20 (docs/specs/adapter.md §5.3). A **changelog** comment
- * (a status-only change, an assignee change, a description edit, an
- * attachment add, a merge, a close) arrives with `content.comment.id` set and
- * `comment.content` `null` or `""`; handlers must key on `raw.changes` having
- * entries, never on "a comment is present", because a comment posted together
- * with a field change is one event with both
- * (`.claude/rules/backlog-webhook-facts.md` "Changelog comments",
- * `.claude/rules/backlog-pull-request-facts.md` "What each pull-request
- * operation emits").
+ * `isBot` mirrors `isMe`: Backlog has no bot attribute, and the `"unknown"`
+ * the type allows would make the core's `getParticipants` drop the author.
  */
-function buildCommentOrUpdateFields(
-  activity: CommentOrUpdateActivity,
-  input: BuildInboundMessageInput
-): InboundMessageFields {
-  const { host, botUserId, botUserName, subject } = input;
-  const changes = normaliseChanges(activity.content.changes);
-  const comment = activity.content.comment;
-
-  const messageId =
-    comment !== null && comment !== undefined
-      ? encodeMessageId({
-          host,
-          subject: subject.ref,
-          part: 'comment',
-          commentId: comment.id,
-        })
-      : encodeMessageId({
-          host,
-          subject: subject.ref,
-          part: 'update',
-          created: activity.created,
-        });
-
-  const text = comment?.content ?? '';
-
-  return {
-    messageId,
-    text,
-    attachments: [
-      ...toAttachments(subject, activity.content),
-      ...changeAttachments(subject, changes),
-    ],
-    isMention: detectMention({
-      botUserName,
-      botUserId,
-      text,
-      assigneeId: undefined,
-      changes,
-      notifications: activity.notifications,
-      rawMentionNotationSurvives: false,
-    }),
-    changes,
-    dateSent: new Date(activity.created),
-  };
-}
-
-export function buildInboundMessageFields(
-  activity: InboundActivity,
-  input: BuildInboundMessageInput
-): InboundMessageFields {
-  if (activity.type === 1 || activity.type === 18) {
-    return buildRootFields(activity, input);
-  }
-  return buildCommentOrUpdateFields(activity, input);
-}
-
-/**
- * Author mapping (docs/specs/adapter.md §5.3 "Author"). `isBot` mirrors
- * `isMe` because Backlog has no bot attribute on `createdUser`; the generic
- * `"unknown"` the `Author` type also allows would make the core's
- * `getParticipants` drop the author entirely, which is worse than a false
- * `isBot` for a human co-worker sharing the bot's account.
- */
-export function buildAuthor(
+function authorOf(
   host: string,
   botUserId: number,
-  createdUser: ActivityCreatedUser
+  user: WebhookActivity['createdUser']
 ): Author {
-  const isMe = createdUser.id === botUserId;
+  const isMe = user.id === botUserId;
   return {
-    userId: `${host}:${createdUser.id}`,
-    userName: createdUser.userId ?? createdUser.name,
-    fullName: createdUser.name,
+    userId: `${host}:${user.id}`,
+    userName: user.userId ?? user.name,
+    fullName: user.name,
     isMe,
     isBot: isMe,
   };
 }
 
-export interface BuildMessageInput extends BuildInboundMessageInput {
-  payload: BacklogWebhookPayload;
-  format: (text: string) => MessageData['formatted'];
+function commentPart(
+  comment: { id: number } | null,
+  created: string
+): BacklogMessagePart {
+  return comment === null
+    ? { part: 'update', created }
+    : { part: 'comment', commentId: comment.id };
+}
+
+interface MessageParts {
+  subject: BacklogSubjectRef;
+  part: BacklogMessagePart;
+  text: string;
+  attachments: Attachment[];
+  assigneeId: number | undefined;
+  changes: BacklogChange[];
+  rawMentionNotationSurvives: boolean;
+}
+
+// Comment edits emit no webhook (measured), so a webhook message is never
+// `edited`.
+function assemble(
+  activity: WebhookActivity,
+  context: InboundContext,
+  parts: MessageParts,
+  raw: BacklogRawMessage
+): Message<BacklogRawMessage> {
+  const { host, botUserId, botUserName } = context;
+  const { subject, text, changes } = parts;
+  return new Message<BacklogRawMessage>({
+    id: encodeMessageId({ host, subject, ...parts.part }),
+    threadId: encodeThreadId({ host, projectId: activity.project.id, subject }),
+    text,
+    formatted: context.format(text),
+    raw,
+    author: authorOf(host, botUserId, activity.createdUser),
+    metadata: { dateSent: new Date(activity.created), edited: false },
+    attachments: parts.attachments,
+    isMention: detectMention({
+      botUserName,
+      botUserId,
+      text,
+      assigneeId: parts.assigneeId,
+      changes,
+      notifications: activity.notifications,
+      rawMentionNotationSurvives: parts.rawMentionNotationSurvives,
+    }),
+  });
+}
+
+function rootParts(
+  activity: Extract<WebhookActivity, { type: 1 }> | PullRequestActivity,
+  subject: SubjectClient
+): MessageParts {
+  const { summary, description, attachments, assignee } = activity.content;
+  return {
+    subject: subject.ref,
+    part: { part: 'root' },
+    text: [summary ?? '', description ?? '']
+      .filter((part) => part.length > 0)
+      .join('\n\n')
+      .trim(),
+    attachments: attachments.map((file) => subject.webhookAttachment(file)),
+    assigneeId: assignee?.id,
+    changes: [],
+    rawMentionNotationSurvives: activity.type === 18,
+  };
 }
 
 /**
- * Assembles the `Message` instance for every type §5.3 maps to a message
- * (1, 2, 3, 18, 19, 20). `raw.payload` carries the envelope exactly as
- * parsed (docs/specs/adapter.md §5.2 "not a stripped copy") so a handler can
- * read a key the schema does not name.
- * `edited: false` and `dateSent: new Date(created)` are constant for every
- * webhook message because comment edits fire no webhook at all (measured
- * 2026-09-03, `.claude/rules/backlog-webhook-facts.md`).
+ * A changelog comment (a status change, an attachment, a merge) arrives with
+ * a comment id and empty text, so a handler keys on `raw.changes`, never on
+ * whether a comment is present.
  */
-export function buildInboundMessage(
-  activity: InboundActivity,
-  input: BuildMessageInput,
-  MessageCtor: new (
-    data: MessageData<BacklogRawMessage>
-  ) => Message<BacklogRawMessage>
-): Message<BacklogRawMessage> {
-  const fields = buildInboundMessageFields(activity, input);
-  const author = buildAuthor(input.host, input.botUserId, activity.createdUser);
-  const raw: BacklogRawMessage = {
-    kind: 'webhook',
-    host: input.host,
-    payload: input.payload,
-    changes: fields.changes,
+function commentParts(
+  activity: Extract<WebhookActivity, { type: 2 | 3 }> | PullRequestActivity,
+  subject: SubjectClient
+): MessageParts {
+  const { comment, attachments } = activity.content;
+  const changes = normaliseChanges(activity.content.changes);
+  return {
+    subject: subject.ref,
+    part: commentPart(comment, activity.created),
+    text: comment === null ? '' : comment.content,
+    attachments: [
+      ...attachments.map((file) => subject.webhookAttachment(file)),
+      ...changeAttachments(subject, changes),
+    ],
+    assigneeId: undefined,
+    changes,
+    rawMentionNotationSurvives: false,
   };
+}
 
-  return new MessageCtor({
-    id: fields.messageId,
-    threadId: encodeThreadId({
-      host: input.host,
-      projectId: activity.project.id,
-      subject: input.subject.ref,
-    }),
-    text: fields.text,
-    formatted: input.format(fields.text),
-    raw,
-    author,
-    metadata: { dateSent: fields.dateSent, edited: false },
-    attachments: fields.attachments,
-    isMention: fields.isMention,
+export function buildInboundMessage(
+  activity: MessageActivity,
+  context: InboundContext,
+  subject: SubjectClient
+): Message<BacklogRawMessage> {
+  const parts =
+    activity.type === 1 || activity.type === 18
+      ? rootParts(activity, subject)
+      : commentParts(activity, subject);
+  return assemble(activity, context, parts, {
+    kind: 'webhook',
+    host: context.host,
+    payload: payloadOf(activity),
+    changes: parts.changes,
   });
+}
+
+/**
+ * One issue of a bulk update. The batch's `changes[]` and `notifications[]`
+ * go on every message whole: neither names an issue, so pairing entries with
+ * `link[]` by position would be an ordering Backlog does not document (D22).
+ * A bulk update carries no attachments (measured), and `link[]` holds issues
+ * only, so no subject client is needed.
+ */
+export function buildBulkUpdateMessage(
+  activity: BulkUpdateActivity,
+  link: BulkUpdateLink,
+  context: InboundContext
+): Message<BacklogRawMessage> {
+  const changes = normaliseChanges(activity.content.changes);
+  return assemble(
+    activity,
+    context,
+    {
+      subject: { kind: 'issue', issueId: link.id },
+      part: commentPart(link.comment, activity.created),
+      text: link.comment === null ? '' : link.comment.content,
+      attachments: [],
+      assigneeId: undefined,
+      changes,
+      rawMentionNotationSurvives: false,
+    },
+    {
+      kind: 'bulkUpdate',
+      host: context.host,
+      payload: payloadOf(activity),
+      issueId: link.id,
+      changes,
+    }
+  );
 }

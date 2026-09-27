@@ -79,7 +79,7 @@ function parseCursor(cursor: string | undefined): number | undefined {
 /**
  * Author for a REST-derived message (a comment or a thread's root). Mirrors
  * the webhook path's `<host>:<id>` shape (`src/webhook/inbound.ts`
- * `buildAuthor`) using `BacklogUserRef.id`, the same numeric identity §2
+ * `authorOf`) using `BacklogUserRef.id`, the same numeric identity §2
  * specifies for every user id in this adapter.
  */
 export function buildRestAuthor(

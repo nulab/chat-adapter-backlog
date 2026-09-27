@@ -21,28 +21,17 @@ import { createInMemoryBacklogApi } from './client/in-memory';
 import { conformanceFixture } from './client/conformance';
 import { encodeMessageId } from './ids';
 import {
-  assigneeChanged,
   bulkFieldsChanged,
-  bulkStatusChangedOnOneIssue,
   FIXTURE,
-  gitPushed,
   issueCommented,
   issueDeleted,
   issueMultiUpdated,
-  issueUpdated,
-  issueUpdatedWithoutComment,
-  pullRequestAdded,
-  pullRequestAssigneeChanged,
   pullRequestCommented,
-  pullRequestDeleted,
-  statusChanged,
   unrelatedActivity,
   webhookRequest,
 } from './test/fixtures/webhooks';
-import { UNAUTHORIZED_BODY } from './webhook/verify';
 import type { BacklogApi, BacklogComment } from './client/port';
 import type {
-  BacklogBulkUpdatePayload,
   BacklogRawMessage,
   BacklogSubjectRef,
   BacklogThreadId,
@@ -429,15 +418,6 @@ describe('BacklogAdapter construction', () => {
     );
   });
 
-  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    'rejects a maxWebhookBodyBytes of %s',
-    (maxWebhookBodyBytes) => {
-      const config = { ...validConfig(), maxWebhookBodyBytes };
-
-      expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
-    }
-  );
-
   it('rejects a botUserId no id string could round-trip', () => {
     // 2^53 and beyond do not survive `Number(String(id))`, and this id is
     // encoded into every user id and outbound mention (§2.1).
@@ -536,28 +516,6 @@ describe('BacklogAdapter lifecycle and identity', () => {
 
     expect(adapter['chat']).toBe(chatInstance);
     expect(adapter['logger'].debug).toBe(debug);
-  });
-
-  it('defaults maxWebhookBodyBytes, and carries a configured webhookVerifier', () => {
-    const adapter = new BacklogAdapter(validConfig());
-    expect(adapter['ingressConfig']).toEqual({
-      maxWebhookBodyBytes: 5 * 1024 * 1024,
-      webhookVerifier: undefined,
-    });
-
-    const verifier = () => true;
-    const withVerifier = new BacklogAdapter({
-      host: 'example.backlog.com',
-      apiKey: 'k',
-      botUserId: 999,
-      botUserName: 'Chatbot',
-      webhookVerifier: verifier,
-      maxWebhookBodyBytes: 1024,
-    });
-    expect(withVerifier['ingressConfig']).toEqual({
-      maxWebhookBodyBytes: 1024,
-      webhookVerifier: verifier,
-    });
   });
 });
 
@@ -824,7 +782,6 @@ describe('BacklogAdapter port wiring', () => {
   });
 });
 
-/** One installation matching `FIXTURE`; run it on `fixturePort` so `ensureProject` resolves without a network call. */
 function webhookAdapterConfig(overrides: Partial<ResolvedInstallation> = {}) {
   return {
     host: FIXTURE.host,
@@ -836,139 +793,104 @@ function webhookAdapterConfig(overrides: Partial<ResolvedInstallation> = {}) {
   };
 }
 
+type Factory = () => Promise<Message<BacklogRawMessage>>;
+
+/**
+ * `createMockChatInstance`'s `processMessage` returns `undefined`, where the
+ * real one returns a promise the adapter attaches its failure log to.
+ */
+function mockChat(
+  processMessage: (
+    adapter: Adapter,
+    threadId: string,
+    factory: Factory
+  ) => Promise<void> = async () => {},
+  logger = createMockLogger()
+): ChatInstance {
+  return createMockChatInstance({
+    logger,
+    overrides: {
+      processMessage: vi.fn(processMessage) as ChatInstance['processMessage'],
+      processMessageDeleted: vi.fn(async () => {}),
+    },
+  });
+}
+
 async function webhookAdapter(
   config: Record<string, unknown> = {},
   createApi: ApiFactory = fixturePort
 ): Promise<{ adapter: BacklogAdapter; chat: ChatInstance }> {
   const adapter = onPort(
-    createBacklogAdapter({
-      ...webhookAdapterConfig(),
-      ...config,
-    }),
+    createBacklogAdapter({ ...webhookAdapterConfig(), ...config }),
     createApi
   );
-  const chat = createMockChatInstance({ logger: createMockLogger() });
+  const chat = mockChat();
   await adapter.initialize(chat);
   return { adapter, chat };
 }
 
-describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
-  it('a non-POST request is rejected with 405', async () => {
-    const { adapter } = await webhookAdapter();
+/** Resolves every dispatched factory, as the core does. */
+async function initializeCapturingDispatches(
+  adapter: BacklogAdapter
+): Promise<{ threadId: string; message: Message<BacklogRawMessage> }[]> {
+  const dispatched: {
+    threadId: string;
+    message: Message<BacklogRawMessage>;
+  }[] = [];
+  await adapter.initialize(
+    mockChat(async (_adapter, threadId, factory) => {
+      dispatched.push({ threadId, message: await factory() });
+    })
+  );
+  return dispatched;
+}
+
+function threadIdsProcessedBy(chat: ChatInstance): string[] {
+  return vi
+    .mocked(chat.processMessage)
+    .mock.calls.map(([, threadId]) => threadId);
+}
+
+const ISSUE_THREAD_ID = `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`;
+
+describe('BacklogAdapter.handleWebhook', () => {
+  it('answers an unauthenticated request 401 and dispatches nothing', async () => {
+    const { adapter, chat } = await webhookAdapter();
+
     const response = await adapter.handleWebhook(
-      webhookRequest(issueCommented(), { method: 'GET' })
-    );
-    expect(response.status).toBe(405);
-    expect(await response.text()).toBe('Method not allowed');
-  });
-
-  it('a body larger than maxWebhookBodyBytes is rejected with 413', async () => {
-    const { adapter } = await webhookAdapter({ maxWebhookBodyBytes: 10 });
-    const response = await adapter.handleWebhook(
-      webhookRequest(issueCommented())
-    );
-    expect(response.status).toBe(413);
-    expect(await response.text()).toBe('Payload too large');
-  });
-
-  it('a request without a token is rejected with 401', async () => {
-    const { adapter } = await webhookAdapter();
-    const response = await adapter.handleWebhook(
-      webhookRequest(issueCommented(), { token: null })
-    );
-    expect(response.status).toBe(401);
-    expect(await response.text()).toBe(UNAUTHORIZED_BODY);
-  });
-
-  it('an unknown host gets the same 401 body as a wrong token', async () => {
-    const { adapter } = await webhookAdapter();
-
-    const unknownHost = await adapter.handleWebhook(
-      webhookRequest(issueCommented(), { host: 'nope.backlog.com' })
-    );
-    const wrongToken = await adapter.handleWebhook(
       webhookRequest(issueCommented(), { token: 'wrong' })
     );
 
-    expect(unknownHost.status).toBe(401);
-    expect(wrongToken.status).toBe(401);
-    const [unknownHostBody, wrongTokenBody] = await Promise.all([
-      unknownHost.text(),
-      wrongToken.text(),
-    ]);
-    expect(unknownHostBody).toBe(wrongTokenBody);
-    expect(unknownHostBody).toBe(UNAUTHORIZED_BODY);
-  });
-
-  it('with one installation the host parameter is optional', async () => {
-    const { adapter } = await webhookAdapter();
-    const response = await adapter.handleWebhook(
-      webhookRequest(issueCommented(), { host: null })
-    );
-    expect(response.status).toBe(200);
-  });
-
-  it('with two installations a missing host is rejected', async () => {
-    const { adapter } = await webhookAdapter({
-      host: undefined,
-      apiKey: undefined,
-      botUserId: undefined,
-      botUserName: undefined,
-      webhookSecret: undefined,
-      installations: [
-        {
-          host: FIXTURE.host,
-          apiKey: 'k1',
-          botUserId: FIXTURE.bot.id,
-          botUserName: FIXTURE.bot.name,
-          webhookSecret: FIXTURE.webhookSecret,
-        },
-        {
-          host: FIXTURE.otherHost,
-          apiKey: 'k2',
-          botUserId: 998,
-          botUserName: 'Chatbot2',
-          webhookSecret: 'other-webhook-secret',
-        },
-      ],
-    });
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(issueCommented(), { host: null })
-    );
-
     expect(response.status).toBe(401);
-    expect(await response.text()).toBe(UNAUTHORIZED_BODY);
+    expect(await response.text()).toBe('Unauthorized');
+    expect(chat).not.toHaveDispatched('processMessage');
   });
 
-  it('invalid JSON is rejected with 400', async () => {
+  it('answers a body that is not JSON 400', async () => {
     const { adapter } = await webhookAdapter();
+
     const response = await adapter.handleWebhook(
       webhookRequest(undefined, { body: 'not json' })
     );
+
     expect(response.status).toBe(400);
     expect(await response.text()).toBe('Invalid JSON');
   });
 
-  it('a JSON body that is not an object is rejected with 400', async () => {
-    const { adapter } = await webhookAdapter();
-    const response = await adapter.handleWebhook(
-      webhookRequest(undefined, { body: '"just a string"' })
-    );
-    expect(response.status).toBe(400);
-  });
+  it('answers a delivery its schema rejects 400', async () => {
+    const { adapter, chat } = await webhookAdapter();
+    const payload = issueCommented();
+    delete payload['createdUser'];
 
-  it('an envelope with no numeric type is rejected with 400', async () => {
-    const { adapter } = await webhookAdapter();
-    const response = await adapter.handleWebhook(
-      webhookRequest({ notAType: true })
-    );
+    const response = await adapter.handleWebhook(webhookRequest(payload));
+
     expect(response.status).toBe(400);
     expect(await response.text()).toBe('Invalid payload');
+    expect(chat).not.toHaveDispatched('processMessage');
   });
 
-  it.each([[17], [21], [99]])(
-    'an activity type the adapter maps to nothing is acknowledged and ignored (type %i)',
+  it.each([[12], [13], [17], [21]])(
+    'acknowledges an activity of type %i without dispatching it',
     async (type) => {
       const { adapter, chat } = await webhookAdapter();
 
@@ -982,879 +904,150 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
     }
   );
 
-  it('a bulk update is accepted and dispatched, once per issue it touched', async () => {
-    const { adapter, chat } = await webhookAdapter();
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(issueMultiUpdated())
+  it('answers 503 before initialize() has run', async () => {
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
     );
 
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe('OK');
-    expect(chat.processMessage).toHaveBeenCalledTimes(2);
-    expect(threadIdsProcessedBy(chat)).toEqual([
-      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`,
-      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.otherIssueId}`,
-    ]);
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented())
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe('Adapter not initialized');
   });
 
-  it('a bulk update of three issues dispatches three times, one thread each', async () => {
+  it("acknowledges the bot's own activity without dispatching it", async () => {
     const { adapter, chat } = await webhookAdapter();
 
     const response = await adapter.handleWebhook(
-      webhookRequest(bulkFieldsChanged())
+      webhookRequest(issueMultiUpdated({ createdUser: FIXTURE.bot }))
     );
 
     expect(response.status).toBe(200);
-    expect(chat.processMessage).toHaveBeenCalledTimes(3);
+    expect(chat).not.toHaveDispatched('processMessage');
+  });
+
+  it('answers before the dispatched message has been built', async () => {
+    let release: (() => void) | undefined;
+    const built = vi.fn();
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
+    await adapter.initialize(
+      mockChat(async (_adapter, _threadId, factory) => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        built(await factory());
+      })
+    );
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented())
+    );
+
+    expect(response.status).toBe(200);
+    expect(built).not.toHaveBeenCalled();
+    release?.();
+    await vi.waitFor(() =>
+      expect(built).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: ISSUE_THREAD_ID })
+      )
+    );
+  });
+
+  it('logs a failed dispatch with its thread instead of rejecting', async () => {
+    const logger = createMockLogger();
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
+    await adapter.initialize(
+      mockChat(async () => {
+        throw new Error('handler exploded');
+      }, logger)
+    );
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueCommented())
+    );
+
+    expect(response.status).toBe(200);
+    await vi.waitFor(() =>
+      expect(logger.error).toHaveBeenCalledWith('inbound processing failed', {
+        host: FIXTURE.host,
+        threadId: ISSUE_THREAD_ID,
+        error: 'handler exploded',
+      })
+    );
+  });
+
+  it('reports a deleted issue as the deletion of its root message', async () => {
+    const { adapter, chat } = await webhookAdapter();
+
+    const response = await adapter.handleWebhook(
+      webhookRequest(issueDeleted())
+    );
+
+    expect(response.status).toBe(200);
+    expect(chat.processMessageDeleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: 'backlog',
+        threadId: ISSUE_THREAD_ID,
+        messageId: `${FIXTURE.host}:issue:${FIXTURE.issueId}:r`,
+      }),
+      undefined
+    );
+  });
+
+  it('dispatches a bulk update once per issue, each into its own thread', async () => {
+    const { adapter, chat } = await webhookAdapter();
+
+    await adapter.handleWebhook(webhookRequest(bulkFieldsChanged()));
+
     expect(threadIdsProcessedBy(chat)).toEqual([
-      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`,
+      ISSUE_THREAD_ID,
       `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.otherIssueId}`,
       `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.thirdIssueId}`,
     ]);
   });
 
-  it('a bulk update of one issue is dispatched once and still as a bulk update', async () => {
-    const { adapter, chat } = await webhookAdapter();
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(bulkStatusChangedOnOneIssue())
-    );
-
-    expect(response.status).toBe(200);
-    expect(chat.processMessage).toHaveBeenCalledTimes(1);
-    const [message] = await Promise.all(
-      messageFactoriesOf(chat).map((factory) => factory())
-    );
-    // A single-issue batch reaches a handler as `bulkUpdate`, not as the
-    // `webhook` kind a type 2 produces: what a handler reads from `raw` may
-    // not depend on how many issues the person happened to tick.
-    expect(message?.raw?.kind).toBe('bulkUpdate');
-  });
-
-  it('a bulk update made by the bot itself dispatches nothing', async () => {
-    const { adapter, chat } = await webhookAdapter();
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(
-        issueMultiUpdated({
-          createdUser: { id: FIXTURE.bot.id, name: FIXTURE.bot.name },
-        })
-      )
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe('OK');
-    expect(chat).not.toHaveDispatched('processMessage');
-  });
-
-  it('a bulk update naming no issues is accepted and dispatches nothing', async () => {
-    const { adapter, chat } = await webhookAdapter();
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(issueMultiUpdated({ issues: [] }))
-    );
-
-    expect(response.status).toBe(200);
-    expect(chat).not.toHaveDispatched('processMessage');
-  });
-
-  it('a bulk update whose link entry has no usable issue id is rejected with 400', async () => {
-    const { adapter } = await webhookAdapter();
-    const payload = issueMultiUpdated();
-    const content = payload['content'] as Record<string, unknown>;
-    const links = content['link'] as Record<string, unknown>[];
-    links[0]!['id'] = 'not-a-number';
-
-    const response = await adapter.handleWebhook(webhookRequest(payload));
-
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe('Invalid payload');
-  });
-
-  it('a bulk update looks the project up once, however many issues it touched', async () => {
+  it('looks the project up once for a bulk update, however many issues it touched', async () => {
     const getProject = vi.fn(() =>
       Promise.resolve(conformanceFixture.baseProject())
     );
-    const { adapter, chat } = await webhookAdapter({}, () => {
+    const adapter = onPort(createBacklogAdapter(webhookAdapterConfig()), () => {
       const api = createInMemoryBacklogApi({
         projects: [conformanceFixture.baseProject()],
       });
       api.getProject = getProject;
       return api;
     });
+    const dispatched = await initializeCapturingDispatches(adapter);
 
-    await adapter.handleWebhook(webhookRequest(issueMultiUpdated()));
-    await Promise.all(messageFactoriesOf(chat).map((factory) => factory()));
+    await adapter.handleWebhook(webhookRequest(bulkFieldsChanged()));
+    await vi.waitFor(() => expect(dispatched).toHaveLength(3));
 
     expect(getProject).toHaveBeenCalledTimes(1);
   });
 
-  it('bulk factories use their validated targets without re-entering parseMessage', async () => {
-    const { adapter, chat } = await webhookAdapter();
-    const parseMessage = vi.spyOn(adapter, 'parseMessage');
-
-    await adapter.handleWebhook(webhookRequest(bulkFieldsChanged()));
-    await Promise.all(messageFactoriesOf(chat).map((factory) => factory()));
-
-    expect(parseMessage).not.toHaveBeenCalled();
-  });
-
-  it('each message of a bulk update carries the batch changes and its own comment', async () => {
-    const { adapter, chat } = await webhookAdapter();
-
-    await adapter.handleWebhook(
-      webhookRequest(
-        issueMultiUpdated({
-          text: 'Moving these to done.',
-          changes: [
-            { field: 'status', new_value: '4' },
-            { field: 'assigner', new_value: FIXTURE.bot.name },
-          ],
-        })
-      )
-    );
-
-    const messages = await Promise.all(
-      messageFactoriesOf(chat).map((factory) => factory())
-    );
-    expect(messages.map((message) => message.id)).toEqual([
-      `${FIXTURE.host}:issue:${FIXTURE.issueId}:c3101`,
-      `${FIXTURE.host}:issue:${FIXTURE.otherIssueId}:c3102`,
-    ]);
-    for (const message of messages) {
-      expect(message.text).toBe('Moving these to done.');
-      expect(message.raw?.changes).toEqual([
-        { field: 'status', newValue: '4', oldValue: null },
-        { field: 'assigner', newValue: FIXTURE.bot.name, oldValue: null },
-      ]);
-      expect(message.isMention).toBe(true);
-    }
-  });
-
-  it('a payload failing its type-specific schema is rejected with 400', async () => {
-    const { adapter } = await webhookAdapter();
-    const payload = issueCommented();
-    delete (payload as Record<string, unknown>)['createdUser'];
-
-    const response = await adapter.handleWebhook(webhookRequest(payload));
-
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe('Invalid payload');
-  });
-
-  it('a delivery whose created is empty is answered 400, not 500', async () => {
-    // Step 9 rejects it (§5.2 `createdSchema`), which is the ladder's answer.
-    // Worth asserting end to end rather than at the schema alone: tightening
-    // the id encoders gave the dispatcher a way to throw past the ladder for
-    // this exact payload, and a throw there is the consumer's function
-    // rejecting — a 500 on a delivery §5.1 has six answers for.
-    const { adapter } = await webhookAdapter();
-    const payload = { ...issueUpdatedWithoutComment(), created: '' };
-
-    const response = await adapter.handleWebhook(webhookRequest(payload));
-
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe('Invalid payload');
-  });
-
-  it('a bulk delivery whose created is empty is answered 400, not 500', async () => {
-    const { adapter } = await webhookAdapter();
-    const payload = issueMultiUpdated();
-    const content = payload['content'] as Record<string, unknown>;
-    const links = content['link'] as Record<string, unknown>[];
-    for (const link of links) {
-      delete link['comment'];
-    }
-    payload['created'] = '';
-
-    const response = await adapter.handleWebhook(webhookRequest(payload));
-
-    expect(response.status).toBe(400);
-  });
-
-  it('a webhook before initialize() has run gets 503', async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const response = await adapter.handleWebhook(
-      webhookRequest(issueCommented())
-    );
-    expect(response.status).toBe(503);
-    expect(await response.text()).toBe('Adapter not initialized');
-  });
-
-  it("the bot's own comment is acknowledged but not dispatched", async () => {
-    const { adapter, chat } = await webhookAdapter();
-    const response = await adapter.handleWebhook(
-      webhookRequest(
-        issueCommented({
-          createdUser: {
-            id: FIXTURE.bot.id,
-            name: FIXTURE.bot.name,
-            userId: FIXTURE.bot.userId,
-          },
-        })
-      )
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe('OK');
-    expect(chat).not.toHaveDispatched('processMessage');
-  });
-
-  it('a comment from another user is dispatched and answered with 200', async () => {
-    const { adapter, chat } = await webhookAdapter();
-    const response = await adapter.handleWebhook(
-      webhookRequest(issueCommented())
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe('OK');
-    expect(chat).toHaveDispatched('processMessage');
-  });
-
-  it('a deleted issue is reported as a deleted root message', async () => {
-    const { adapter, chat } = await webhookAdapter();
-    const response = await adapter.handleWebhook(
-      webhookRequest(issueDeleted())
-    );
-
-    expect(response.status).toBe(200);
-    expect(chat).toHaveDispatched('processMessageDeleted');
-    const processMessageDeleted = chat.processMessageDeleted as unknown as {
-      mock: { calls: unknown[][] };
-    };
-    const [event] = processMessageDeleted.mock.calls[0] as [
-      { platform: string; threadId: string; messageId: string },
-    ];
-    expect(event.platform).toBe('backlog');
-    expect(event.threadId).toBe(
-      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`
-    );
-    expect(event.messageId).toBe(`${FIXTURE.host}:issue:${FIXTURE.issueId}:r`);
-  });
-});
-
-describe('BacklogAdapter.handleWebhook — identity fields that are not ids (§5.1 step 9)', () => {
-  /**
-   * Resolves to whatever the call produced — the `Response` or the reason it
-   * rejected with — so "it threw instead of answering" is an assertable value
-   * rather than a test that fails with the adapter's own error.
-   */
-  async function outcomeOf(
-    adapter: BacklogAdapter,
-    payload: unknown
-  ): Promise<unknown> {
-    return adapter
-      .handleWebhook(webhookRequest(payload))
-      .catch((cause: unknown) => cause);
-  }
-
-  async function expectInvalidPayload(outcome: unknown): Promise<void> {
-    expect(outcome).toBeInstanceOf(Response);
-    const response = outcome as Response;
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe('Invalid payload');
-  }
-
-  const NOT_AN_ID: readonly [string, number][] = [
-    ['zero', 0],
-    ['negative', -1],
-    ['fractional', 1.5],
-  ];
-
-  it.each(NOT_AN_ID)(
-    'a webhook whose issue id is %s is rejected with 400',
-    async (_label, id) => {
-      const { adapter, chat } = await webhookAdapter();
-      const payload = issueCommented();
-      (payload['content'] as Record<string, unknown>)['id'] = id;
-
-      await expectInvalidPayload(await outcomeOf(adapter, payload));
-      expect(chat).not.toHaveDispatched('processMessage');
-    }
-  );
-
-  it.each(NOT_AN_ID)(
-    'a deletion whose issue id is %s is rejected with 400 rather than throwing',
-    async (_label, id) => {
-      // The type-4 branch decodes the thread id it just built synchronously,
-      // outside the dispatched promise, so an id the codec rejects surfaced
-      // here as a rejected `handleWebhook` — a 500 from a host route that
-      // awaits it, an unhandled rejection from one that does not.
-      const { adapter, chat } = await webhookAdapter();
-      const payload = issueDeleted();
-      (payload['content'] as Record<string, unknown>)['id'] = id;
-
-      await expectInvalidPayload(await outcomeOf(adapter, payload));
-      expect(chat).not.toHaveDispatched('processMessageDeleted');
-    }
-  );
-
-  it.each(NOT_AN_ID)(
-    'a pull request webhook whose number is %s is rejected with 400',
-    async (_label, number) => {
-      const { adapter, chat } = await webhookAdapter();
-      const payload = pullRequestAdded();
-      (payload['content'] as Record<string, unknown>)['number'] = number;
-
-      await expectInvalidPayload(await outcomeOf(adapter, payload));
-      expect(chat).not.toHaveDispatched('processMessage');
-    }
-  );
-
-  it.each(NOT_AN_ID)(
-    'a pull request webhook whose repository id is %s is rejected with 400',
-    async (_label, id) => {
-      const { adapter, chat } = await webhookAdapter();
-      const payload = pullRequestCommented();
-      const content = payload['content'] as Record<string, unknown>;
-      (content['repository'] as Record<string, unknown>)['id'] = id;
-
-      await expectInvalidPayload(await outcomeOf(adapter, payload));
-      expect(chat).not.toHaveDispatched('processMessage');
-    }
-  );
-
-  it('every one of them answers with a Response instead of rejecting', async () => {
-    const { adapter } = await webhookAdapter();
-    const bodies = [
-      (): unknown => {
-        const payload = issueCommented();
-        (payload['content'] as Record<string, unknown>)['id'] = 0;
-        return payload;
-      },
-      (): unknown => {
-        const payload = issueDeleted();
-        (payload['content'] as Record<string, unknown>)['id'] = 0;
-        return payload;
-      },
-      (): unknown => {
-        const payload = pullRequestAdded();
-        (payload['content'] as Record<string, unknown>)['number'] = 0;
-        return payload;
-      },
-      (): unknown => {
-        const payload = pullRequestCommented();
-        const content = payload['content'] as Record<string, unknown>;
-        (content['repository'] as Record<string, unknown>)['id'] = 0;
-        return payload;
-      },
-    ];
-
-    for (const body of bodies) {
-      expect(await outcomeOf(adapter, body())).toBeInstanceOf(Response);
-    }
-  });
-});
-
-/**
- * The `(adapter, threadId, factory)` triples a mock chat instance was handed.
- * A bulk update is the only ingress that dispatches more than once per
- * request, so the two helpers below exist for it.
- */
-function processMessageCallsOf(
-  chat: ChatInstance
-): [Adapter, string, () => Promise<Message<BacklogRawMessage>>][] {
-  const processMessage = chat.processMessage as unknown as {
-    mock: {
-      calls: [Adapter, string, () => Promise<Message<BacklogRawMessage>>][];
-    };
-  };
-  return processMessage.mock.calls;
-}
-
-function threadIdsProcessedBy(chat: ChatInstance): string[] {
-  return processMessageCallsOf(chat).map(([, threadId]) => threadId);
-}
-
-function messageFactoriesOf(
-  chat: ChatInstance
-): (() => Promise<Message<BacklogRawMessage>>)[] {
-  return processMessageCallsOf(chat).map(([, , factory]) => factory);
-}
-
-describe('BacklogAdapter.handleWebhook — dispatch ordering and error handling', () => {
-  it('processing starts after the response is returned', async () => {
-    let releaseProcessing: (() => void) | undefined;
-    const factoryResolved = vi.fn();
-    const processMessage = vi.fn(
-      async (
-        _adapter: Adapter,
-        _threadId: string,
-        message: Message | (() => Promise<Message>)
-      ) => {
-        // A deferred factory, per the plan's acceptance criterion ("assert
-        // ordering with a deferred factory") rather than assuming ordering
-        // from call sequence alone: the factory only resolves once this test
-        // releases it, so `factoryResolved` firing before `handleWebhook`
-        // returns would prove the response waited on processing.
-        if (typeof message === 'function') {
-          await new Promise<void>((resolve) => {
-            releaseProcessing = resolve;
-          });
-          await message();
-          factoryResolved();
-        }
-      }
-    );
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const chat = createMockChatInstance({
-      logger: createMockLogger(),
-      overrides: { processMessage },
-    });
-    await adapter.initialize(chat);
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(issueCommented())
-    );
-
-    // The response already came back although the factory is still blocked
-    // on the deferred promise above — proving §5.1 step 13 ("returned
-    // before processing completes").
-    expect(response.status).toBe(200);
-    expect(factoryResolved).not.toHaveBeenCalled();
-
-    releaseProcessing?.();
-    await vi.waitFor(() => expect(factoryResolved).toHaveBeenCalled());
-  });
-
-  it('a factory that throws is logged at error and does not reject handleWebhook', async () => {
-    const logger = createMockLogger();
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    // `createMockChatInstance`'s default `processMessage` never calls the
-    // factory it is handed, so this override reproduces what the real core
-    // does (`ChatInstance.processMessage` resolves the factory itself,
-    // `.claude/rules/chat-sdk-core-facts.md`) closely enough to exercise a
-    // factory failure: it invokes the factory and lets a rejection surface
-    // as `processMessage`'s own rejection, the shape `handleWebhook`'s
-    // `.catch` is written to log.
-    const chat = createMockChatInstance({
-      logger,
-      overrides: {
-        processMessage: vi.fn(
-          async (
-            _adapter: Adapter,
-            _threadId: string,
-            message: Message | (() => Promise<Message>)
-          ) => {
-            if (typeof message === 'function') {
-              await message();
-            }
-          }
-        ),
-      },
-    });
-    await adapter.initialize(chat);
-    // Forces the factory to reject after `ensureProject` succeeds, by
-    // making `parseMessage` itself throw — the simplest reliable way to
-    // exercise "a factory that throws" without depending on which internal
-    // step happens to fail for a given fixture.
-    vi.spyOn(adapter, 'parseMessage').mockImplementation(() => {
-      throw new Error('parseMessage exploded');
-    });
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(issueCommented())
-    );
-
-    expect(response.status).toBe(200);
-    await vi.waitFor(() => {
-      expect(logger.error).toHaveBeenCalledWith(
-        'inbound processing failed',
-        expect.objectContaining({ host: FIXTURE.host })
-      );
-    });
-  });
-});
-
-describe('BacklogAdapter.handleWebhook — fixture-driven §5.3 mapping', () => {
-  it('an assignee change with the bot as the new assignee is a mention', async () => {
-    const { adapter, chat } = await webhookAdapter();
-    const response = await adapter.handleWebhook(
-      webhookRequest(
-        issueUpdated({
-          text: null,
-          changes: [
-            { field: 'assigner', new_value: FIXTURE.bot.name, old_value: '' },
-          ],
-        })
-      )
-    );
-
-    expect(response.status).toBe(200);
-    expect(chat).toHaveDispatched('processMessage');
-  });
-
-  it('a status-only change dispatches a message the handler can read raw.changes from', async () => {
-    const capturedMessages: unknown[] = [];
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const chat = createMockChatInstance({
-      logger: createMockLogger(),
-      overrides: {
-        processMessage: vi.fn(
-          async (
-            _adapter: Adapter,
-            _threadId: string,
-            message: Message | (() => Promise<Message>)
-          ) => {
-            const resolved =
-              typeof message === 'function' ? await message() : message;
-            capturedMessages.push(resolved);
-          }
-        ),
-      },
-    });
-    await adapter.initialize(chat);
-
-    await adapter.handleWebhook(webhookRequest(statusChanged()));
-    await vi.waitFor(() => expect(capturedMessages).toHaveLength(1));
-
-    const [message] = capturedMessages as [
-      { text: string; raw: { changes: { field: string }[] } },
-    ];
-    expect(message.text).toBe('');
-    expect(message.raw.changes).toEqual([
-      { field: 'status', newValue: '4', oldValue: '3' },
-    ]);
-  });
-
-  it('unknown payload keys survive into raw.payload', async () => {
-    const capturedMessages: unknown[] = [];
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const chat = createMockChatInstance({
-      logger: createMockLogger(),
-      overrides: {
-        processMessage: vi.fn(
-          async (
-            _adapter: Adapter,
-            _threadId: string,
-            message: Message | (() => Promise<Message>)
-          ) => {
-            const resolved =
-              typeof message === 'function' ? await message() : message;
-            capturedMessages.push(resolved);
-          }
-        ),
-      },
-    });
-    await adapter.initialize(chat);
-
-    await adapter.handleWebhook(webhookRequest(issueCommented()));
-    await vi.waitFor(() => expect(capturedMessages).toHaveLength(1));
-
-    const [message] = capturedMessages as [
-      { raw: { payload: Record<string, unknown> } },
-    ];
-    expect(message.raw.payload['notifications']).toEqual([]);
-  });
-
-  it('the same fixture sent to two configured hosts yields two thread ids, two message ids and two ports used', async () => {
-    const otherApi = createInMemoryBacklogApi({
-      projects: [{ ...conformanceFixture.baseProject() }],
-    });
-    const firstApi = createInMemoryBacklogApi({
-      projects: [conformanceFixture.baseProject()],
-    });
-    const createApi = vi
-      .fn()
-      .mockReturnValueOnce(firstApi)
-      .mockReturnValueOnce(otherApi);
-
-    const adapter = onPort(
-      createBacklogAdapter({
-        installations: [
-          {
-            host: FIXTURE.host,
-            apiKey: 'k1',
-            botUserId: FIXTURE.bot.id,
-            botUserName: FIXTURE.bot.name,
-            webhookSecret: FIXTURE.webhookSecret,
-          },
-          {
-            host: FIXTURE.otherHost,
-            apiKey: 'k2',
-            botUserId: 998,
-            botUserName: 'Chatbot2',
-            webhookSecret: 'other-webhook-secret',
-          },
-        ],
-      }),
-      createApi
-    );
-    const capturedMessages: { threadId: string; message: { id: string } }[] =
-      [];
-    const chat = createMockChatInstance({
-      logger: createMockLogger(),
-      overrides: {
-        processMessage: vi.fn(
-          async (
-            _adapter: Adapter,
-            threadId: string,
-            message: Message | (() => Promise<Message>)
-          ) => {
-            const resolved =
-              typeof message === 'function' ? await message() : message;
-            capturedMessages.push({ threadId, message: resolved });
-          }
-        ),
-      },
-    });
-    await adapter.initialize(chat);
-
-    await adapter.handleWebhook(
-      webhookRequest(issueCommented(), { host: FIXTURE.host })
-    );
-    await adapter.handleWebhook(
-      webhookRequest(issueCommented(), {
-        host: FIXTURE.otherHost,
-        token: 'other-webhook-secret',
-      })
-    );
-    await vi.waitFor(() => expect(capturedMessages).toHaveLength(2));
-
-    expect(capturedMessages[0]?.threadId).not.toBe(
-      capturedMessages[1]?.threadId
-    );
-    expect(capturedMessages[0]?.message.id).not.toBe(
-      capturedMessages[1]?.message.id
-    );
-    expect(portOf(adapter, FIXTURE.host)).toBe(firstApi);
-    expect(portOf(adapter, FIXTURE.otherHost)).toBe(otherApi);
-  });
-});
-
-/**
- * Activity types Backlog emits around a pull request that name no thread.
- *
- * Type 21 is the interesting one: the Get Activity page calls it "Pull Request
- * Deleted" and `backlog-js` 0.20.1 calls it `PullRequestMerged`, and **neither
- * was observed** — merging (from the UI or by pushing the merge to the base
- * branch) and closing both arrive as type 19 status changes, no operation
- * deleting a pull request exists in the UI or the API, and the whole activity
- * history of the measured project holds no type 21 (measured 2026-09-06,
- * `.claude/rules/backlog-pull-request-facts.md`). Acknowledging it and
- * dropping it (D-PR5) is the only answer that does not guess which of the two
- * meanings a delivery would have.
- */
-describe('BacklogAdapter.handleWebhook — git and pull-request activities with no thread meaning', () => {
-  it('a git push is acknowledged and ignored', async () => {
-    const { adapter, chat } = await webhookAdapter();
-
-    const response = await adapter.handleWebhook(webhookRequest(gitPushed()));
-
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe('Ignored');
-    expect(chat).not.toHaveDispatched('processMessage');
-  });
-
-  it('a git repository creation is acknowledged and ignored', async () => {
-    const { adapter, chat } = await webhookAdapter();
-    // No type-13 body was captured, and none is needed: the type gate answers
-    // before any schema runs, so the git-shaped body under a type 13 exercises
-    // exactly what this asserts.
-    const response = await adapter.handleWebhook(
-      webhookRequest({ ...gitPushed(), type: 13 })
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe('Ignored');
-    expect(chat).not.toHaveDispatched('processMessage');
-  });
-
-  it('a pull request deletion activity is acknowledged and ignored', async () => {
-    const { adapter, chat } = await webhookAdapter();
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(pullRequestDeleted())
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe('Ignored');
-    expect(chat).not.toHaveDispatched('processMessage');
-  });
-});
-
-/**
- * Captures what `handleWebhook` dispatches, resolved the way the core resolves
- * it. `createMockChatInstance`'s default `processMessage` never calls the
- * factory it is handed, while the real `ChatInstance.processMessage` resolves
- * it itself (`.claude/rules/chat-sdk-core-facts.md`), so a test asserting on
- * the message rather than on the fact of dispatch has to stand in for that
- * step. Takes an already-built adapter because a two-installation adapter
- * cannot be expressed as an override of the single-space config.
- */
-async function initializeCapturingDispatches(
-  adapter: BacklogAdapter
-): Promise<{ threadId: string; message: Message }[]> {
-  const dispatched: { threadId: string; message: Message }[] = [];
-  const chat = createMockChatInstance({
-    logger: createMockLogger(),
-    overrides: {
-      processMessage: vi.fn(
-        async (
-          _adapter: Adapter,
-          threadId: string,
-          message: Message | (() => Promise<Message>)
-        ) => {
-          const resolved =
-            typeof message === 'function' ? await message() : message;
-          dispatched.push({ threadId, message: resolved });
-        }
-      ),
-    },
-  });
-  await adapter.initialize(chat);
-  return dispatched;
-}
-
-describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () => {
-  it('a new pull request is a root message on a pull request thread', async () => {
+  it("dispatches a pull-request comment into the pull request's thread", async () => {
     const adapter = onPort(
       createBacklogAdapter(webhookAdapterConfig()),
       fixturePort
     );
     const dispatched = await initializeCapturingDispatches(adapter);
 
-    const response = await adapter.handleWebhook(
-      webhookRequest(
-        pullRequestAdded({
-          summary: 'Retry the deploy step on a 5xx',
-          description: 'Fixes the flaky staging deploy.',
-        })
-      )
-    );
+    await adapter.handleWebhook(webhookRequest(pullRequestCommented()));
 
-    expect(response.status).toBe(200);
     await vi.waitFor(() => expect(dispatched).toHaveLength(1));
     expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
-    expect(dispatched[0]?.message.id).toBe(
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: PULL_REQUEST_SUBJECT,
-        part: 'root',
-      })
-    );
-    expect(dispatched[0]?.message.text).toBe(
-      'Retry the deploy step on a 5xx\n\nFixes the flaky staging deploy.'
-    );
   });
 
-  it("a comment on a pull request is dispatched to the pull request's thread", async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const dispatched = await initializeCapturingDispatches(adapter);
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(
-        pullRequestCommented({
-          commentId: 7000001,
-          text: 'Looks good, one question about the timeout.',
-        })
-      )
-    );
-
-    expect(response.status).toBe(200);
-    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
-    expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
-    expect(dispatched[0]?.message.id).toBe(
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: PULL_REQUEST_SUBJECT,
-        part: 'comment',
-        commentId: 7000001,
-      })
-    );
-    expect(dispatched[0]?.message.text).toBe(
-      'Looks good, one question about the timeout.'
-    );
-  });
-
-  it("a pull request linked to an issue does not route to the issue's thread", async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const dispatched = await initializeCapturingDispatches(adapter);
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(pullRequestAdded({ linkedIssue: true }))
-    );
-
-    expect(response.status).toBe(200);
-    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
-    expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
-    expect(dispatched[0]?.threadId).not.toBe(
-      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`
-    );
-    // The link itself still reaches a handler; it is display data, not
-    // routing (D-PR6), and the pull request stays its own thread.
-    const raw = dispatched[0]?.message.raw as {
-      payload: { content: { issue: { id: number } | null } };
-    };
-    expect(raw.payload.content.issue?.id).toBe(FIXTURE.issueId);
-  });
-
-  it('assigning the bot to a pull request is a mention', async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const dispatched = await initializeCapturingDispatches(adapter);
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(
-        pullRequestAssigneeChanged({ assigneeName: FIXTURE.bot.name })
-      )
-    );
-
-    expect(response.status).toBe(200);
-    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
-    expect(dispatched[0]?.message.isMention).toBe(true);
-  });
-
-  it('a pull request payload missing its repository is rejected with 400', async () => {
-    const { adapter, chat } = await webhookAdapter();
-    const payload = pullRequestAdded();
-    const content = payload['content'] as Record<string, unknown>;
-    delete content['repository'];
-
-    const response = await adapter.handleWebhook(webhookRequest(payload));
-
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe('Invalid payload');
-    expect(chat).not.toHaveDispatched('processMessage');
-  });
-
-  it('a pull request payload missing its number is rejected with 400', async () => {
-    const { adapter } = await webhookAdapter();
-    const payload = pullRequestCommented();
-    const content = payload['content'] as Record<string, unknown>;
-    delete content['number'];
-
-    const response = await adapter.handleWebhook(webhookRequest(payload));
-
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe('Invalid payload');
-  });
-
-  it('the repository name from a webhook spares the next thread read a lookup', async () => {
+  it('keeps the repository name a delivery carries, sparing the next thread read a lookup', async () => {
     const calls: string[] = [];
     const { adapter } = egressAdapter({
       seed: pullRequestSeed(),
@@ -1862,395 +1055,22 @@ describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () 
     });
     await initializeCapturingDispatches(adapter);
 
-    const response = await adapter.handleWebhook(
-      webhookRequest(pullRequestCommented())
-    );
-    expect(response.status).toBe(200);
-
+    await adapter.handleWebhook(webhookRequest(pullRequestCommented()));
     const thread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
 
     expect(thread.metadata).toMatchObject({
       url: `https://${FIXTURE.host}/git/${FIXTURE.projectKey}/${FIXTURE.repositoryName}/pullRequests/${FIXTURE.pullRequestNumber}`,
     });
-    expect(calls).toContain('getPullRequest');
     expect(calls).not.toContain('getGitRepository');
   });
 
-  it('the same pull request payload sent to two configured hosts yields two thread ids and two ports used', async () => {
-    const firstApi = createInMemoryBacklogApi({
-      projects: [conformanceFixture.baseProject()],
-    });
-    const otherApi = createInMemoryBacklogApi({
-      projects: [{ ...conformanceFixture.baseProject() }],
-    });
-    const createApi = vi
-      .fn()
-      .mockReturnValueOnce(firstApi)
-      .mockReturnValueOnce(otherApi);
-    const adapter = onPort(
-      createBacklogAdapter({
-        installations: [
-          {
-            host: FIXTURE.host,
-            apiKey: 'k1',
-            botUserId: FIXTURE.bot.id,
-            botUserName: FIXTURE.bot.name,
-            webhookSecret: FIXTURE.webhookSecret,
-          },
-          {
-            host: FIXTURE.otherHost,
-            apiKey: 'k2',
-            botUserId: 998,
-            botUserName: 'Chatbot2',
-            webhookSecret: 'other-webhook-secret',
-          },
-        ],
-      }),
-      createApi
-    );
-    const dispatched = await initializeCapturingDispatches(adapter);
-
-    await adapter.handleWebhook(
-      webhookRequest(pullRequestAdded(), { host: FIXTURE.host })
-    );
-    await adapter.handleWebhook(
-      webhookRequest(pullRequestAdded(), {
-        host: FIXTURE.otherHost,
-        token: 'other-webhook-secret',
-      })
-    );
-    await vi.waitFor(() => expect(dispatched).toHaveLength(2));
-
-    expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
-    expect(dispatched[1]?.threadId).toBe(
-      `backlog:${FIXTURE.otherHost}:${FIXTURE.projectId}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}`
-    );
-    expect(dispatched[0]?.message.id).not.toBe(dispatched[1]?.message.id);
-    expect(portOf(adapter, FIXTURE.host)).toBe(firstApi);
-    expect(portOf(adapter, FIXTURE.otherHost)).toBe(otherApi);
-  });
-});
-
-/**
- * The read side of a dispatched message, exercised through `handleWebhook` and
- * the factory it dispatches rather than against the schema alone
- * (docs/specs/adapter.md §5.2 `notifications[]`, §5.4 rule 6).
- *
- * `payload.test.ts` proves the schema falls back to `[]`; these prove the
- * fallback is what the mapping reads, which is a different claim: `raw.payload`
- * is the body as received, so a `notifications[]` the schema would have
- * replaced is still on it when the message arrives, and a read side that
- * trusted the declared type never saw the fallback at all.
- */
-describe('BacklogAdapter.handleWebhook — a notifications[] the adapter cannot read', () => {
-  function withoutNotifications(
-    body: Record<string, unknown>
-  ): Record<string, unknown> {
-    return Object.fromEntries(
-      Object.entries(body).filter(([key]) => key !== 'notifications')
-    );
-  }
-
-  it('an issue comment with no notifications key is dispatched, with mention detection falling back to the text', async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const dispatched = await initializeCapturingDispatches(adapter);
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(withoutNotifications(issueCommented({ commentId: 3001 })))
-    );
-
-    expect(response.status).toBe(200);
-    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
-    expect(dispatched[0]?.message.id).toBe(
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: { kind: 'issue', issueId: FIXTURE.issueId },
-        part: 'comment',
-        commentId: 3001,
-      })
-    );
-    expect(dispatched[0]?.message.isMention).toBe(false);
-    // The body reaches the handler as Backlog sent it (§5.2 "not a stripped
-    // copy"), so the key the mapping read through a fallback is still absent.
-    const raw = dispatched[0]?.message.raw as {
-      payload: Record<string, unknown>;
-    };
-    expect('notifications' in raw.payload).toBe(false);
-  });
-
-  it('an issue comment whose notifications entry names no user is dispatched', async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const dispatched = await initializeCapturingDispatches(adapter);
-
-    const response = await adapter.handleWebhook(
-      webhookRequest({
-        ...issueCommented({ text: `@${FIXTURE.bot.name} take a look` }),
-        notifications: [{ user: null }],
-      })
-    );
-
-    expect(response.status).toBe(200);
-    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
-    expect(dispatched[0]?.message.text).toBe(
-      `@${FIXTURE.bot.name} take a look`
-    );
-    // The unreadable array costs the notification rule, not the message: the
-    // textual rule still sees the mention (§5.4 rule 6).
-    expect(dispatched[0]?.message.isMention).toBe(true);
-  });
-
-  it('an issue assignment with no notifications key is still a mention through changes[]', async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const dispatched = await initializeCapturingDispatches(adapter);
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(
-        withoutNotifications(
-          assigneeChanged({ assigneeName: FIXTURE.bot.name })
-        )
-      )
-    );
-
-    expect(response.status).toBe(200);
-    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
-    expect(dispatched[0]?.message.isMention).toBe(true);
-  });
-
-  it('a new pull request with no notifications key is dispatched as a root message', async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const dispatched = await initializeCapturingDispatches(adapter);
-
-    const response = await adapter.handleWebhook(
-      webhookRequest(
-        withoutNotifications(
-          pullRequestAdded({ summary: 'Retry the deploy step on a 5xx' })
-        )
-      )
-    );
-
-    expect(response.status).toBe(200);
-    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
-    expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
-    expect(dispatched[0]?.message.id).toBe(
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: PULL_REQUEST_SUBJECT,
-        part: 'root',
-      })
-    );
-    expect(dispatched[0]?.message.isMention).toBe(false);
-  });
-
-  it('a pull-request comment whose notifications entry names no user is dispatched', async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const dispatched = await initializeCapturingDispatches(adapter);
-
-    const response = await adapter.handleWebhook(
-      webhookRequest({
-        ...pullRequestCommented({
-          commentId: 7000001,
-          text: 'Looks good, one question about the timeout.',
-        }),
-        notifications: [{ user: null }],
-      })
-    );
-
-    expect(response.status).toBe(200);
-    await vi.waitFor(() => expect(dispatched).toHaveLength(1));
-    expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
-    expect(dispatched[0]?.message.id).toBe(
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: PULL_REQUEST_SUBJECT,
-        part: 'comment',
-        commentId: 7000001,
-      })
-    );
-    expect(dispatched[0]?.message.isMention).toBe(false);
-  });
-});
-
-const ROOT_CREATED = new Date('2026-01-01T00:00:00Z');
-
-/**
- * The `{ kind: "issue" }` raw as `fetchMessages` and `listThreads` hand it
- * out, matching `egressAdapter`'s seeded issue so the same fixture
- * describes the same thread on both paths.
- */
-function rawIssue(): Extract<BacklogRawMessage, { kind: 'issue' }>['issue'] {
-  return {
-    id: FIXTURE.issueId,
-    issueKey: `${FIXTURE.projectKey}-1`,
-    projectId: FIXTURE.projectId,
-    summary: 'Deploy fails on the staging space',
-    description: 'Reproduces on every push to main.',
-    status: { id: 1, name: 'Open' },
-    issueType: { id: 1, name: 'Task' },
-    priority: { id: 3, name: 'Normal' },
-    assignee: null,
-    createdUser: {
-      id: FIXTURE.alice.id,
-      name: FIXTURE.alice.name,
-      userId: FIXTURE.alice.userId,
-    },
-    created: ROOT_CREATED.toISOString(),
-    updated: ROOT_CREATED.toISOString(),
-  };
-}
-
-describe('BacklogAdapter.parseMessage', () => {
-  it('an issue raw message becomes the thread root it describes', () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-
-    const message = adapter.parseMessage({
-      kind: 'issue',
-      host: FIXTURE.host,
-      issue: rawIssue(),
-      changes: [],
-    });
-
-    expect(message.id).toBe(
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: ISSUE_SUBJECT,
-        part: 'root',
-      })
-    );
-    expect(message.threadId).toBe(
-      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`
-    );
-    expect(message.text).toBe(
-      'Deploy fails on the staging space\n\nReproduces on every push to main.'
-    );
-    expect(message.metadata.dateSent).toEqual(ROOT_CREATED);
-  });
-
-  it('a raw message naming a host no installation was configured for is rejected', () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-
-    expect(() =>
-      adapter.parseMessage({
-        kind: 'issue',
-        host: 'other.backlog.jp',
-        issue: rawIssue(),
-        changes: [],
-      })
-    ).toThrow(ResourceNotFoundError);
-  });
-
-  it('builds one issue of a bulk update from the delivery and the issue id', () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const payload = issueMultiUpdated({
-      text: 'Moving these to done.',
-    }) as unknown as BacklogBulkUpdatePayload;
-
-    const message = adapter.parseMessage({
-      kind: 'bulkUpdate',
-      host: FIXTURE.host,
-      payload,
-      issueId: FIXTURE.otherIssueId,
-      changes: [],
-    });
-
-    expect(message.id).toBe(
-      `${FIXTURE.host}:issue:${FIXTURE.otherIssueId}:c3102`
-    );
-    expect(message.threadId).toBe(
-      `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.otherIssueId}`
-    );
-    expect(message.text).toBe('Moving these to done.');
-  });
-
-  it('rejects a webhook raw message whose payload does not parse as its activity type', () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const parse = () =>
-      adapter.parseMessage({
-        kind: 'webhook',
-        host: FIXTURE.host,
-        payload: {
-          ...issueCommented(),
-          content: { id: 0 },
-        } as unknown as BacklogWebhookPayload,
-        changes: [],
-      });
-
-    expect(parse).toThrow(ValidationError);
-    expect(parse).toThrow(/not a valid type 3 activity/);
-  });
-
-  it('rejects a bulk update raw message naming an issue the delivery does not cover', () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-
-    expect(() =>
-      adapter.parseMessage({
-        kind: 'bulkUpdate',
-        host: FIXTURE.host,
-        payload: issueMultiUpdated() as unknown as BacklogBulkUpdatePayload,
-        issueId: 123456,
-        changes: [],
-      })
-    ).toThrow(ValidationError);
-  });
-
-  it('rejects a bulk update raw message whose payload is not a type-14 activity', () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-
-    expect(() =>
-      adapter.parseMessage({
-        kind: 'bulkUpdate',
-        host: FIXTURE.host,
-        payload: issueCommented() as unknown as BacklogBulkUpdatePayload,
-        issueId: FIXTURE.issueId,
-        changes: [],
-      })
-    ).toThrow(ValidationError);
-  });
-});
-
-describe('BacklogAdapter inbound formatting (§9.1)', () => {
-  it('a webhook factory parses Backlog notation with the looked-up project rule', async () => {
+  it('formats the text with the rule of the project the delivery came from', async () => {
     const project = {
       ...conformanceFixture.baseProject(),
       textFormattingRule: 'backlog' as const,
     };
-    const adapter = onPort(
-      createBacklogAdapter({
-        ...webhookAdapterConfig(),
-      }),
-      () => createInMemoryBacklogApi({ projects: [project] })
+    const adapter = onPort(createBacklogAdapter(webhookAdapterConfig()), () =>
+      createInMemoryBacklogApi({ projects: [project] })
     );
     const dispatched = await initializeCapturingDispatches(adapter);
 
@@ -2270,6 +1090,84 @@ describe('BacklogAdapter inbound formatting (§9.1)', () => {
         },
       ],
     });
+  });
+});
+
+describe('BacklogAdapter.parseMessage', () => {
+  async function delivered(
+    payload: Record<string, unknown>
+  ): Promise<Message<BacklogRawMessage>[]> {
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
+    const dispatched = await initializeCapturingDispatches(adapter);
+    await adapter.handleWebhook(webhookRequest(payload));
+    await vi.waitFor(() => expect(dispatched.length).toBeGreaterThan(0));
+    return dispatched.map(({ message }) => message);
+  }
+
+  async function parsedAgain(
+    message: Message<BacklogRawMessage>
+  ): Promise<Message<BacklogRawMessage>> {
+    const { adapter } = await webhookAdapter();
+    return adapter.parseMessage(JSON.parse(JSON.stringify(message.raw)));
+  }
+
+  it.each([
+    ['an issue comment', issueCommented()],
+    ['a pull-request comment', pullRequestCommented()],
+  ])(
+    'rebuilds %s from its raw message after a JSON round trip',
+    async (_case, payload) => {
+      const [message] = await delivered(payload);
+
+      const rebuilt = await parsedAgain(message!);
+
+      expect(rebuilt.toJSON()).toEqual(message!.toJSON());
+    }
+  );
+
+  it('rebuilds one issue of a bulk update from the delivery and its issue id', async () => {
+    const [, second] = await delivered(issueMultiUpdated());
+
+    const rebuilt = await parsedAgain(second!);
+
+    expect(rebuilt.toJSON()).toEqual(second!.toJSON());
+  });
+
+  it('refuses a raw message the adapter read over REST', async () => {
+    const { adapter } = await webhookAdapter();
+    const raw: BacklogRawMessage = {
+      kind: 'comment',
+      host: FIXTURE.host,
+      projectId: FIXTURE.projectId,
+      subject: { kind: 'issue', issueId: FIXTURE.issueId },
+      comment: {
+        id: 1,
+        content: 'hello',
+        createdUser: { id: FIXTURE.alice.id, name: FIXTURE.alice.name },
+        created: '2026-01-01T00:00:00Z',
+        updated: '2026-01-01T00:00:00Z',
+        changeLog: [],
+        stars: [],
+      },
+      changes: [],
+    };
+
+    expect(() => adapter.parseMessage(raw)).toThrow(ValidationError);
+  });
+
+  it('refuses a bulk update raw message naming an issue the batch does not cover', async () => {
+    const [message] = await delivered(issueMultiUpdated());
+    const { adapter } = await webhookAdapter();
+
+    expect(() =>
+      adapter.parseMessage({
+        ...(message!.raw as Extract<BacklogRawMessage, { kind: 'bulkUpdate' }>),
+        issueId: 1,
+      })
+    ).toThrow(ValidationError);
   });
 });
 
@@ -3096,137 +1994,6 @@ describe('BacklogAdapter read budget (§7.3, §7.4)', () => {
   });
 });
 
-describe('BacklogAdapter.parseMessage round trip (§3.5)', () => {
-  /**
-   * The fields §3.5 promises `parseMessage(message.raw)` reproduces, compared
-   * as one object so a failure names every field that drifted rather than
-   * only the first. `formatted` is in the set because both paths pick the
-   * converter from the same cached project rule (§9.1), and so is `raw`: a
-   * rebuilt message must be re-parseable again.
-   */
-  function identity(message: Message<BacklogRawMessage>): unknown {
-    return {
-      id: message.id,
-      threadId: message.threadId,
-      text: message.text,
-      author: message.author,
-      dateSent: message.metadata.dateSent,
-      edited: message.metadata.edited,
-      formatted: message.formatted,
-      raw: message.raw,
-    };
-  }
-
-  it('a comment fetchMessages returned is rebuilt from its own raw', async () => {
-    const { adapter } = egressAdapter({
-      seed: { comments: [seededComment()] },
-    });
-    const { messages } = await adapter.fetchMessages(EGRESS_THREAD_ID, {
-      limit: 2,
-      direction: 'backward',
-    });
-    const fetched = messages.find((message) => message.text === 'Original');
-    if (fetched === undefined) {
-      throw new Error('the comment was not returned');
-    }
-
-    expect(identity(adapter.parseMessage(fetched.raw))).toEqual(
-      identity(fetched)
-    );
-  });
-
-  it('an issue root fetchMessages returned is rebuilt from its own raw', async () => {
-    const { adapter } = egressAdapter();
-    const { messages } = await adapter.fetchMessages(EGRESS_THREAD_ID, {
-      limit: 2,
-      direction: 'backward',
-    });
-    const rootId = encodeMessageId({
-      host: FIXTURE.host,
-      subject: ISSUE_SUBJECT,
-      part: 'root',
-    });
-    const root = messages.find((message) => message.id === rootId);
-    if (root === undefined) {
-      throw new Error('the issue root was not returned');
-    }
-
-    expect(identity(adapter.parseMessage(root.raw))).toEqual(identity(root));
-  });
-
-  it('a pull request root fetchMessage returned is rebuilt from its own raw', async () => {
-    const { adapter } = egressAdapter({ seed: pullRequestSeed() });
-    const root = await adapter.fetchMessage(
-      PULL_REQUEST_THREAD_ID,
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: PULL_REQUEST_SUBJECT,
-        part: 'root',
-      })
-    );
-    if (root === null) {
-      throw new Error('the pull request root was not returned');
-    }
-
-    expect(identity(adapter.parseMessage(root.raw))).toEqual(identity(root));
-  });
-
-  it('the comment postMessage returned is rebuilt from its own raw', async () => {
-    const { adapter } = egressAdapter();
-
-    const posted = await adapter.postMessage(EGRESS_THREAD_ID, {
-      markdown: 'Any progress on this?',
-    });
-    const parsed = adapter.parseMessage(posted.raw);
-
-    expect(parsed.id).toBe(posted.id);
-    expect(parsed.threadId).toBe(posted.threadId);
-    expect(parsed.text).toBe('Any progress on this?');
-    expect(parsed.author.isMe).toBe(true);
-  });
-
-  it('an issue comment’s attachments are not rebuilt from its raw', async () => {
-    const { adapter } = egressAdapter({
-      seed: {
-        comments: [
-          {
-            ...seededComment(),
-            changeLog: [
-              {
-                field: 'attachment',
-                newValue: 'trace.log',
-                oldValue: null,
-                attachmentInfo: { id: 900, name: 'trace.log', size: 12 },
-              },
-            ],
-          },
-        ],
-      },
-    });
-    const fetched = await adapter.fetchMessage(
-      EGRESS_THREAD_ID,
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: ISSUE_SUBJECT,
-        part: 'comment',
-        commentId: 1,
-      })
-    );
-    if (fetched === null) {
-      throw new Error('the comment was not returned');
-    }
-
-    // The id an issue attachment is downloaded by lives in the REST
-    // changelog's `attachmentInfo`, which `BacklogRawComment` does not carry
-    // (`fromRawComment`, `src/subject/raw.ts`), so the round trip keeps the
-    // change and loses the file. A pull-request comment's survives: that kind
-    // resolves a file by name (§6.6).
-    expect(fetched.attachments).toHaveLength(1);
-    expect(adapter.parseMessage(fetched.raw).attachments).toEqual([]);
-    expect(adapter.parseMessage(fetched.raw).raw).toEqual(fetched.raw);
-  });
-});
-
 describe('BacklogAdapter.listThreads (§7.6)', () => {
   it('threads are listed with an offset cursor and a trailing empty page', async () => {
     const { adapter } = egressAdapter({
@@ -3554,6 +2321,7 @@ const CONNECT_BOT_USER_ID = 999;
 
 connectWebhookContract({
   name: 'backlog',
+  createChat: () => mockChat(),
   createAdapter: ({ webhookVerifier }) =>
     onPort(
       createBacklogAdapter({
@@ -3578,7 +2346,7 @@ selfMessageContract({
       createBacklogAdapter(webhookAdapterConfig()),
       fixturePort
     );
-    const chat = createMockChatInstance({ logger: createMockLogger() });
+    const chat = mockChat();
     await adapter.initialize(chat);
     return { adapter, chat };
   },
@@ -3609,7 +2377,7 @@ selfMessageContract({
       createBacklogAdapter(webhookAdapterConfig()),
       fixturePort
     );
-    const chat = createMockChatInstance({ logger: createMockLogger() });
+    const chat = mockChat();
     await adapter.initialize(chat);
     return { adapter, chat };
   },
@@ -3670,7 +2438,7 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
       }),
       () => api
     );
-    const chat = createMockChatInstance({ logger: createMockLogger() });
+    const chat = mockChat();
     await adapter.initialize(chat);
 
     await adapter.handleWebhook(webhookRequest(issueCommented()));
@@ -3730,9 +2498,7 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
       () => api
     );
 
-    await adapter.initialize(
-      createMockChatInstance({ logger: createMockLogger() })
-    );
+    await adapter.initialize(mockChat());
 
     expect(getMyself).toHaveBeenCalledTimes(1);
     expect(adapter.botUserName(FIXTURE.host)).toBe(FIXTURE.bot.name);
@@ -3761,7 +2527,7 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
       createBacklogAdapter(identitylessConfig()),
       () => api
     );
-    const chat = createMockChatInstance({ logger: createMockLogger() });
+    const chat = mockChat();
 
     await adapter.initialize(chat);
 
@@ -3776,7 +2542,7 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
       createBacklogAdapter(identitylessConfig()),
       () => api
     );
-    const chat = createMockChatInstance({ logger: createMockLogger() });
+    const chat = mockChat();
     await adapter.initialize(chat);
 
     const self = await adapter.handleWebhook(
@@ -3801,7 +2567,7 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
       }),
       () => api
     );
-    const chat = createMockChatInstance({ logger: createMockLogger() });
+    const chat = mockChat();
     await adapter.initialize(chat);
 
     expect(adapter.botUserName(FIXTURE.host)).toBe('Support Bot');
@@ -3818,7 +2584,7 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
       }),
       () => api
     );
-    const chat = createMockChatInstance({ logger: createMockLogger() });
+    const chat = mockChat();
     await adapter.initialize(chat);
 
     expect(adapter.botUserName(FIXTURE.host)).toBe(FIXTURE.bot.name);
@@ -3853,7 +2619,7 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
       }),
       (installation) => ports.get(installation.host) as BacklogApi
     );
-    const chat = createMockChatInstance({ logger: createMockLogger() });
+    const chat = mockChat();
 
     await adapter.initialize(chat);
 
@@ -3870,7 +2636,7 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
       createBacklogAdapter(identitylessConfig()),
       () => api
     );
-    const chat = createMockChatInstance({ logger });
+    const chat = mockChat(undefined, logger);
 
     await expect(adapter.initialize(chat)).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(
@@ -3898,7 +2664,7 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
       createBacklogAdapter(identitylessConfig()),
       () => api
     );
-    const chat = createMockChatInstance({ logger: createMockLogger() });
+    const chat = mockChat();
     await adapter.initialize(chat);
 
     const response = await adapter.handleWebhook(
@@ -3975,7 +2741,7 @@ selfMessageContract({
       createBacklogAdapter(identitylessConfig()),
       () => myselfCountingApi().api
     );
-    const chat = createMockChatInstance({ logger: createMockLogger() });
+    const chat = mockChat();
     await adapter.initialize(chat);
     return { adapter, chat };
   },

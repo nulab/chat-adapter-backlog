@@ -156,10 +156,9 @@ Types: `BacklogAdapterConfig`, `BacklogInstallation`, `Resolvable`,
 `BacklogWebhookVerifier` — the config and what it references;
 `BacklogThreadId` and `BacklogSubjectRef`; `BacklogRawMessage` and every
 type it reaches — `BacklogRawIssue`, `BacklogRawComment`,
-`BacklogRawPullRequest`, `BacklogChange` (the raw side's, with ISO strings),
-`BacklogWebhookPayload` and `BacklogBulkUpdatePayload` with the
-`BacklogActivity*` shapes and the five activity variants they are built from,
-since a consumer that receives a value must be able to name its type;
+`BacklogRawPullRequest`, `BacklogChange` (the raw side's, with ISO strings)
+and `BacklogWebhookPayload`, since a consumer that receives a value must be
+able to name its type;
 `BacklogMessageId`, `BacklogMessagePart` and `BacklogUserId`, which the two
 decoders return; `BacklogPostableExtras`, without which the Backlog-only
 field of §3.4 cannot be typed at all;
@@ -188,9 +187,8 @@ and fixtures.
 Nothing from `zod` appears in an exported type, and `chat` and `backlog-js`
 are the only modules `dist/index.d.ts` may import. `scripts/check-published-types.mjs`
 fails `pnpm build` on any other, and on a type the declarations contain but
-do not export. The first rule is why
-`BacklogWebhookPayload` and `BacklogBulkUpdatePayload` are declared by hand in
-`src/types.ts` rather than aliased to a `z.infer`.
+do not export. The first rule is why `BacklogWebhookPayload` is declared in
+`src/types.ts` rather than aliased to a `z.infer` (§3.5).
 
 `backlog-js` does appear in one, and the exception is deliberate:
 `BacklogAdapter.client(host)` returns the configured `Backlog` client the
@@ -245,7 +243,6 @@ interface BacklogAdapterConfig {
   webhookVerifier?: BacklogWebhookVerifier;
   userName?: string;
   logger?: Logger;
-  maxWebhookBodyBytes?: number;
 }
 type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | Promise<unknown>;
 ```
@@ -262,7 +259,6 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 | `webhookVerifier` | function | — | none | When set, replaces the secret check for every installation (D2). |
 | `userName` | `string` | first installation's bot name, configured or fetched | none | Non-empty. Exposed to the core as `adapter.userName`. |
 | `logger` | `Logger` (from `chat`) | `new ConsoleLogger("info").child("backlog")` | none | Replaced by `chat.getLogger("backlog")` in `initialize`. |
-| `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | none | Positive integer. Larger bodies → 413 (§5.1) ⚑. |
 
 Environment fallbacks apply **only** to shape A and only when the corresponding
 field is absent from `config` (an explicit empty string is a validation error,
@@ -397,7 +393,7 @@ Extras are read with a strict schema: a present-but-mistyped extra is a
 ```ts
 type BacklogRawMessage =
   | { kind: "webhook"; host: string; payload: BacklogWebhookPayload; changes: BacklogChange[] }
-  | { kind: "bulkUpdate"; host: string; payload: BacklogBulkUpdatePayload; issueId: number;
+  | { kind: "bulkUpdate"; host: string; payload: BacklogWebhookPayload; issueId: number;
       changes: BacklogChange[] }
   | { kind: "comment"; host: string; projectId: number; subject: BacklogSubjectRef;
       comment: BacklogRawComment; changes: BacklogChange[] }
@@ -405,42 +401,33 @@ type BacklogRawMessage =
   | { kind: "pullRequest"; host: string; pullRequest: BacklogRawPullRequest; changes: [] };
 ```
 
-`parseMessage` accepts **all five** variants. The last three are the ones the
-adapter produces itself — `fetchMessages`, `fetchMessage`, `listThreads`,
-`postMessage` and `editMessage` put them on the messages they return — and `parseMessage(message.raw)` rebuilds such a message with **no
-API call**, reproducing its `id`, `threadId`, `text`, `formatted`, `author`,
-`metadata.dateSent`, `metadata.edited` and `raw`. That is what makes a
-`Message` recoverable from the `raw` alone, which is all the core serialises
-into the state adapter. It holds because `parseMessage` builds them through the
-same `buildRootMessage`/`buildCommentMessage` the reads use, not through a
-second builder of its own; §12.2 asserts the round trip on each of the three.
-One field is **not** reproduced: an issue comment's `attachments`, because the
-download id lives in the REST changelog's `attachmentInfo` and
-`BacklogRawComment` does not carry it (§6.6, the same trade `src/index.ts`
-records for the user fields). A pull-request comment's attachments do survive
-— that kind resolves a file by name. `formatted` follows the **cached**
-formatting rule like every other `parseMessage` call (§9.1), so a cold cache
-renders Markdown and warns. A raw naming a host no installation was configured
-for is a `ResourceNotFoundError`.
+`payload` is the delivery as the webhook schema (§5.2) parsed it: every key
+Backlog sent, unknown ones included, with the normalisations §5.2 lists
+applied — so `content.link[].id` is a number, an absent `notifications[]` is
+`[]`, a changelog comment's text is `""` and a `changes[]` value is a string
+or `null`. `BacklogWebhookPayload` is a union discriminated on `type`, so
+`payload.type === 3` narrows `content`. It is built from `backlog-js`'s
+`Entity.Activity` types with only the measured deviations laid over them —
+those normalisations, the fields a webhook sends as `null`, the populated
+`notifications[]` and the four keys a webhook adds to a pull request — rather
+than declaring every field again (§15 row 32). The keys the schema names are
+validated; the rest carry `backlog-js`'s types without being checked.
 
-`BacklogWebhookPayload` is the union of the recognised issue **and**
-pull-request activities (§5.2), the ones that name one subject; `payload.type`
-tells them apart. As with the bulk variant below, `payload` is the delivery as
-received — but the type declared here is the schemas' **output**, not their
-input, so it claims a validation the value has not had. `parseMessage`
-therefore parses again before reading a field off `raw.payload`, whatever the
-kind, and throws `ValidationError` when it does not parse. Reading through the
-declaration instead is what makes §5.2's `notifications[]` fallback
-unreachable at run time: the schema's `[]` never touches the value a handler
-is given.
-`BacklogBulkUpdatePayload` is the type-14 body instead — it names as many
-issues as `content.link[]` holds, so `bulkUpdate` carries its own `issueId`
-naming which entry this message is (§5.3, D22); `payload` is the whole
-delivery, unstripped, reachable again from every message the batch produced —
-and it is the schema's **input** type, because a delivery writes
-`content.link[].id` and `key_id` as decimal strings (§5.2) and only the
-adapter's own re-parse turns them into numbers; a consumer reading them off
-`raw.payload` gets `string | number`. The `comment` variant names its `subject` explicitly because a
+`bulkUpdate` is one issue of a type-14 bulk update: `payload` is the whole
+delivery, the same on every message the batch produced, and `issueId` names
+which `content.link[]` entry this message is (§5.3, D22). It is its own kind
+because `webhook` guarantees that `payload` names one subject.
+
+`parseMessage` accepts the two webhook kinds and rebuilds the message the
+webhook dispatched, with no API call and without parsing `payload` again; it
+throws `ValidationError` for the three REST kinds, a type-4 `webhook` raw
+(a deletion is no message) and a `bulkUpdate` whose `issueId` is not in its
+batch. The core never calls `parseMessage`
+(`.claude/rules/chat-sdk-core-facts.md`), and a message the adapter read over
+REST is already a `Message`, so no consumer needs the REST kinds rebuilt.
+`formatted` follows the **cached** formatting rule (§9.1).
+
+The `comment` variant names its `subject` explicitly because a
 pull-request comment carries no parent reference of its own
 (`.claude/rules/backlog-pull-request-facts.md`); `BacklogRawComment` therefore
 has no `issueId`. The two root variants stay flat (`issue`, `pullRequest`)
@@ -493,7 +480,7 @@ stated where it differs.
 | `handleWebhook(request, options?)` | implemented | §5. | `chat.webhooks.backlog(req)` |
 | `encodeThreadId` / `decodeThreadId` | implemented | §2 grammar; exact round trip of `{ host, projectId, subject }`, the nested `BacklogSubjectRef` (D-PR2). | never (test kit) |
 | `channelIdFromThreadId` | implemented | First three segments: `backlog:<host>:<projectId>`. | `createThread`, lock key, history |
-| `parseMessage(raw)` | implemented | Synchronous `BacklogRawMessage → Message`, for all five variants: a `webhook` or `bulkUpdate` raw is re-parsed against its schema, and the three the adapter produced itself round-trip back into the message they came from (§3.5). Converter chosen from the **cached** formatting rule of `raw`'s project, Markdown with a `warn` when uncached (§9.1). | never; the webhook factory calls it |
+| `parseMessage(raw)` | implemented | Synchronous `BacklogRawMessage → Message` for the two webhook kinds, rebuilding the message the webhook dispatched without parsing `payload` again; `ValidationError` for the others (§3.5). Converter chosen from the **cached** formatting rule of `raw`'s project, Markdown with a `warn` when uncached (§9.1). | never |
 | `renderFormatted(content, target?)` | implemented | Renders mdast with the converter for `target` (thread or channel id) when its rule is cached; otherwise GFM Markdown ⚑. | never |
 | `postMessage(threadId, message)` | implemented | Adds a comment (§6.1). A channel id — what the core passes for `channel.post` without `postChannelMessage` — is a `ValidationError` (D24). | `thread.post`, object/ephemeral fallbacks, `channel.post` fallback |
 | `editMessage(threadId, messageId, message)` | implemented | Updates comment content (§6.2). | `SentMessage.edit` |
@@ -535,51 +522,34 @@ adapter never throws its own "not supported".
 ### 5.1 Response ladder
 
 The first failure returns. Bodies are plain text. Every 401 uses the identical
-body so an unauthenticated caller cannot distinguish "wrong secret" from
+body, and nothing about which check failed reaches the response or the log
+line, so an unauthenticated caller cannot distinguish "wrong secret" from
 "unknown host" (D2).
 
-**`#` names a row; it is not the order the rows run in.** Rows 1–5 run in one
-of two orders, decided by whether a `webhookVerifier` is configured, and the
-**Position** column gives both. Read the one your deployment has:
+| # | Check | Failure → status, body | Log |
+| --- | --- | --- | --- |
+| 1 | Authenticity — with a `webhookVerifier`: the body is read and `await verifier(request, rawBody)` is truthy and does not throw, then the host resolves. Without one: the host resolves, and `?token=` is present and `timingSafeEqual` to that installation's `webhookSecret` after a byte-length check, **before the body is read**. The host resolves when `?host=` (lowercased) is a configured host, or is absent and exactly one installation is configured (D3) | 401 `Unauthorized` | warn `webhook rejected: unauthorized`; a throwing verifier also logs error `webhook verifier threw` `{error}` (never the body) |
+| 2 | `JSON.parse(rawBody)` succeeds | 400 `Invalid JSON` | warn |
+| 3 | Envelope `{ type: number }` | 400 `Invalid payload` | warn with zod issue paths (no values) |
+| 4 | `type ∈ {1, 2, 3, 4, 14, 18, 19, 20}` — the types the schema in `src/webhook/payload.ts` names, with no switch: 4 is always dispatched when it arrives, 14 fans out to one message per issue (D22), and 21 never is (D-PR5) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
+| 5 | Type-specific schema (§5.2) | 400 `Invalid payload` | warn with zod issue paths (no values) |
+| 6 | `initialize()` has run | 503 `Adapter not initialized` ⚑ (a 5xx is the only answer that could make Backlog redeliver; whether it does is undocumented) | error |
+| 7 | The installation's bot identity is known — configured, fetched by `initialize`, or fetched now by one `GET /users/myself` (§3.2, D23) | 503 `Bot identity unavailable` (without the id the next row cannot run, and dispatching anyway would let the bot answer itself) | error `webhook rejected: bot identity unavailable` `{host, error}` |
+| 8 | `createdUser.id !== botUserId` | 200 `OK` (self message, nothing dispatched) | debug `self message skipped` |
+| 9 | Success | 200 `OK`, returned **before** processing completes | — |
 
-- **`webhookVerifier` configured**: `1 → 2 → 3 → 4`, then rows 6–13 in order.
-  Row 5 never runs.
-- **no verifier** (the shared-secret deployment): `1 → 4 → 5 → 2`, then rows
-  6–13 in order. Row 3 never runs.
+Row 1 reads the body only after the token matched, so a caller who found the
+URL but not the secret costs the process nothing but its headers. The verifier
+is handed the body, so a verifier-protected deployment reads it first; the
+adapter sets no body-size limit of its own, which the platform in front of it
+does (the first-party adapters set none either). The method is not checked:
+Backlog only POSTs, and anything else fails row 1 or row 2 like any other
+request that is not a delivery.
 
-| # | Position (verifier / no verifier) | Check | Failure → status, body | Log |
-| --- | --- | --- | --- | --- |
-| 1 | 1 / 1 | `request.method === "POST"` | 405 `Method not allowed` | debug |
-| 2 | 2 / **4** | Body readable as text and ≤ `maxWebhookBodyBytes` (also checked against `Content-Length` before reading) ⚑ | 400 `Unreadable body` / 413 `Payload too large` | warn `webhook rejected` `{reason}` |
-| 3 | 3 / — | If `webhookVerifier` is configured: `await verifier(request, rawBody)` is truthy and does not throw | 401 `Unauthorized` | warn `webhook rejected` `{reason: "verifier"}` (error message logged, never the body) |
-| 4 | 4 / **2** | Resolve installation: `?host=` (lowercased) is a configured host; when absent, exactly one installation is configured (D3) | 401 `Unauthorized` | warn `{reason: "unknown_host" \| "missing_host"}` |
-| 5 | — / **3** | If no verifier: `?token=` present and `timingSafeEqual` to the installation's `webhookSecret` after a byte-length check | 401 `Unauthorized` | warn `{reason: "missing_token" \| "token_mismatch"}` |
-| 6 | 5 / 5 | `JSON.parse(rawBody)` succeeds and yields an object | 400 `Invalid JSON` | warn |
-| 7 | 6 / 6 | Envelope `{ type: number }` | 400 `Invalid payload` | warn |
-| 8 | 7 / 7 | `type ∈ {1, 2, 3, 4, 14, 18, 19, 20}` — `DISPATCHED_ACTIVITY_TYPES` in `src/webhook/payload.ts`, with no switch: 4 is always dispatched when it arrives, 14 fans out to one message per issue (D22), and 21 never is (D-PR5) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
-| 9 | 8 / 8 | Type-specific schema (§5.2) | 400 `Invalid payload` | warn with zod issue paths (no values) |
-| 10 | 9 / 9 | `initialize()` has run | 503 `Adapter not initialized` ⚑ (a 5xx is the only answer that could make Backlog redeliver; whether it does is undocumented) | error |
-| 11 | 10 / 10 | The installation's bot identity is known — configured, fetched by `initialize`, or fetched now by one `GET /users/myself` (§3.2, D23) | 503 `Bot identity unavailable` (without the id the next row cannot run, and dispatching anyway would let the bot answer itself) | error `webhook rejected: bot identity unavailable` `{host, error}` |
-| 12 | 11 / 11 | `createdUser.id !== botUserId` | 200 `OK` (self message, nothing dispatched) | debug `self message skipped` |
-| 13 | 12 / 12 | Success | 200 `OK`, returned **before** processing completes | debug |
-
-**Why the split.** The verifier is handed the body, so a verifier-protected
-deployment cannot authenticate before buffering it; row 3 before row 4 also
-keeps that deployment from revealing whether a host is configured.
-`connectWebhookContract` requires only that the verifier be called with
-`(Request, string)` — a buffered body, hence row 2 before row 3 — and that a
-verifier win over a configured secret; the position of row 4 is this
-adapter's choice, not the contract's.
-
-With no verifier, nothing before row 5 reads the body, so buffering it first
-would let anyone who has found the URL make the process hold
-`maxWebhookBodyBytes` per request, and would answer 413 to a caller that never
-proved it knows the secret. Authenticating first costs an unauthenticated
-request nothing but its headers. The observable difference is which 4xx an
-oversized unauthorised body gets — 401, not 413 — so the statuses such a
-caller can distinguish shrink from {405, 400, 413, 401} to {405, 401}. Either
-way row 4 precedes row 5, because the secret being compared is per
-installation.
+A body that passes the schema but carries an id the id codec rejects (§2.2) —
+`content.id: 0`, say — is not given a 400 of its own: the body is
+authenticated, and the codec's `ValidationError` surfaces from
+`handleWebhook` or from the dispatched factory.
 
 No timestamp-staleness window is applied ⚑, deliberately departing from
 what other adapters do: Backlog's payload timestamp is unsigned and therefore
@@ -587,121 +557,56 @@ attacker-controlled, so a window adds no replay protection, while legitimate
 redeliveries have been measured arriving ~20 minutes late (`.claude/rules/backlog-webhook-facts.md`).
 
 On success the adapter calls
-`this.chat.processMessage(this, threadId, factory, options)` with
-`factory = async () => { await this.ensureFormattingRule(host, projectId); return this.parseMessage(raw); }`
-and attaches a `.catch` that logs `error` `inbound processing failed`
-`{host, threadId, messageId}` — the core registers the task with
-`options.waitUntil` itself. The response does not await the factory.
-A formatting-rule lookup that fails inside the factory falls back to Markdown
-(§9.1), so the message is delivered rather than lost.
+`this.chat.processMessage(this, threadId, factory, options)` once per message
+(once per issue for a type 14), with a `factory` that waits for the project's
+formatting rule — one lookup shared by every factory of the delivery — and
+builds the message from the parsed activity. A `.catch` on the returned
+promise logs `error` `inbound processing failed` `{host, threadId, error}`;
+the core registers the task with `options.waitUntil` itself. The response does
+not await the factory. A formatting-rule lookup that fails inside the factory
+falls back to Markdown (§9.1), so the message is delivered rather than lost.
 
 ### 5.2 Payload schema
 
 The body is one Activity object as returned by
-[Get Recent Updates](https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/);
-Backlog publishes no dedicated webhook-payload page, and measured payloads
-match the activity shape in the envelope but **not** field for field: a
-webhook body additionally carries the issue's snapshot (`assignee`, `status`,
-`priority`, …), spells one key `externalFileLinks` where the activity form says
-`external_file_links`, and omits the activity form's `field_text` inside
-`changes[]` (measured 2026-09-06,
-`.claude/rules/backlog-webhook-facts.md`). The schema is **tolerant of unknown
-keys** everywhere (`field_text`, `type` inside `changes[]`,
-`shared_files`, `status`, `priority` … are all seen in real payloads) and
-`raw.payload` is the parsed body as received, not a stripped copy.
+[Get Recent Updates](https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/),
+though not field for field — a webhook body adds the issue's snapshot, and the
+two forms differ in a few keys (`.claude/rules/backlog-webhook-facts.md`,
+`.claude/rules/backlog-pull-request-facts.md`). One schema,
+`src/webhook/payload.ts`, parses it: a discriminated union on `type` of loose
+objects, so every key it does not name is kept, and its output is what
+`raw.payload` carries (§3.5). Nothing downstream parses the body again.
 
-Required (400 when missing): `type` number; `created` a string that names an
-instant — `Date.parse` yields a finite value, which is the property the two
-readers of it need (`:u:<created>` message ids in `src/ids.ts` and
-`metadata.dateSent`), not a grammar: a form Backlog widens to milliseconds or
-a numeric offset parses, `""` and `"yesterday"` are the 400; `project.id`
-number; `createdUser.id` number; `createdUser.name` string; `content.id`
-number; for types 18–20 additionally `content.number` number and
-`content.repository.id` number; for type 14 `content.link[]` **instead of**
-`content.id`, with `content.link[].id` on every entry (a bulk update carries
-no `content.id` and no per-issue snapshot at all). `content.key_id`, `project.projectKey` and
-`content.repository.name` are optional — display data, never identity — but
-the last two are **captured** when present (§7.3: they are the names a
-pull-request URL needs and the REST object lacks).
+Required (400 when missing or of the wrong type): `type`, `created`,
+`project.id`, `createdUser.id`, `createdUser.name`; `content.id` on types 1–4;
+`content.summary` and a nullable `content.description` on type 1;
+`content.number` and `content.repository.id` on types 18–20 — a pull request's
+own `content.id` addresses nothing and is not read; `content.link[]` with an
+`id` on every entry on type 14, which has no `content.id`. Everything else is
+optional, `content.repository.name` among it, which is captured when present
+(§7.3: the REST pull-request object lacks it).
 
-The top-level `notifications[]` is read but can never make a body invalid: an
-absent array and an array in a shape not measured here both mean "this
-delivery says nothing about who was notified", and neither is worth losing a
-message over, so the field falls back to `[]` instead of failing (§5.4 rule 6).
+The schema normalises, and these are the only normalisations anywhere:
 
-Two more fields cannot make a body invalid, for the same reason and with the
-same consequence — a 400 loses the comment the delivery carries, and Backlog
-never sends it again:
+- `notifications[]`, absent (every body replayed from the activity API) or in
+  a shape not measured, reads as `[]` rather than costing the message (§5.4
+  rule 6).
+- `content.link[].id` on type 14 is a decimal string over the webhook and a
+  number from the activity API; both read as a number.
+- A `changes[]` `new_value` or `old_value` reads as a string, and as `null`
+  when it is absent — a type 14 sends no `old_value` — or in a shape not
+  measured, such as a custom attribute serialised some other way.
+- A changelog comment's `content` is `null` over the webhook and `""` over
+  REST (measured); it reads as `""`.
+- An absent `content.comment` or `content.assignee` reads as `null`, and an
+  absent `content.changes[]` or `content.attachments[]` as `[]`.
 
-- `changes[].new_value` and `.old_value` fall back to `null` when the value is
-  neither a string nor a number. The value system is Backlog's own and only
-  partly measured (a status as an id string, an assignee as a display name),
-  so a custom attribute serialised some other way reads as "no value here"
-  rather than costing the message. `raw.payload` still carries what was sent.
-- `attachments[].size` is optional and falls back to absent: `null` and any
-  other shape read as "this delivery says no size". It reaches
-  `Attachment.size` and nothing else; only `attachments[].id` addresses the
-  file.
-
-`attachments[].name`, by contrast, stays required, and the asymmetry with the
-REST side — where `src/client/schemas.ts` makes `name` and `size` both
-optional — is deliberate. There, two Backlog doc pages disagree about which
-keys a `changeLog` attachment carries at all; here every measured payload
-names its files. And the fallbacks are not comparable: an absent `size` loses
-nothing a consumer can act on, while an absent `name` would leave the adapter
-either inventing a file name or dropping the file list. A measurement of an
-unnamed webhook attachment is what would change this, not the symmetry with
-the other schema.
-
-| Field | Type 1 | Type 2/3 | Type 4 | Type 18 | Type 19/20 |
-| --- | --- | --- | --- | --- | --- |
-| `content.summary`, `content.description` | read (`description` nullable) | ignored | — | read | ignored |
-| `content.assignee` | `{ id, name, … } \| null`; always sent on a webhook, `null` when unassigned (measured 2026-09-06), optional in the schema because the activity form omits it | sent, same shape; ignored — the **current** assignee, repeated on every delivery, so an assignment is read from `changes` instead | — | `{ id, name, … } \| null`, webhook-only (measured 2026-09-06); the assignment at creation, read as a mention | sent, same shape; ignored — the **current** assignee, as on 2/3 |
-| `content.comment` | absent | `{ id: number, content: string \| null } \| null` | — | `null` | `{ id, content } \| null` |
-| `content.changes[]` | absent | `{ field: string, new_value?: string \| number \| null, old_value?: … }[]` optional; a value of any other type reads as `null` | — | `[]` | same shape as 2/3 |
-| `content.attachments[]` | `{ id, name, size? }[]` optional | same | — | optional (not measured on the activity form) | optional |
-| `content.number`, `content.repository.{id,name}` | — | — | — | required / required + optional | same |
-| `content.issue` | — | — | — | `{ id, key_id, issue_key?, summary, description } \| null`, the linked issue; display data (D-PR6) | same |
-| `createdUser.userId` | `string \| null` optional (Nulab-account users have none) | same | same | same | same |
-| `notifications[]` (top level, not under `content`) | `{ user: { id }, reason? }[]`, read for mention detection (§5.4 rule 6); never required, never a 400 | same | same | same | same |
-
-Type 14 is off that table because its `content` shares no field with the
-others (measured on a development space, 2026-09-06). It is also not decided by
-how many issues the batch covered: **one** issue updated from the issue list
-arrives as a type 14 with a single-entry `link[]`, while the same field changed
-on that issue's own page arrives as a type 2 (measured 2026-09-06). The screen
-the edit was made from is what picks the type, so nothing may read a `link[]`
-of length 1 as "really a type 2":
-
-| Field | Type 14 |
-| --- | --- |
-| `content.link[]` | required, one entry per issue the batch touched: `{ id, key_id?, title?, comment? }` |
-| `content.link[].id`, `.key_id` | the issue id and key — decimal **strings** over the webhook, numbers from `GET /space/activities`; both forms parse |
-| `content.link[].comment` | `{ id: number, content: string \| null } \| null` optional — present on every measured entry, `content: ""` when the comment box was empty, and `id` is a comment that really exists on that issue |
-| `content.comment` | `{ content: string \| null }` optional — the text as typed, with **no `id`**; the ids are on the entries |
-| `content.changes[]` | `{ field, new_value?, type }[]` optional, describing the batch; **no `old_value`** |
-| `content.tx_id` | the transaction, string or number; not read |
-| `content.individual_update` | boolean, webhook-only, `false` on all six measured deliveries; the bulk update screen has no per-issue value entry, so no known operation produces `true`; read as data, never branched on |
-| `notifications[]` (on the envelope, not `content`) | `[]` when the batch changed no assignee; one reason-1 entry **per issue** when it did, the same user repeated. An entry has `id`, `alreadyRead`, `reason`, `resourceAlreadyRead` and `user` and names **no issue** |
-
-The webhook form of types 18–20 is the activity form plus four keys —
-`assignee`, `base`, `branch` and `diff` — measured on both forms and diffed
-against each other by activity id (measured on a development space,
-2026-09-06, `.claude/rules/backlog-pull-request-facts.md`). `base` and
-`branch` are the branch names; `diff` is a diff(1)-style body carried only by
-the type 19 that changed the description, and is named by no Backlog document.
-Two of the four are not pull-request-specific: issue types 2 and 3 carry
-`assignee` and `diff` with the same meanings. The schemas name all of them as
-the record of the measurement, and nothing reads `base`, `branch` or `diff`,
-which costs a consumer nothing either way: `raw.payload` is the parsed body,
-so an unread key is not a lost one.
-
-A pull-request webhook's top-level `notifications[]` **is populated**, as an
-issue webhook's is; only the reason codes for the same act differ — 10 for an
-assignment and 11 for a comment mention, where the issue side uses 1 and 2.
-The activity API returns `[]` for the same activities on both kinds (measured
-2026-09-06), so the webhook remains the only source of it. §5.4 rule 6 reads
-it for every dispatched type alike, with no pull-request branch.
+Type 14 is decided by the screen an edit was made from, not by how many issues
+it touched: one issue ticked on the bulk update screen is a type 14 with a
+single-entry `link[]` (measured 2026-09-06). `content.comment` there is the
+typed text with no id; each `link[].comment` is the comment actually written on
+that issue. `changes[]` and `notifications[]` describe the batch and name no
+issue.
 
 ### 5.3 Activity-type mapping
 
@@ -750,10 +655,8 @@ Behavioural consequences of measured facts (details and dates in
   changelog, and `fetchMessages` returns that comment like any other. Ingress
   therefore expands one delivery into one `chat.processMessage` per entry,
   each into its own thread, each carrying a copy of the batch's `changes[]`.
-  The type-specific schema runs once before dispatch and `link[]` is projected
-  once; each lazy message factory closes over its validated target. A factory
-  does not re-parse the full payload or search `link[]` again. `parseMessage`
-  still revalidates a serialised `raw` supplied independently of ingress.
+  The schema runs once before dispatch; each lazy message factory closes over
+  the parsed activity and its own `link[]` entry.
   Three shape details differ from every other type and are load-bearing:
   `content.link[].id` and `key_id` are decimal **strings** over the webhook
   (numbers from `GET /space/activities`); `changes[]` carries `field`,
@@ -1878,13 +1781,12 @@ marker has `postMessage`'s `{ raw }` postable, which bypasses the converter
   `https://<configured host>/api/v2/...`; `rehydrateAttachment` refuses URLs on
   any other host. HTTPS is always used; no redirects are followed for
   downloads.
-- **Body size**: bounded by `maxWebhookBodyBytes` (description edits can carry
-  two full bodies). With no verifier configured, the body is not read until the
+- **Body size**: the adapter sets no limit of its own; the platform in front
+  of it does. With no verifier configured, the body is not read until the
   token has matched (§5.1), so an unauthenticated caller cannot make the
   process buffer it. A verifier-protected deployment has to buffer first — the
-  verifier is given the body — and bounds the exposure with
-  `maxWebhookBodyBytes` alone; a deployment that cannot accept that puts the
-  check in front of the function (a reverse proxy, an IP allowlist) instead.
+  verifier is given the body — so one that cannot accept that puts the check
+  in front of the function (a reverse proxy, an IP allowlist) instead.
 - **Webhook URL hygiene**: README instructs registering
   `activityTypeIds: [1, 2, 3, 14, 18, 19, 20]` (plus 4 if deletion events are
   wanted; 21 was not observed and is not registered, D-PR5), never `allEvent`
@@ -1933,35 +1835,16 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   matches (a real `Chat` answers it once); construction from
   `BACKLOG_HOST`, `BACKLOG_API_KEY` and `BACKLOG_WEBHOOK_SECRET` alone;
   unchanged by a `userName` override, unknown host → `ResourceNotFoundError`.
-- **webhook**: one test per ladder row in §5.1 (405, 400 unreadable, 413, 401
-  verifier false/throw/`undefined`/truthy non-boolean, 401 unknown host, 401
-  missing host with two
-  installations, 200 missing host with one installation, 401 missing/wrong
-  token, 400 invalid JSON, 400 no type, 200 ignored 14/17/99, 400 schema, 503
-  uninitialised, 200 self, 200 dispatched); identical 401 bodies; both
-  orders of §5.1 rows 2/4/5 (with no verifier, an oversized body with a wrong
-  token or an unknown host is a 401 and `request.bodyUsed` is still `false`;
-  with a verifier, the same request is a 413 and the verifier never runs); fixture-driven
-  mapping for: type 3 comment, type 1 with and without bot assignee, type 2
-  status change, type 2 assignee change (`content: null`), type 2 description
-  edit, type 2 attachment add via changelog comment, type 2 without comment
-  (`:u:`), type 3 with attachments, type 4 deletion, comment+status in one
-  event; unknown keys preserved in `raw.payload`; a `notifications[]` that is
-  absent or in a shape the schema replaces still dispatches, on an issue
-  **and** a pull-request type, with detection falling back to the text and to
-  `changes[]`; a `raw.payload` that does not parse → `ValidationError` instead
-  of a message; `isMention` for every §5.4 rule including the negative cases;
-  same payload to two hosts yields two threads and two distinct message ids;
-  processing runs after the 200 and a throwing factory is logged, not thrown.
-- **parseMessage**: each of the five §3.5 variants; a `webhook` payload that
-  does not parse, a type 4 or 14 `webhook` payload, a `bulkUpdate` naming an
-  issue the delivery does not cover and one whose payload is not type 14 all
-  → `ValidationError`; an unconfigured host → `ResourceNotFoundError`; and the
-  round trip on each of the three the adapter produces — a comment and an
-  issue root from `fetchMessages`, a pull-request root from `fetchMessage`,
-  and the comment `postMessage` returned — asserted over `id`, `threadId`, `text`, `formatted`, `author`,
-  `metadata.dateSent`, `metadata.edited` and `raw` at once, plus the one
-  documented loss (an issue comment's `attachments`).
+- **webhook**: every §5.1 row at `handleWebhook`; path-secret and verifier
+  authentication, including the identical 401 and the body left unread on a
+  failed token, at `verifyWebhookRequest`; each §5.2 normalisation once, at the
+  schema; the §5.3 mapping and every §5.4 rule, including the negative cases,
+  at the message builders; processing runs after the 200 and a failed dispatch
+  is logged, not thrown.
+- **parseMessage**: an issue comment, a pull-request comment and one issue of
+  a bulk update each rebuild the dispatched message after a JSON round trip of
+  `raw`; a REST kind and a `bulkUpdate` naming an issue outside its batch →
+  `ValidationError`.
 - **format**: every row of §9.4 and §9.5; single-line `{code}x{/code}`;
   unclosed `{code}`; unclosed `{quote}`; a list whose first marker is the
   deepest, a marker changing kind mid-run, a depth jump, a marker between two
@@ -2020,10 +1903,7 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   subscribed handler with `raw.changes`.
 - **entry point**: `createBacklogAdapter` and `BacklogAdapter` exported;
   `adapter.name === "backlog"`; absent optional members are `undefined`; the
-  hand-written `BacklogWebhookPayload` and `BacklogBulkUpdatePayload` are
-  identical to their schemas' inferred types **in both directions**
-  (`src/webhook/payload.test.ts`, checked by `pnpm typecheck`), and the built
-  `dist/index.d.ts` imports nothing but `chat`
+  built `dist/index.d.ts` imports nothing but `chat`
   (`scripts/check-published-types.mjs`, run by `pnpm build`).
 - **pull requests** (each mirroring an issue-side test through the same
   table-driven suites where one exists): thread ids round-trip for both kinds
@@ -2038,11 +1918,8 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   `fetchMessage(:c)` uses a one-element window and is `null` on an empty page;
   `fetchThread`/`fetchSubject` carry `kind`/`type` for both kinds and omit
   `url` when a name lookup fails; the repository name from a webhook spares
-  the next `fetchThread` a Get Git Repository; `rehydrateAttachment` accepts both URL shapes; a dispatch on a
-  subject's kind exists only in `src/subject/client.ts` and the id codec
-  `src/ids.ts` (`src/subject/containment.test.ts` greps `src/` for the line
-  shapes its header enumerates and fails on a third module — a tripwire over
-  the shapes a dispatch is written in, not a proof that none exists).
+  the next `fetchThread` a Get Git Repository; `rehydrateAttachment` accepts
+  both URL shapes.
 
 ### 12.3 Opt-in live suite
 
@@ -2128,9 +2005,7 @@ for one scratch space is worse than requiring the two to share it.
 - **CLAUDE.md**: "State of the repo" rewritten once the placeholder is gone;
   the layout paragraph naming `src/subject/*` and saying that kind-specific
   behaviour lives there and nowhere else, with the two-module containment rule
-  (`src/subject/client.ts` and `src/ids.ts`,
-  `src/subject/containment.test.ts` failing on a third for the shapes it can
-  see); the raw-versus-domain paragraph pointing at `src/index.ts`'s header
+  (`src/subject/client.ts` and `src/ids.ts`); the raw-versus-domain paragraph pointing at `src/index.ts`'s header
   rather than restating it; the smoke-test paragraph updated to the new
   assertion.
 - **CI smoke tests** (`ci.yml`), two jobs against two different artifacts. The
@@ -2253,27 +2128,27 @@ open list.
 | 1 | D1 config shape: single-space fields with env fallbacks **and** `installations[]` | **confirmed** — both shapes, mutually exclusive, a host-keyed map inside | The constructor rejects the two shapes together, an empty `installations[]`, two installations on one host, and both credential environment variables set together (`src/adapter.ts`) — while an explicit credential ignores the other's leftover variable rather than failing, which is #90's fix and not an oversight; `src/adapter.test.ts` "installations and single-space fields together are rejected", "two installations on the same host are rejected", "constructs from environment variables when config is empty", "rejects both credentials in the environment, naming the variables", "an explicit apiKey ignores an access token left in the environment" (#10, tightened by #88 and #90) |
 | 2 | D14 formatting-rule cache policy | **changed** — cache for the process's lifetime, no TTL; `fetchChannelInfo` no longer replaces the entry (D14, D24) | `ensureProject` in `src/adapter.ts` is the only writer of `projectCache`; `BacklogAdapter.fetchChannelInfo` reads and returns (#16, #24) |
 | 3 | `renderFormatted(content, target?)` second parameter | **confirmed** — accepted, and used: a cached rule for the target's channel picks the converter, otherwise Markdown, with one `warn` when the target names a channel whose rule is uncached | `BacklogAdapter.renderFormatted` and `channelOfTarget` (`src/adapter.ts`); `src/adapter.test.ts` "without a target renders Markdown", "rendering for a target that is neither a thread nor a channel id renders markdown" (#10, #83) |
-| 4 | Webhook before `initialize()` (§5.1 row 10) | **confirmed** — 503 `Adapter not initialized` | `BacklogAdapter.handleWebhook`; `src/adapter.test.ts` "a webhook before initialize() has run gets 503" (#12) |
-| 5 | Non-POST webhook request | **confirmed** — 405 `Method not allowed` | `src/webhook/verify.ts`; `src/webhook/verify.test.ts` "a non-POST request is rejected with 405" (#12) |
-| 6 | `maxWebhookBodyBytes` knob | **confirmed** — kept, 5 MiB default, 413 | `DEFAULT_MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024` (`src/adapter.ts`), checked against `Content-Length` and again while reading (`src/webhook/verify.ts`); `src/webhook/verify.test.ts` covers both paths, `src/adapter.test.ts` "rejects a maxWebhookBodyBytes of %s" (#12, buffering order fixed by #81) |
+| 4 | Webhook before `initialize()` (§5.1 row 6) | **confirmed** — 503 `Adapter not initialized` | `BacklogAdapter.handleWebhook`; `src/adapter.test.ts` "answers 503 before initialize() has run" (#12) |
+| 5 | Non-POST webhook request | **changed** — no method check: a non-POST fails authentication or JSON parsing like any request that is not a delivery, as in the first-party adapters | §5.1 (#12; removed by the schema-first webhook refactor) |
+| 6 | `maxWebhookBodyBytes` knob | **changed** — removed, with the 413: the adapter sets no body limit and the platform in front of it does (maintainer decision, 2026-09-27) | §5.1, §11 (#12, #81; removed by the schema-first webhook refactor) |
 | 7 | Empty stream posts `" "` | **confirmed**, and widened to an abort that buffered nothing — see §15.2 | `BacklogAdapter.stream` posts `" "` whenever the buffer is empty (#84); the core ends the iterable on abort, so the adapter no longer watches the signal |
 | 8 | Empty summary in `postChannelMessage` | **moot** — `postChannelMessage` was removed (D24) | — |
-| 9 | Type-4 deletion in the first release | **confirmed** — shipped; see §15.2 | `DISPATCHED_ACTIVITY_TYPES` includes 4 and dispatches `chat.processMessageDeleted` unconditionally (`src/webhook/payload.ts`) (#12) |
+| 9 | Type-4 deletion in the first release | **confirmed** — shipped; see §15.2 | The webhook schema names type 4 and `handleWebhook` dispatches `chat.processMessageDeleted` unconditionally (#12) |
 | 10 | Retry defaults | **changed** — one retry and a 60 s ceiling, as confirmed, but no longer overridable: the `rateLimit` config option was removed (D5) | `MAX_RETRIES` / `MAX_WAIT_MS` in `src/client/rate-limit.ts`; `src/client/rate-limit.test.ts` "retries the first 429 when its reset is within a minute", "gives up without waiting when the reset is more than a minute away", "gives up on the second 429 even with an imminent reset" (#9, bounded further by #71, made internal by #111) |
 | 11 | Live-suite variables | **changed** — four, not three: `BACKLOG_LIVE_PULL_REQUEST=<repositoryId>:<number>` joined `BACKLOG_HOST`, `BACKLOG_API_KEY`, `BACKLOG_LIVE_ISSUE_ID` | `src/test/live.test.ts` reads all four and skips the pull-request half independently of the issue half, because a pull request needs a Git-enabled project and two coordinates an issue id cannot carry (#15, #24). The suite itself has still never been run — §15.4 |
 | 12 | No timestamp-staleness window | **confirmed** — accepted, with the departure documented in §5.1; CLAUDE.md's "Don't" list was later reconciled with it rather than left contradicting it | `src/webhook/verify.ts` applies no timestamp check; §5.1 states the departure and its reason (unsigned timestamps give no protection and would drop measured late redeliveries). (#12) |
 | 13 | D-PR10 pull-request comment attachment resolution | **confirmed** — lazy list-and-match by name, newest match wins | The type-20 / `changeLog` attachment builder in `src/subject/pull-request.ts` resolves `fetchData` through `GET …/pullRequests/:number/attachments` only when the consumer asks (#22) |
-| 14 | D-PR2 nested `subject` in the id grammar | **confirmed** — nested `BacklogSubjectRef`, kind keyword explicit for both kinds | `BacklogSubjectRef` (`src/types.ts`) is written and read only by `src/ids.ts` and dispatched only by `subjectClientFor` (`src/subject/client.ts`); `src/subject/containment.test.ts` fails the build on a third module that dispatches on `.kind` — a tripwire, not a proof, and its header lists what it cannot see (#22, weakened deliberately by #83) |
+| 14 | D-PR2 nested `subject` in the id grammar | **confirmed** — nested `BacklogSubjectRef`, kind keyword explicit for both kinds | `BacklogSubjectRef` (`src/types.ts`) is written and read only by `src/ids.ts` and dispatched only by `subjectClientFor` (`src/subject/client.ts`) (#22) |
 | 15 | D-PR7 `listThreads` population | **confirmed** — issues only, documented, with the pull-request route named | `BacklogAdapter.listThreads` and its Why-not comment; a caller holding a repository uses `api(host).listPullRequests`, which spends `read` rather than `search` (measured 2026-09-06); README row (#24, #25) |
-| 16 | Webhook form of types 18–20 | **confirmed** — measured, and rule 4 gained the predicted mention; see §15.2 | Two captures on a deployed receiver, 2026-09-06, matched to their activities by id (`.claude/rules/backlog-pull-request-facts.md`); the schemas name `assignee`, `base`, `branch` and `diff`, and `assigneeIdOf` in `src/webhook/inbound.ts` is read on 18, not on 19 or 20 (#23, narrowed to the root activities by #32) |
+| 16 | Webhook form of types 18–20 | **confirmed** — measured, and rule 4 gained the predicted mention; see §15.2 | Two captures on a deployed receiver, 2026-09-06, matched to their activities by id (`.claude/rules/backlog-pull-request-facts.md`); `src/webhook/inbound.ts` reads `content.assignee` on 18, not on 19 or 20 (#23, narrowed to the root activities by #32) |
 | 17 | D9 rule 6 accepts any `reason` | **confirmed** — measured; a watcher appears in no `notifications[]`; see §15.2 | Measured 2026-09-06 (`.claude/rules/backlog-webhook-facts.md`); `src/webhook/inbound.ts` reads every `reason` (#35) |
 | 18 | P0 documentation title scope: `docs(docs)` or `docs(adapter)` | **confirmed** — `docs(docs)`, and it is now history | #2 landed as `docs(docs): add adapter specification and implementation plan`; CLAUDE.md's scope table lists `docs` as covering `docs/`. Nothing is left to decide |
 | 19 | Optional CI job for the live suite | **confirmed** — skipped | `.github/workflows/ci.yml` has no live job and reads no `BACKLOG_*` secret. The suite is opt-in and self-skipping, so nothing in CI depends on it; revisit only alongside #52 |
 | 20 | D-PR1 channel of a pull-request thread | **confirmed** — the project, exactly as for issues | `channelIdFromThreadId` is the first three segments for both kinds (`src/ids.ts`); the formatting rule and the project cache are per project, and a repository has neither (#22) |
 | 21 | D-PR3 `deleteMessage` on a pull-request thread | **confirmed** — `AdapterError` with `UNSUPPORTED_OPERATION`, thrown before any call | `deleteComment` in `src/subject/pull-request.ts` rejects without a request, citing the measured 400/6 `Undefined resource`; no member has to ask what kind it holds, and the README row is what tells a consumer (#22, #25) |
 | 22 | D-PR4 adapter option to enable or disable pull requests | **confirmed** — none; the webhook subscription is the switch | No `subjects` field exists on `BacklogAdapterConfig` (`src/types.ts`); leaving 18–20 out of `activityTypeIds[]` is the documented way to decline them, and 14 is declined the same way (#22, #23) |
-| 23 | D-PR5 type 21 | **confirmed** — 200 Ignored, and absent from the registration guidance | `DISPATCHED_ACTIVITY_TYPES` excludes 21 (`src/webhook/payload.ts`); `src/webhook/payload.test.ts` "a git push and a type-21 activity are not among them" cites the two measurements that never saw one, the second with 21 subscribed (#23) |
-| 24 | D-PR6 a pull request linked to an issue | **confirmed** — its own thread; the link is data on the pull request and never routes | the `issue` key of the pull request `fetchSubject().raw` carries, and `raw.payload.content.issue`; `src/webhook/payload.test.ts` "a pull request linked to an issue is still its own subject" (#23) |
+| 23 | D-PR5 type 21 | **confirmed** — 200 Ignored, and absent from the registration guidance | The webhook schema does not name 21 (`src/webhook/payload.ts`); `src/webhook/payload.test.ts` "ignores a pull request deletion (type 21) without reading its body" (#23) |
+| 24 | D-PR6 a pull request linked to an issue | **confirmed** — its own thread; the link is data on the pull request and never routes | the `issue` key of the pull request `fetchSubject().raw` carries, and `raw.payload.content.issue`; `src/webhook/payload.test.ts` "addresses a pull-request creation by repository and number, never by its space-wide id or its linked issue" (#23) |
 | 25 | D-PR8 `fetchSubject().type` for a pull request | **confirmed** — `'pull_request'` | `subjectType: 'pull_request'` in `src/subject/pull-request.ts`, documented on `SubjectClient` (`src/subject/client.ts`); `src/reads.test.ts` and `src/subject/pull-request.test.ts` assert it (#22) |
 | 26 | D-PR9 root message part tag | **confirmed** — `r` for both kinds | `src/ids.ts` encodes and parses `r`; `src/ids.test.ts` and the `threadIdContract` roundtrip cover it (#22) |
 | 27 | D15 version line | **confirmed 2026-09-07** — the package's own semver, starting at `0.1.0`; #17, which had it track `chat`'s line, is superseded | #58; DEVELOPMENT.md "Versioning". The dependency **ranges** are the other half of D15 and are unchanged (§14) |
@@ -2281,6 +2156,7 @@ open list.
 | 29 | Whether the live suite must run once against a real space, with the result recorded in the release PR, before `0.1.0` | **open — blocks `0.1.0`** | §15.4. The suite exists and self-skips (row 11); the run itself is issue #52 |
 | 30 | Pull-request notifications in the bot's own feed, and pull-request redelivery: left unmeasured | **open — does not block `0.1.0`** | §15.4. No code reads either |
 | 31 | Catalog listing: community or vendor-official | **open — does not block `0.1.0`** | §15.4. §13 holds the feature-matrix values a listing needs |
+| 32 | The published type of `raw.payload` | **decided 2026-09-27** — `backlog-js`'s `Entity.Activity` types with the measured deviations overlaid, discriminated on `type`, rather than a loose envelope plus `Record<string, unknown>` or hand-written per-type interfaces | `BacklogWebhookPayload` in `src/types.ts`; `src/webhook/payload.test.ts` "hands a consumer a payload whose type narrows its content" |
 
 ### 15.2 The four questions whose answer needed an argument
 
@@ -2380,10 +2256,10 @@ named PR amends, which is where it must be read from.
 | Ids, hosts and numeric config the adapter cannot honour | **changed** — rejected with a `ValidationError` instead of being carried into a request (breaking) | §2 grammar, §3.2 config table (#88) |
 | `dist/index.d.ts.map` | **changed** — no longer emitted; the JavaScript map stays | `files` does not ship `src/`, so a declaration map could only point at sources that are not published (#95, split out of #82) |
 | The d.ts pass under TypeScript 7 | **confirmed** — as it stands | attw at the `esm-only` profile, publint and `scripts/check-published-types.mjs` all pass on the current output; the follow-up #95 named — asserting that the built `.d.ts` still *declares* the package's entry points — is described in that PR and not yet filed (§15.4) |
-| What `parseMessage` accepts | **changed** — all five raw shapes, the ones the adapter itself produces included | §4.1 (#91, issue #49) |
+| What `parseMessage` accepts | **changed** — all five raw shapes (#91, issue #49), then narrowed back to the two webhook kinds: nothing calls it with the other three | §3.5 |
 | `webhookSecret` minimum length | **changed** — under 16 bytes is a hard `ValidationError`, not a warning | §3.2 config table, §11 (#81) |
 | An unknown `textFormattingRule` | **confirmed** — a lookup failure, so Markdown (§9.1) | §9.1 (#83) |
-| What `src/subject/containment.test.ts` proves | **changed** — it is a tripwire, not a proof: it matches only a receiver it can name | The test's own header lists what it cannot see, and CLAUDE.md says the same (#83) |
+| What `src/subject/containment.test.ts` proves | **changed** — a tripwire, not a proof (#83); since deleted, as a test that greps source text | CLAUDE.md, Test strategy |
 | Card fallback text | **changed** — rendered in the project's own notation rather than always Markdown | §9.4 (#85) |
 | Backlog-notation escaping in user text | **not implemented, and carved out** — documented as a limitation | §9.7 (#86). The escape syntax exists; applying it needs a measurement on a notation project, so it is issue **#92**, waiting on the same space as #52 |
 

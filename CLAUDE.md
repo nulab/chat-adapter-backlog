@@ -32,13 +32,7 @@ request belongs, and nowhere else: `subjectClientFor` in
 `src/subject/client.ts` picks the half once, and every member reaches Backlog
 as `decode -> subjectClientFor -> one code path for both kinds`. The only other
 module that may ask what kind a subject is is the codec `src/ids.ts`, which has
-no port to route through (D-PR2). `src/subject/containment.test.ts` greps
-`src/` for a dispatch on `kind` in a third module and fails on one. It is a
-tripwire, not a proof: it reads the text of a line, recognises a receiver only
-by name, and its header lists what it cannot see — read that before trusting a
-green run. It strips comments before matching but not string literals, so
-prose outside a comment (a log message, a fixture) keeps the `kind` read and
-the subject-kind literal on separate lines.
+no port to route through (D-PR2).
 
 **Types.** The target, which the code does not reach yet: `backlog-js`'s
 `Entity.*` types are the source of truth for every Backlog shape, and this
@@ -513,9 +507,7 @@ is no longer a change invisible to consumers (docs/specs/adapter.md §3.1,
   nock. The injected `fetch` is tested at its own layer, with a stubbed `fetch`.
 - **No test restates a fixture or greps source text.** A test that asserts a
   fixture equals itself, or that a string appears in a file, specifies nothing
-  a reader can use. `src/subject/containment.test.ts` predates this rule and
-  is its one standing exception; the refactor decides whether a type-level
-  guard can replace it or it goes.
+  a reader can use.
 - Run the three contract suites from `@chat-adapter/tests`
   (`threadIdContract`, `selfMessageContract`, `connectWebhookContract`)
   against this adapter; they encode invariants that are easy to break
