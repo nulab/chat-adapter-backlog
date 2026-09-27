@@ -87,7 +87,7 @@ emphasis, it is the version that goes stale.
 | ---------------------------------------------------- | ---------------------------------------------------------------- |
 | How the adapter does something                       | the code: names, types, structure                                |
 | What it guarantees, member by member                 | the tests, named after the behaviour                             |
-| The consumer-visible contract and design decisions   | [the spec](./docs/specs/adapter.md): §14 decisions, §15 verdicts |
+| The consumer-visible contract and design decisions   | [the spec](./docs/specs/adapter.md), decisions in §12            |
 | What Backlog and the Chat SDK core do, with the date | `.claude/rules/*.md`                                             |
 | Why one change was made                              | the squash commit body                                           |
 | Why the obvious code would break                     | a comment on that code                                           |
@@ -100,6 +100,11 @@ emphasis, it is the version that goes stale.
   points at the rules file for the evidence. Tests are written
   from it; when code and spec disagree, one of them is wrong and the PR that
   notices fixes it.
+- **README.md** is what a consumer reads, on npmjs.com as well as on GitHub,
+  and says what they need to use the package; the spec is where the rest of
+  the behaviour lives. Every link from it into this repository is absolute
+  (`https://github.com/nulab/chat-adapter-backlog/blob/main/…`), because
+  npmjs.com resolves no relative path (#66).
 - **`.claude/rules/*.md`** load automatically when a `src/**/*.ts` file is
   read, so an agent editing code already has them. They record facts about
   systems this repository does not control, never the adapter's own choices.
@@ -132,7 +137,7 @@ volume is not care.
   plans are records, and an exported doc comment ships to a consumer who has
   neither document. When a Why-not rests on a recorded design decision, end
   it with the **decision id** alone — `(D14)`, `(D-PR3)` — which is stable and
-  leads straight to the rejected alternatives in §14.
+  leads straight to the rejected alternatives in §12.
 - **Measured behaviour: the consequence in the comment, the evidence in the
   rules file.** Write `a comment edit emits no webhook (measured)` and stop.
   The date, the payload excerpt and the counts are written once, in
@@ -585,7 +590,7 @@ Two rules about what an example may do, both load-bearing:
 State is `@chat-adapter/state-memory`, and no example subscribes to a thread.
 
 Environment variable names are shared across examples, not invented per
-example: the five the adapter reads (`BACKLOG_HOST`, `BACKLOG_API_KEY`,
+example: five of the six the adapter reads (`BACKLOG_HOST`, `BACKLOG_API_KEY`,
 `BACKLOG_BOT_USER_ID`, `BACKLOG_BOT_USER_NAME`, `BACKLOG_WEBHOOK_SECRET` — the
 id set in every `.env.example` so no cold start reads it from
 `GET /users/myself`, the name optional) plus
@@ -608,7 +613,7 @@ Anti-patterns observed in real adapter code:
 - **Never skip webhook verification** because the raw body was unavailable —
   that is the case where you must return 401. (Other adapters add a timestamp
   staleness window; this one does not, because a Backlog timestamp is unsigned
-  and a window would only drop measured late redeliveries — spec §5.1.)
+  and a window would only drop measured late redeliveries — spec D28.)
 - **Never swallow a send error and return a fabricated success.** A failed post
   must surface as a rejection, not as a synthetic message object.
 - **Never mutate the caller's message envelope.** Copy before adding
