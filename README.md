@@ -109,7 +109,6 @@ not a request to fall back.
 | `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check entirely — for a reverse-proxy assertion, mTLS or an IP allowlist. |
 | `userName` | `string` | first installation's bot name | Exposed to the core as `adapter.userName`. One string for the whole adapter; per space, read `adapter.botUserName(host)`. |
 | `logger` | `Logger` | `ConsoleLogger("info")` | Replaced by `chat.getLogger("backlog")` in `initialize`. |
-| `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | Positive integer. Larger bodies get a 413. Description edits carry two full bodies. |
 
 ### Bot identity
 
@@ -229,15 +228,12 @@ The adapter compares it in constant time and answers **401 with an identical
 body** for a missing token, a wrong token, an unknown host and a missing host,
 so an unauthenticated caller cannot map your configuration. It also checks the
 token **before it reads the request body**, so a caller who has found the URL
-but not the secret cannot make your function buffer up to
-`maxWebhookBodyBytes` (5 MiB by default) per request — that request costs it a
-401 after its headers, and it never learns what the limit is.
+but not the secret costs your function nothing but a 401 after its headers.
 
 A `webhookVerifier` is the one case where the body is read first: the verifier
-is handed it, so it has to be. `maxWebhookBodyBytes` is then the only bound on
-what an unauthenticated request can make the process hold; lower it, or put
-the check in front of the function — a reverse proxy, an IP allowlist — if
-that matters for your deployment.
+is handed it, so it has to be. The adapter sets no body-size limit of its own;
+put one in front of the function — your platform's request limit, a reverse
+proxy — if that matters for your deployment.
 
 Harden a deployment further with `webhookVerifier`, which replaces the secret
 check: an IP allowlist against
