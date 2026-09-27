@@ -46,7 +46,7 @@ Vercel project. Do this once; an example's own README picks up from here.
 
 ### 1. A bot user, its API key, and its numeric id
 
-Follow **Platform setup** in the [root README](../README.md#platform-setup):
+Follow **Webhook setup** in the [root README](../README.md#webhook-setup):
 create a bot user, add it to the project, issue an API key as that user, and
 read its numeric id from `GET /api/v2/users/myself`.
 
@@ -75,7 +75,7 @@ https://<your-app>/api/webhooks/backlog?token=<secret>
 
 `<secret>` is the value above, exactly as in `BACKLOG_WEBHOOK_SECRET`.
 
-Read **Webhook authenticity** in the [root README](../README.md#webhook-authenticity--read-this)
+Read **Webhook authenticity** in the [root README](../README.md#webhook-authenticity)
 before you deploy anything. The short version: the URL is the credential, so
 keep it out of logs and issue trackers, and register it only in the space
 `BACKLOG_HOST` names.
