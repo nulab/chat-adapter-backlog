@@ -24,12 +24,6 @@ const REPOSITORY_ID = 700;
 const PULL_REQUEST_NUMBER = 12;
 const PULL_REQUEST_COMMENT_ID = 7_000_001;
 
-const rateLimitHeaders = {
-  'X-RateLimit-Limit': '600',
-  'X-RateLimit-Remaining': '599',
-  'X-RateLimit-Reset': '9999999999',
-};
-
 /** One pull request as Backlog puts it on the wire, `issue` left to the caller. */
 function pullRequestWire(issue: unknown) {
   return {
@@ -66,7 +60,6 @@ async function downloadNamed(disposition: string): Promise<string> {
       new Response('file bytes', {
         status: 200,
         headers: {
-          ...rateLimitHeaders,
           'Content-Disposition': disposition,
         },
       }),
@@ -350,7 +343,6 @@ describe('createBacklogJsApi', () => {
       fetch: async () =>
         new Response('<html>sign in</html>', {
           status: 200,
-          headers: rateLimitHeaders,
         }),
     });
 
@@ -361,8 +353,7 @@ describe('createBacklogJsApi', () => {
     const api = createBacklogJsApi({
       host,
       credentials: { apiKey: () => 'test-api-key' },
-      fetch: async () =>
-        new Response(null, { status: 200, headers: rateLimitHeaders }),
+      fetch: async () => new Response(null, { status: 200 }),
     });
 
     await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(NetworkError);
@@ -371,7 +362,6 @@ describe('createBacklogJsApi', () => {
   it('an attachment body read failure becomes a NetworkError', async () => {
     const response = new Response('file bytes', {
       status: 200,
-      headers: rateLimitHeaders,
     });
     vi.spyOn(response, 'arrayBuffer').mockRejectedValue(
       new Error('body stream failed')
@@ -465,7 +455,6 @@ describe('createBacklogJsApi', () => {
       JSON.stringify({ message: 'upstream timeout' }),
       {
         status: 502,
-        headers: rateLimitHeaders,
       }
     );
     Object.defineProperty(response, 'url', {
@@ -494,7 +483,6 @@ describe('createBacklogJsApi', () => {
       let requestSignal: AbortSignal | null = null;
       const response = new Response(JSON.stringify(baseIssue()), {
         status: 200,
-        headers: rateLimitHeaders,
       });
       vi.spyOn(response, 'json').mockImplementation(
         () =>
@@ -539,7 +527,6 @@ describe('createBacklogJsApi', () => {
       let requestSignal: AbortSignal | null = null;
       const response = new Response('', {
         status: 502,
-        headers: rateLimitHeaders,
       });
       vi.spyOn(response, 'json').mockImplementation(
         () =>
@@ -610,7 +597,6 @@ describe('createBacklogJsApi', () => {
       paths.push(url.pathname);
       return new Response(JSON.stringify(pullRequestWire(null)), {
         status: 200,
-        headers: rateLimitHeaders,
       });
     };
     const api = createBacklogJsApi({
@@ -636,7 +622,7 @@ describe('createBacklogJsApi', () => {
     const bodies: string[] = [];
     const fetchStub: typeof globalThis.fetch = async (_input, init) => {
       bodies.push(String(init?.body));
-      return new Response(null, { status: 204, headers: rateLimitHeaders });
+      return new Response(null, { status: 204 });
     };
     const api = createBacklogJsApi({
       host,
@@ -663,7 +649,6 @@ describe('createBacklogJsApi', () => {
         : [pullRequestWire({ id: issueId })];
       return new Response(JSON.stringify(body), {
         status: 200,
-        headers: rateLimitHeaders,
       });
     };
     const api = createBacklogJsApi({
@@ -868,7 +853,6 @@ describe('createBacklogJsApi', () => {
           ? tooManyRequests(now + 2)
           : new Response(JSON.stringify(baseIssue()), {
               status: 200,
-              headers: rateLimitHeaders,
             });
       };
       const api = createBacklogJsApi({
@@ -1110,7 +1094,6 @@ describe('createBacklogJsTransport', () => {
             {
               status: 429,
               headers: {
-                ...rateLimitHeaders,
                 'X-RateLimit-Reset': String(now + 2),
               },
             }
@@ -1118,7 +1101,6 @@ describe('createBacklogJsTransport', () => {
         }
         return new Response(JSON.stringify({ id: issueId }), {
           status: 200,
-          headers: rateLimitHeaders,
         });
       };
       const { client } = createBacklogJsTransport({
@@ -1147,7 +1129,6 @@ describe('createBacklogJsTransport', () => {
           {
             status: 429,
             headers: {
-              ...rateLimitHeaders,
               'X-RateLimit-Reset': String(now + 3_600),
             },
           }

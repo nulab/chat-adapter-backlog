@@ -47,9 +47,10 @@
  * `backlog-js` does, and deliberately: `BacklogAdapter.client(host)` hands
  * out the very client the port speaks through, so a consumer needing an
  * endpoint the port does not name gets the adapter's own 429 retry and error
- * mapping instead of standing up a second client beside it. The cost is that this package's public types move with
- * `backlog-js`'s — a trade taken knowingly, since it is the library this
- * adapter is built on and the one the same vendor ships.
+ * mapping instead of standing up a second client beside it. The cost is that
+ * this package's public types move with `backlog-js`'s — a trade taken
+ * knowingly, since it is the library this adapter is built on and the one the
+ * same vendor ships.
  */
 
 export { BacklogAdapter, createBacklogAdapter } from './adapter';

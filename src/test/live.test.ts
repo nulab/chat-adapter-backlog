@@ -26,8 +26,9 @@ import type { BacklogSubjectRef } from '../types';
  * requests per user per minute
  * (https://developer.nulab.com/docs/backlog/rate-limit/), so a chatty live
  * suite earns an HTTP 429 that looks like a product bug. The issue section
- * spends at most eight write calls, the pull-request section at most six, both run strictly sequentially, and neither creates an issue or
- * touches notifications.
+ * spends at most eight write calls, the pull-request section at most six,
+ * both run strictly sequentially, and neither creates an issue or touches
+ * notifications.
  *
  * The two sections differ in what they leave behind. The issue section deletes
  * everything it creates. The pull-request section deletes nothing, because
