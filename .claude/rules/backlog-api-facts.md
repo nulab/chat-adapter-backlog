@@ -7,9 +7,15 @@ paths:
 
 Endpoint-level facts invisible in `backlog-js` typings and in the code. Facts
 marked "measured" were observed on a real Backlog space on the given date;
-re-measure before changing code that contradicts them. Buckets, error codes
-1–13, auth basics and host domains are in CLAUDE.md § Backlog API landmines and
-are not repeated here.
+re-measure before changing code that contradicts them. The rate-limit buckets
+are in CLAUDE.md § Backlog API landmines and are not repeated here.
+
+## Hosts
+
+- The base URL is `https://<host>/api/v2`, and a space's host may end in
+  `backlog.com`, `backlog.jp` or the legacy `backlogtool.com` (the docs show
+  `backlog.com` and `backlogtool.com`). Take the full host as a string; never
+  accept a subdomain slug and template a fixed domain around it.
 
 ## Endpoints the adapter uses
 
@@ -226,8 +232,16 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
   is 60 s, a common serverless default, dies inside that sleep — after the
   webhook has already answered 200, so the work is lost with no error.
 
-## Errors and auth beyond CLAUDE.md
+## Errors and auth
 
+- The error body is `{"errors":[{"message":"...","code":N,"moreInfo":"..."}]}`
+  with codes 1–13: 1 InternalError, 2 LicenceError, 3 LicenceExpiredError,
+  4 AccessDeniedError, 5 UnauthorizedOperationError, 6 NoResourceError,
+  7 InvalidRequestError, 8 SpaceOverCapacityError, 9 ResourceOverflowError,
+  10 TooLargeFileError, 11 AuthenticationError, 12 RequiredMFAError,
+  13 TooManyRequestsError
+  (https://developer.nulab.com/docs/backlog/error-response/). The HTTP status
+  alone does not classify a failure; `errors[].code` does.
 - The error page maps no code to an HTTP status; only 429 ↔ 13 is stated.
   `backlog-js` throws `BacklogAuthError` for 401 and `BacklogApiError`
   otherwise, `UnexpectedError` when the body is not JSON. Real bodies add an
@@ -235,9 +249,23 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
   (https://developer.nulab.com/docs/backlog/error-response/).
 - The API key acts as its issuing user: `GET /users/myself`, rate limits and
   "own comment" checks all resolve to that user.
-- OAuth: `POST https://{space}/api/v2/oauth2/token`, `expires_in: 3600`,
-  refresh-token lifetime undocumented, no scopes
-  (https://developer.nulab.com/docs/backlog/auth/).
+- An API key travels in the `Backlog-API-Key` header or the documented
+  `?apiKey=` query string; the query form leaks the key into access logs,
+  proxies and error reports (https://developer.nulab.com/docs/backlog/auth/).
+- OAuth 2.0 authorization code grant: `POST https://{space}/api/v2/oauth2/token`,
+  a `Bearer` access token with `expires_in: 3600`, refreshable with
+  `grant_type=refresh_token`; refresh-token lifetime undocumented, no scopes,
+  so a token is all-or-nothing (https://developer.nulab.com/docs/backlog/auth/).
+
+## No realtime transport
+
+- No SSE and no WebSocket exist; push is webhooks only. Anything else polls:
+  `updatedSince` on `GET /issues` (search bucket) has **date** granularity
+  (`yyyy-MM-dd`), so it cannot be a fine-grained cursor on its own, and
+  `GET /notifications` pages by `minId` / `maxId` / `count` (1–100)
+  (https://developer.nulab.com/docs/backlog/api/2/get-issue-list/,
+  https://developer.nulab.com/docs/backlog/api/2/get-notification/). A poller
+  needs a persisted cursor and a backoff.
 
 ## `backlog-js` 0.20.1 specifics
 

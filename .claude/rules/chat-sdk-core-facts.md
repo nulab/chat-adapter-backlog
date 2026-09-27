@@ -89,8 +89,8 @@ wins, so re-verify against the tag before changing code.
   placeholder (`"..."`, none when `fallbackStreamingPlaceholderText === null`),
   `editMessage` every `updateIntervalMs` (default 500 ms via
   `ChatConfig.streamingUpdateIntervalMs`), final edit (`thread.ts:950-1065`);
-  an empty stream posts `" "` (`thread.ts:1042`). Why to override: CLAUDE.md §
-  `stream()` must be overridden.
+  an empty stream posts `" "` (`thread.ts:1042`). Why the adapter overrides it:
+  spec D4.
 - `fromFullStream` (`from-full-stream.ts`, read in the published
   `chat@4.40.0` bundle `dist/chunk-BKACWYIW.js:15-48`, which names that source
   file) is what `thread.post(fullStream)` funnels an AI SDK stream through, and

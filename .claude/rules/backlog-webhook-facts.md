@@ -8,8 +8,8 @@ paths:
 What a Backlog webhook actually delivers, as opposed to what the payload shape
 suggests. Facts marked "measured" were observed on a real Backlog space on the
 given date; when code contradicts one, re-measure on a space before changing
-the code toward intuition. CLAUDE.md § Backlog API landmines already covers the
-no-HMAC problem and activity type ids 1/2/3/17; this file adds what it omits.
+the code toward intuition. Pull-request activities (18–21) are in
+`backlog-pull-request-facts.md`.
 
 ## Payload envelope
 
@@ -359,8 +359,9 @@ label a user sees, and only three fields carry an id:
   The only receiver-side controls are the published sender IP list ("subject to
   change",
   https://support.backlog.com/hc/en-us/articles/360051330313-Webhook-sender-IP-address)
-  and Basic-auth credentials embedded in `hookUrl`. See CLAUDE.md § Backlog API
-  landmines for the path-secret + `webhookVerifier` shape.
+  and Basic-auth credentials embedded in `hookUrl`. The Chat SDK's "verify the
+  signature, else 401" contract therefore cannot be met the usual way; the
+  path-secret + `webhookVerifier` shape the adapter uses instead is spec D2.
 - Outbound timeout, retry count, retry schedule, `User-Agent` and
   `Content-Type` of the webhook request are **not documented** anywhere
   (https://developer.nulab.com/docs/backlog/api/2/add-webhook/ and the support
