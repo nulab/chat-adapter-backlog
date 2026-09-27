@@ -71,6 +71,8 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
   createdUser, created, updated, stars[], notifications[] }`. A comment has
   **no** `attachments[]`; a file added with it appears only as a `changeLog`
   entry with `attachmentInfo: { id, type }` (Get Comment List page).
+- `created` and `updated` are second-granular: an edit within the same second
+  as the post leaves `updated` equal to `created` (measured 2026-09-27).
 
 ## Issue listing
 
@@ -93,6 +95,19 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
   responds **200 with the deleted Comment object**, not 204
   (https://developer.nulab.com/docs/backlog/api/2/update-comment/,
   https://developer.nulab.com/docs/backlog/api/2/delete-comment/).
+- Delete Comment on a comment that added an attachment responds 200, yet the
+  comment stays: `GET` returns it with `content: null` and its `changeLog`
+  `attachment` entry intact, and the attachment stays on the issue
+  (`GET /issues/:id/attachments` still lists it). Deleting that attachment
+  afterwards (`DELETE /issues/:id/attachments/:attachmentId`, 200) does not
+  remove the comment either; it appends another changelog-only comment
+  (`attachment: null <- name`) (measured 2026-09-27).
+- A field change behaves the same: a comment carried by a `PATCH
+  /issues/:id` that changed the priority has `changeLog: [{ field:
+  "priority", newValue, originalValue }]`, and Delete Comment on it responds
+  200 yet leaves it with `content: null` and that entry intact (measured
+  2026-09-27). So any comment with a non-empty `changeLog` survives Delete
+  Comment.
 
 ## `notifiedUserId[]` fails open
 
@@ -182,6 +197,9 @@ does, through `client()`.
 - Download (`GET /issues/:id/attachments/:attachmentId`) needs API auth and
   returns `application/octet-stream`; there is no public URL. `backlog-js`
   returns `{ body: ReadableStream, url, filename, contentType }`.
+- A file attached under a name the issue already has an attachment with is
+  renamed `name (1).ext` (measured 2026-09-27), so the name posted is not
+  always the name read back.
 
 ## Text formatting is a per-project setting
 

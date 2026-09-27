@@ -293,7 +293,7 @@ says otherwise.
 | `renderFormatted(content, target?)` | implemented | §9.1. | never |
 | `postMessage(threadId, message)` | implemented | §6.1. A channel id — what the core passes for `channel.post` — is a `ValidationError` (D24). | `thread.post`, fallbacks |
 | `editMessage(threadId, messageId, message)` | implemented | §6.2. | `SentMessage.edit` |
-| `deleteMessage(threadId, messageId)` | implemented; issues only | §6.3. On a pull-request thread, `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call (D-PR3). | `SentMessage.delete` |
+| `deleteMessage(threadId, messageId)` | implemented; issues only | §6.3. On a pull-request thread, `AdapterError(…, "UNSUPPORTED_OPERATION")` before any call (D-PR3); on an issue comment that records a change, the same before Delete Comment (D31). | `SentMessage.delete` |
 | `addReaction` / `removeReaction` | partial | One star; the emoji is ignored (§6.5). | `SentMessage.addReaction` etc. |
 | `startTyping()` | no-op | Resolves immediately; Backlog has no typing indicator. | `thread.startTyping` |
 | `fetchMessages(threadId, options?)` | implemented | §7.1. | `thread.messages`, `allMessages`, `refresh`, history |
@@ -540,9 +540,14 @@ comment surfaces as `PermissionError`.
 
 ### 6.3 `deleteMessage(threadId, messageId)`
 
+Get Comment, then
 [Delete Comment](https://developer.nulab.com/docs/backlog/api/2/delete-comment/);
-resolves `void`, and a 404 is `ResourceNotFoundError`. On a pull-request
-thread it throws
+resolves `void`, and a 404 is `ResourceNotFoundError`. An issue comment whose
+`changeLog` is not empty — one that added an attachment or changed a field —
+is refused with
+`AdapterError("Backlog keeps an issue comment that records a change or an attachment; edit the comment instead", "backlog", "UNSUPPORTED_OPERATION")`
+before Delete Comment is sent, because Backlog answers 200 but keeps such a
+comment and its attachment (D31). On a pull-request thread it throws
 `AdapterError("Backlog has no endpoint to delete a pull request comment", "backlog", "UNSUPPORTED_OPERATION")`
 before any call (D-PR3).
 
@@ -632,7 +637,9 @@ oldest; the union of all pages in either direction is the root plus every
 comment exactly once; a page never exceeds `limit`. `formatted` comes from the
 project's converter (§9.1), `text` stays Backlog's text. A comment message has
 `edited = comment.updated !== comment.created` and `editedAt`; the root has
-`edited: false`, because `updated` moves on any field change. The list includes
+`edited: false`, because `updated` moves on any field change. Backlog's
+timestamps are second-granular, so an edit made within the second the comment
+was posted reports `edited: false` with no `editedAt`. The list includes
 changelog comments and, on a pull request, the system comment of §5.3.
 
 ### 7.2 `fetchMessage(threadId, messageId)`
@@ -717,7 +724,7 @@ spends:
 | any member that renders or builds a message, `fetchThread` on a pull request | `getProject`, once per project per process (§9.1) | read |
 | `postMessage` | `postSpaceAttachment` per file; `postIssueComments` / `postPullRequestComments` | update |
 | `editMessage` | `patchIssueComment` / `patchPullRequestComments` | update |
-| `deleteMessage` | `deleteIssueComment` | update |
+| `deleteMessage` | `getIssueComment`; `deleteIssueComment` | read, update |
 | `addReaction` / `removeReaction` | one comment read; `postStar` / `removeStar` | read, update |
 | `fetchMessages` | `getIssueComments` / `getPullRequestComments`; `getIssue` / `getPullRequest` for the root | read |
 | `fetchMessage`, `fetchThread`, `fetchSubject` | `getIssueComment`, `getIssue`, `getPullRequest`, `getPullRequestComments`; `getGitRepository` on a name-cache miss | read |
@@ -986,6 +993,7 @@ evidence for a measured reason is in the rules file named.
 | D28 | No timestamp window on webhooks | A Backlog timestamp is unsigned, so a window protects nothing, and redeliveries arrive about 20 minutes late (`backlog-webhook-facts.md`). | Rejecting payloads older than N minutes. |
 | D29 | The adapter does not dispatch the bot's own activity | `selfMessageContract` requires it; the core's `isMe` check is a second line. | Relying on the core alone. |
 | D30 | No webhook body-size limit of the adapter's own, and no 413 | Hosting platforms already cap request bodies, and no consumer needed a second, configurable cap (maintainer decision, 2026-09-27). | A `maxWebhookBodyBytes` option with a 413. |
+| D31 | `deleteMessage` on an issue comment with a non-empty `changeLog` throws `UNSUPPORTED_OPERATION`, after one Get Comment | Backlog answers 200 but keeps any comment that records a change, emptying its content, and keeps an attached file on the issue (`backlog-api-facts.md`); resolving would fabricate a deletion, as in D-PR3. | Sending Delete Comment and resolving; refusing only a comment that added an attachment. |
 | D-PR1 | A pull-request thread's channel is its project | Webhooks carry `project.id`, and the formatting rule is per project. | The repository as channel. |
 | D-PR2 | The kind is explicit in every id, as one nested `BacklogSubjectRef` | Issues and pull requests have different endpoint families, coordinates and comment id sequences (`backlog-pull-request-facts.md`). | A flat optional-field shape; issues as the unmarked default. |
 | D-PR3 | `deleteMessage` on a pull-request thread throws `UNSUPPORTED_OPERATION` before any call | The endpoint does not exist (`backlog-pull-request-facts.md`); a `ValidationError` would blame a correct call; success would be fabricated. | `ValidationError`; a no-op; omitting `deleteMessage` (it is required). |
