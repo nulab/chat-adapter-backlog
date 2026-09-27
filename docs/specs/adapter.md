@@ -3,9 +3,14 @@
 Goal-state specification for the Backlog adapter of Chat SDK (`chat@4.40.0`).
 This document states **what** the finished adapter does — observable behaviour,
 inputs, outputs, edge cases, error classes — precisely enough that tests can be
-written from it before the code exists. **How** the work is ordered lives in
-[docs/plans/adapter-implementation.md](../plans/adapter-implementation.md); the
-constraints both were written under are in [CLAUDE.md](../../CLAUDE.md).
+written from it before the code exists. It is one of the homes CLAUDE.md § Where
+each fact lives assigns: this document owns the consumer-visible contract and
+the design decisions behind it (§14, §15); the tests restate it as executable
+checks; the code implements it without restating it, citing a decision by its
+id (`D14`) where a Why-not comment needs one and never by section number,
+because sections renumber and the ids do not.
+[docs/plans/adapter-implementation.md](../plans/adapter-implementation.md) is
+the record of how the work was ordered, not a second requirement.
 
 Measured Backlog behaviour is summarised here only as far as it changes the
 adapter's observable behaviour. The measurements themselves, with dates and
@@ -56,7 +61,7 @@ git repository as a channel (D-PR1), and listing pull requests through
 
 | Backlog | Chat SDK | Id grammar | Notes |
 | --- | --- | --- | --- |
-| Space | (installation) | `host` — a full hostname such as `example.backlog.com`, `example.backlog.jp`, `example.backlogtool.com` | Never a slug; the domain differs per space (CLAUDE.md "Host"). |
+| Space | (installation) | `host` — a full hostname such as `example.backlog.com`, `example.backlog.jp`, `example.backlogtool.com` | Never a slug; the domain differs per space (`.claude/rules/backlog-api-facts.md` "Hosts"). |
 | Project | Channel | `backlog:<host>:<projectId>` | Numeric project id. Both kinds of thread belong to the project; a git repository is not a channel (D-PR1). |
 | Issue | Thread | `backlog:<host>:<projectId>:issue:<issueId>` | Numeric issue id, never the issue key: renaming a project key rewrites every issue key (measured, `.claude/rules/backlog-webhook-facts.md`). |
 | Pull request | Thread | `backlog:<host>:<projectId>:pr:<repositoryId>:<number>` | Numeric repository id, never the name (`repoIdOrName` accepts either; names can change); `number` is the per-repository number every pull-request endpoint is keyed by. The global pull-request `id` addresses no endpoint and appears only in raw data and metadata (`.claude/rules/backlog-pull-request-facts.md`). |
@@ -467,7 +472,7 @@ No `ZodError` and no `backlog-js` error class ever escapes the package.
 ## 4. Adapter contract coverage
 
 `Adapter<BacklogThreadId, BacklogRawMessage>` in `chat@4.40.0` has 17 required
-and 27 optional members (CLAUDE.md, verified against the shipped `.d.ts`).
+and 27 optional members (verified against the shipped `.d.ts`).
 "Core calls it" lists the runtime call site; "never" means only the adapter or
 the test kit calls it. Every member accepts an issue thread or a pull-request
 thread; the pull-request form is identical unless §6 or §7 says otherwise. Only
@@ -574,7 +579,7 @@ way row 4 precedes row 5, because the secret being compared is per
 installation.
 
 No timestamp-staleness window is applied ⚑, deliberately departing from
-CLAUDE.md's "Don't" list: Backlog's payload timestamp is unsigned and therefore
+what other adapters do: Backlog's payload timestamp is unsigned and therefore
 attacker-controlled, so a window adds no replay protection, while legitimate
 redeliveries have been measured arriving ~20 minutes late (`.claude/rules/backlog-webhook-facts.md`).
 
@@ -1064,12 +1069,12 @@ answers 400 with error code 6 `Undefined resource` (measured 2026-09-06) — and
 Consume the iterable to completion, concatenating `string` chunks and
 `{ type: "markdown_text" }` chunks; ignore `task_update`/`plan_update` chunks.
 Then exactly one `postMessage(threadId, { markdown: buffered })` and return its
-result. Rationale is rate-limit protection (CLAUDE.md "`stream()` must be
-overridden"). `options.signal` aborting ends consumption and posts what was
-buffered so far — `" "` when that is nothing, the same as an empty stream
-(§4.2, §15 question 7): the contract `stream()` keeps whatever ends it is a
-`SentMessage` the caller can edit or delete, and posting nothing would mean
-resolving to `null` after consumption, which question 7 rejected.
+result. Rationale is rate-limit protection (D4). `options.signal` aborting ends
+consumption and posts what was buffered so far — `" "` when that is nothing, the
+same as an empty stream (§4.2, §15 question 7): the contract `stream()` keeps
+whatever ends it is a `SentMessage` the caller can edit or delete, and posting
+nothing would mean resolving to `null` after consumption, which question 7
+rejected.
 
 Consumption is raced against the signal rather than read with `for await`,
 which can only re-check the signal once the next chunk arrives. A source that
@@ -2374,7 +2379,7 @@ open list.
 | 9 | Type-4 deletion in the first release | **confirmed** — shipped; see §15.2 | `DISPATCHED_ACTIVITY_TYPES` includes 4 and dispatches `chat.processMessageDeleted` unconditionally (`src/webhook/payload.ts`) (#12) |
 | 10 | Retry defaults | **changed** — one retry and a 60 s ceiling, as confirmed, but no longer overridable: the `rateLimit` config option was removed (D5) | `MAX_RETRIES` / `MAX_WAIT_MS` in `src/client/rate-limit.ts`; `src/client/rate-limit.test.ts` "retries the first 429 when its reset is within a minute", "gives up without waiting when the reset is more than a minute away", "gives up on the second 429 even with an imminent reset" (#9, bounded further by #71, made internal by #111) |
 | 11 | Live-suite variables | **changed** — four, not three: `BACKLOG_LIVE_PULL_REQUEST=<repositoryId>:<number>` joined `BACKLOG_HOST`, `BACKLOG_API_KEY`, `BACKLOG_LIVE_ISSUE_ID` | `src/test/live.test.ts` reads all four and skips the pull-request half independently of the issue half, because a pull request needs a Git-enabled project and two coordinates an issue id cannot carry (#15, #24). The suite itself has still never been run — §15.4 |
-| 12 | No timestamp-staleness window | **confirmed** — accepted, with the departure documented rather than CLAUDE.md amended | `src/webhook/verify.ts` applies no timestamp check; §5.1 states the departure and its reason (unsigned timestamps give no protection and would drop measured late redeliveries). The plan's rider "amend CLAUDE.md wording for this adapter" was **not** taken up: CLAUDE.md's "Don't" list is generic adapter guidance, and the reader who needs this adapter's choice is reading §5.1 (#12) |
+| 12 | No timestamp-staleness window | **confirmed** — accepted, with the departure documented in §5.1; CLAUDE.md's "Don't" list was later reconciled with it rather than left contradicting it | `src/webhook/verify.ts` applies no timestamp check; §5.1 states the departure and its reason (unsigned timestamps give no protection and would drop measured late redeliveries). (#12) |
 | 13 | D-PR10 pull-request comment attachment resolution | **confirmed** — lazy list-and-match by name, newest match wins | The type-20 / `changeLog` attachment builder in `src/subject/pull-request.ts` resolves `fetchData` through `GET …/pullRequests/:number/attachments` only when the consumer asks (#22) |
 | 14 | D-PR2 nested `subject` in the id grammar | **confirmed** — nested `BacklogSubjectRef`, kind keyword explicit for both kinds | `BacklogSubjectRef` (`src/types.ts`) is written and read only by `src/ids.ts` and dispatched only by `subjectClientFor` (`src/subject/client.ts`); `src/subject/containment.test.ts` fails the build on a third module that dispatches on `.kind` — a tripwire, not a proof, and its header lists what it cannot see (#22, weakened deliberately by #83) |
 | 15 | D-PR7 `listThreads` population | **confirmed** — issues only, documented, with the pull-request route named | `BacklogAdapter.listThreads` and its Why-not comment; a caller holding a repository uses `api(host).listPullRequests`, which spends `read` rather than `search` (measured 2026-09-06); README row (#24, #25) |

@@ -201,8 +201,8 @@ Local-only hook tweaks go in `lefthook-local.yml`, which is gitignored.
 - Name tests after the behavior they specify, not the function they call.
 
 `pnpm test` must stay runnable with no credentials, no network and no Backlog
-space. Platform clients are replaced with `vi.mock`; do not reach for msw or
-nock.
+space. Stub the `backlog-js` client's methods with `vi.fn`; do not maintain a
+fake Backlog, and do not reach for msw or nock.
 
 ### Opt-in live suite
 
@@ -348,6 +348,11 @@ vocabulary, the label each PR needs before `.github/release.yml` can file it
 under the right heading, and how to build a stack of dependent PRs and unwind it
 after the bottom one merges. `.github/pull_request_template.md` is the short
 form you get in the PR form.
+
+The same file says how code is written here, for the same audience: which
+document owns which kind of fact (spec, `.claude/rules/`, tests, commit
+bodies, comments), and that a comment records only why the obvious code was
+not written — never a paraphrase of the spec or a section number.
 
 ## CI
 
