@@ -108,7 +108,6 @@ export function createMultiSpaceAdapter(): BacklogAdapter {
         webhookSecret: 'two-webhook-secret-value',
       },
     ],
-    rateLimit: { maxWaitMs: 5_000 },
   });
 }
 

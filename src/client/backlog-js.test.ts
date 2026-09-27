@@ -763,7 +763,7 @@ describe('createBacklogJsApi', () => {
       expect(attempt).toBe(2);
     });
 
-    it('a 429 whose reset exceeds maxWaitMs throws without waiting', async () => {
+    it('a 429 whose reset is more than a minute away throws without waiting', async () => {
       const now = Math.floor(Date.now() / 1000);
       let attempt = 0;
       const fetchStub: typeof globalThis.fetch = async () => {
@@ -795,7 +795,7 @@ describe('createBacklogJsApi', () => {
       expect(attempt).toBe(1);
     });
 
-    it('retries up to maxRetries, then surfaces the last 429 as a rate-limit error', async () => {
+    it('retries once, then surfaces the second 429 as a rate-limit error', async () => {
       const now = Math.floor(Date.now() / 1000);
       let attempt = 0;
       const fetchStub: typeof globalThis.fetch = async () => {
@@ -814,7 +814,6 @@ describe('createBacklogJsApi', () => {
         host,
         credentials: { apiKey: () => 'test-api-key' },
         fetch: fetchStub,
-        retry: { maxRetries: 2 },
         random: () => 0,
       });
 
@@ -824,39 +823,7 @@ describe('createBacklogJsApi', () => {
       );
       await vi.advanceTimersByTimeAsync(10_000);
       await settled;
-      expect(attempt).toBe(3);
-    });
-
-    it('maxRetries: 0 never retries', async () => {
-      const now = Math.floor(Date.now() / 1000);
-      let attempt = 0;
-      const fetchStub: typeof globalThis.fetch = async () => {
-        attempt += 1;
-        return new Response(
-          JSON.stringify({
-            errors: [{ message: 'Too many requests', code: 13, moreInfo: '' }],
-          }),
-          {
-            status: 429,
-            headers: {
-              'X-RateLimit-Limit': '150',
-              'X-RateLimit-Remaining': '0',
-              'X-RateLimit-Reset': String(now + 1),
-            },
-          }
-        );
-      };
-      const api = createBacklogJsApi({
-        host,
-        credentials: { apiKey: () => 'test-api-key' },
-        fetch: fetchStub,
-        retry: { maxRetries: 0 },
-      });
-
-      await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(
-        AdapterRateLimitError
-      );
-      expect(attempt).toBe(1);
+      expect(attempt).toBe(2);
     });
   });
 
@@ -953,7 +920,7 @@ describe('createBacklogJsApi', () => {
       });
     });
 
-    it('a 429 without rate-limit headers still logs, reporting the full maxWaitMs it would have to block for', async () => {
+    it('a 429 without rate-limit headers still logs, reporting the full minute it blocks for', async () => {
       const logger = createMockLogger();
       const fetchStub: typeof globalThis.fetch = async () =>
         new Response(
@@ -966,18 +933,25 @@ describe('createBacklogJsApi', () => {
         host,
         credentials: { apiKey: () => 'test-api-key' },
         fetch: fetchStub,
-        retry: { maxRetries: 0 },
         logger: () => logger,
       });
 
-      await expect(api.getIssue(issueId)).rejects.toBeInstanceOf(
+      const settled = expect(api.getIssue(issueId)).rejects.toBeInstanceOf(
         AdapterRateLimitError
       );
+      await vi.advanceTimersByTimeAsync(60_000);
+      await settled;
 
-      expect(logger.warn).toHaveBeenCalledWith('rate limited; not retrying', {
-        waitMs: 60_000,
-        attempt: 1,
-      });
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        1,
+        'rate limited; waiting for the limit to reset',
+        { waitMs: 60_000, attempt: 1 }
+      );
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        2,
+        'rate limited; not retrying',
+        { waitMs: 60_000, attempt: 2 }
+      );
     });
 
     it('the logger is resolved per request, so a caller that swaps its own logger is followed', async () => {
@@ -1163,7 +1137,7 @@ describe('createBacklogJsTransport', () => {
       expect(attempt).toBe(2);
     });
 
-    it('gives up as a rate-limit error once the reset is further off than maxWaitMs', async () => {
+    it('gives up as a rate-limit error once the reset is more than a minute away', async () => {
       const now = Math.floor(Date.now() / 1000);
       const fetchStub: typeof globalThis.fetch = async () =>
         new Response(
@@ -1182,7 +1156,6 @@ describe('createBacklogJsTransport', () => {
         host,
         credentials: { apiKey: () => 'test-api-key' },
         fetch: fetchStub,
-        retry: { maxWaitMs: 1_000 },
         random: () => 0,
       });
 

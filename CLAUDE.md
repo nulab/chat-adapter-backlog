@@ -538,8 +538,8 @@ Nulab's own, tsdown-built, single runtime dependency `qs`), wrapped behind a
 narrow internal port. It does not provide, and this repo must add:
 
 1. Typed errors derived from `errors[].code`.
-2. 429 retry with backoff computed from `X-RateLimit-Reset`, bounded by
-   `config.rateLimit.{maxRetries,maxWaitMs}`.
+2. 429 retry with backoff computed from `X-RateLimit-Reset`: one retry, a
+   wait of at most 60 s, both internal constants rather than configuration.
 
 Per-bucket rate-limit tracking is deliberately **not** on this list. It was
 built and removed: its only consumer was a public snapshot nothing in the
@@ -631,8 +631,7 @@ Two rules about what an example may do, both load-bearing:
   sending `NaN` to Backlog later.
 - **Reach Backlog through `backlog.client(host)`.** That is the `backlog-js`
   client the adapter hands out for the endpoints its port does not name, and it
-  carries the adapter's rate-limit accounting, its bounded 429 retry and its
-  error classes. An example must not build a Backlog client of its own, and
+  carries the adapter's bounded 429 retry and its error classes. An example must not build a Backlog client of its own, and
   must not depend on `backlog-js` directly.
 
 State is `@chat-adapter/state-memory`, and no example subscribes to a thread.

@@ -121,7 +121,6 @@ export type {
   ListOrder,
   ListPullRequestsOptions,
   PullRequestRef,
-  RetryOptions,
   StarTarget,
   TextFormattingRule,
 } from './client/port';

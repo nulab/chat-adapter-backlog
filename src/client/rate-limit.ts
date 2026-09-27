@@ -1,9 +1,13 @@
 import { AdapterRateLimitError } from '@chat-adapter/shared';
 
-import type { RetryOptions } from './port.js';
-
-const DEFAULT_MAX_RETRIES = 1;
-const DEFAULT_MAX_WAIT_MS = 60_000;
+/**
+ * Fixed rather than configurable (docs/specs/adapter.md D5): neither
+ * first-party Chat SDK adapter exposes retry tuning, and a Backlog window is
+ * one minute, so a reset is never further off than this ceiling allows for. A
+ * runtime that stops a call sooner is the deployment's ceiling to raise.
+ */
+const MAX_RETRIES = 1;
+const MAX_WAIT_MS = 60_000;
 const MIN_RETRY_WAIT_MS = 1_000;
 const MAX_RETRY_JITTER_MS = 250;
 
@@ -42,8 +46,9 @@ export interface RetryDecision {
 /**
  * Decides whether a 429 (or error code 13) should be retried.
  * docs/specs/adapter.md §8.4: wait `max(reset*1000 - now, 1000)` plus jitter,
- * or the full `maxWaitMs` when `X-RateLimit-Reset` is missing; give up without
- * waiting once `waitMs` exceeds `maxWaitMs` or retries are exhausted, because
+ * or the full `MAX_WAIT_MS` when `X-RateLimit-Reset` is missing; give up
+ * without waiting once `waitMs` exceeds `MAX_WAIT_MS` or retries are
+ * exhausted, because
  * Backlog sends no `Retry-After` and a repeated POST could duplicate a
  * comment — retrying past one attempt risks that duplication for no benefit.
  *
@@ -54,30 +59,26 @@ export interface RetryDecision {
  * and an `AdapterRateLimitError` telling the caller to wait zero seconds.
  * Jitter, drawn per call from `random`, spreads the callers a single
  * epoch-second header released in lockstep; a missing header takes exactly
- * `maxWaitMs` without it, since adding jitter there would exceed the ceiling
- * the caller declared by construction.
+ * `MAX_WAIT_MS` without it, since adding jitter there would exceed the
+ * ceiling by construction.
  */
 export function decideRetry(
   attempt: number,
   resetHeader: string | null,
   now: number,
-  options: RetryOptions | undefined,
   random: () => number = Math.random
 ): RetryDecision {
-  const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
-  const maxWaitMs = options?.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
-
   const resetSeconds = finiteHeaderNumber(resetHeader);
   const resetAt =
     resetSeconds === undefined ? undefined : new Date(resetSeconds * 1000);
   const waitMs =
     resetSeconds === undefined
-      ? maxWaitMs
+      ? MAX_WAIT_MS
       : Math.max(resetSeconds * 1000 - now, MIN_RETRY_WAIT_MS) +
         retryJitterMs(random());
   const retryAfterSeconds = Math.ceil(waitMs / 1000);
 
-  if (attempt >= maxRetries || waitMs > maxWaitMs) {
+  if (attempt >= MAX_RETRIES || waitMs > MAX_WAIT_MS) {
     return { shouldRetry: false, waitMs, retryAfterSeconds, resetAt };
   }
 

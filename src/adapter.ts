@@ -11,7 +11,6 @@ import type { Backlog } from 'backlog-js';
 import type {
   BacklogApi,
   BacklogCredentials,
-  RetryOptions,
   TextFormattingRule,
 } from './client/port';
 import {
@@ -121,14 +120,12 @@ import type {
  * to the construction-time `ConsoleLogger` forever.
  */
 function defaultCreateTransport(
-  retry: RetryOptions,
   logger: () => Logger
 ): (installation: ResolvedInstallation) => AdapterTransport {
   return (installation) =>
     createBacklogJsTransport({
       host: installation.host,
       credentials: toCredentials(installation),
-      retry,
       logger,
     });
 }
@@ -181,8 +178,6 @@ const ENV_BOT_USER_ID = 'BACKLOG_BOT_USER_ID';
 const ENV_BOT_USER_NAME = 'BACKLOG_BOT_USER_NAME';
 const ENV_WEBHOOK_SECRET = 'BACKLOG_WEBHOOK_SECRET';
 
-const DEFAULT_MAX_WAIT_MS = 60_000;
-const DEFAULT_MAX_RETRIES = 1;
 const DEFAULT_MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024;
 
 function fail(message: string): never {
@@ -463,34 +458,6 @@ function resolveShapeB(
   return resolved;
 }
 
-/**
- * `Number.isInteger`, not a bare comparison: `NaN < 0` is false, so
- * `maxWaitMs: NaN` passed validation and then made a 429 whose response
- * carried no `X-RateLimit-Reset` retry immediately into the same empty
- * bucket — `decideRetry` compares `waitMs > maxWaitMs`, which is false for
- * `NaN`, and `wait(NaN)` returns at once (`src/client/rate-limit.ts`).
- * `Infinity` fails the same check, which is the point of a ceiling on how
- * long a call may block.
- */
-function validateRateLimitConfig(
-  rateLimit: BacklogAdapterConfig['rateLimit']
-): {
-  maxWaitMs: number;
-  maxRetries: number;
-} {
-  const maxWaitMs = rateLimit?.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
-  if (!Number.isInteger(maxWaitMs) || maxWaitMs < 0) {
-    fail('rateLimit.maxWaitMs must be a non-negative integer');
-  }
-
-  const maxRetries = rateLimit?.maxRetries ?? DEFAULT_MAX_RETRIES;
-  if (!Number.isInteger(maxRetries) || maxRetries < 0) {
-    fail('rateLimit.maxRetries must be a non-negative integer');
-  }
-
-  return { maxWaitMs, maxRetries };
-}
-
 function validateMaxWebhookBodyBytes(value: number | undefined): number {
   if (value === undefined) {
     return DEFAULT_MAX_WEBHOOK_BODY_BYTES;
@@ -643,13 +610,12 @@ export class BacklogAdapter implements Adapter<
     installation: ResolvedInstallation
   ) => AdapterTransport;
   /**
-   * `rateLimit`/`maxWebhookBodyBytes`/`webhookVerifier` are validated in the
-   * constructor (docs/specs/adapter.md §3.2) and read by `handleWebhook` and
-   * by the port factory; grouped into one field rather than three, since they
-   * travel together as "config the constructor validates for someone else".
+   * `maxWebhookBodyBytes`/`webhookVerifier` are validated in the constructor
+   * (docs/specs/adapter.md §3.2) and read by `handleWebhook`; grouped into one
+   * field rather than two, since they travel together as "config the
+   * constructor validates for someone else".
    */
   private readonly ingressConfig: {
-    rateLimit: { maxWaitMs: number; maxRetries: number };
     maxWebhookBodyBytes: number;
     webhookVerifier: BacklogAdapterConfig['webhookVerifier'];
   };
@@ -752,7 +718,6 @@ export class BacklogAdapter implements Adapter<
     }
 
     this.ingressConfig = {
-      rateLimit: validateRateLimitConfig(config.rateLimit),
       maxWebhookBodyBytes: validateMaxWebhookBodyBytes(
         config.maxWebhookBodyBytes
       ),
@@ -762,10 +727,7 @@ export class BacklogAdapter implements Adapter<
     const createApi = config.createApi;
     this.createTransport =
       createApi === undefined
-        ? defaultCreateTransport(
-            this.ingressConfig.rateLimit,
-            () => this.logger
-          )
+        ? defaultCreateTransport(() => this.logger)
         : (installation) => ({ api: createApi(installation) });
   }
 

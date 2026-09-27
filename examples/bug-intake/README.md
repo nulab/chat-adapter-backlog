@@ -105,9 +105,8 @@ all three activity types the same way.
 
 `client(host)` hands out the `backlog-js` client the adapter makes its own
 calls with, which is how both this read and the reassignment below stay inside
-the adapter's rate-limit accounting, its bounded 429 retry and its error
-classes. Building a second client here would have all three silently not
-apply.
+the adapter's bounded 429 retry and its error classes. Building a second
+client here would have both silently not apply.
 
 **Is it a new report?** `decodeMessageId(message.id).part` is `root` for an
 issue's body and `comment` or `update` for anything written on it afterwards,
@@ -180,17 +179,16 @@ the same change made from the issue list. Never use **allEvent**.
 ## Limits
 
 - **Both Backlog calls go through the adapter's client.** Reading the issue and
-  reassigning it use `backlog.client(host)`, so they share the adapter's
-  rate-limit accounting, its one bounded 429 retry and its error classes — but
+  reassigning it use `backlog.client(host)`, so they share the adapter's one
+  bounded 429 retry and its error classes — but
   they also share its per-minute budget with everything else the adapter does,
   and a request that fails after the retry surfaces as a thrown error with the
   webhook already answered.
-- **A 429 waits at most 20 seconds.** `src/bot.ts` lowers the adapter's
-  `rateLimit.maxWaitMs` from its 60-second default, because the function is
-  itself stopped at 60 seconds (`maxDuration`) and a longer wait would be cut
-  off silently. A call that would wait longer rejects with
-  `AdapterRateLimitError` instead, which the function's logs show as a message
-  processing error; the intake comment or the hand-off for that delivery is not
+- **A 429 waits up to 60 seconds.** The adapter waits for Backlog's reset
+  once, so `api/webhooks/backlog.ts` sets `maxDuration` to 90 seconds rather
+  than 60, where the wait would be cut off silently. A reset further off, or a
+  second 429, rejects with `AdapterRateLimitError`, which the function's logs
+  show as a message processing error; the intake comment or the hand-off for that delivery is not
   made, and nothing retries it, because the webhook was already answered.
 - **A new issue or a close costs one Get Issue**, including when the issue
   turns out to be of another type. Ordinary comments cost nothing, because the

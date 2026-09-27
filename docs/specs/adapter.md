@@ -229,7 +229,6 @@ interface BacklogAdapterConfig {
   webhookVerifier?: BacklogWebhookVerifier;
   userName?: string;
   logger?: Logger;
-  rateLimit?: { maxWaitMs?: number; maxRetries?: number };
   maxWebhookBodyBytes?: number;
   createApi?: (installation: ResolvedInstallation) => BacklogApi;
 }
@@ -248,8 +247,6 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 | `webhookVerifier` | function | — | none | When set, replaces the secret check for every installation (D2). |
 | `userName` | `string` | first installation's bot name, configured or fetched | none | Non-empty. Exposed to the core as `adapter.userName`. |
 | `logger` | `Logger` (from `chat`) | `new ConsoleLogger("info").child("backlog")` | none | Replaced by `chat.getLogger("backlog")` in `initialize`. |
-| `rateLimit.maxWaitMs` | `number` | `60_000` | none | Non-negative integer (`NaN` and `Infinity` rejected). Longest wait before a 429 retry (D5). |
-| `rateLimit.maxRetries` | `number` | `1` | none | ≥ 0 integer; `0` disables retries. |
 | `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | none | Positive integer. Larger bodies → 413 (§5.1) ⚑. |
 | `createApi` | function | `backlog-js` implementation | none | Test seam; receives the resolved installation and returns a port. |
 
@@ -1537,8 +1534,8 @@ method required.
   drawn from `[0, 250)` ms so callers released by the same epoch-second header
   do not all retry together. The one-second floor prevents a past reset from
   causing an immediate retry or an error with `retryAfter = 0`. When the header
-  is missing, `waitMs = maxWaitMs` with no jitter. If `waitMs > maxWaitMs`
-  (default 60 000) or retries are exhausted (`maxRetries`, default 1), throw
+  is missing, `waitMs = 60 000` with no jitter. If `waitMs > 60 000` or this
+  is already the retry (one retry per request), throw
   `AdapterRateLimitError("backlog", ceil(waitMs/1000))`; otherwise wait and
   retry the same request. Backlog sends no `Retry-After`.
 - No other status is retried; the adapter is idempotency-agnostic and a
@@ -1554,11 +1551,13 @@ method required.
   number of the request that hit the limit. The port takes the `Logger` as an
   accessor resolved per request, because `initialize` replaces the adapter's
   logger while `api(host)` caches the port built before it.
-- A wait of up to `maxWaitMs` blocks the calling promise, so a consumer whose
+- Both bounds — one retry, a 60-second ceiling on the wait — are internal
+  constants, not configuration (D5). A Backlog window is one minute, so the
+  ceiling covers any reset a live window can report.
+- A wait of up to 60 seconds blocks the calling promise, so a consumer whose
   runtime caps execution time (a serverless function's timeout) must raise that
-  cap above `maxWaitMs` or lower `maxWaitMs` and handle `AdapterRateLimitError`
-  itself; otherwise the runtime kills the call mid-wait and the work is lost
-  silently. Documented in the README (§13).
+  cap above 60 seconds; otherwise the runtime kills the call mid-wait and the
+  work is lost silently. Documented in the README (§13).
 
 ### 8.5 Error mapping (D6)
 
@@ -2101,7 +2100,7 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   `getUser` (round trip, bot, bare number rejected, null on 404),
   `markAsRead` (first page, third page, cap reached, already read, `:r`).
 - **client**: §8.6 conformance over both implementations; retry timing
-  with fake timers, a 429 retried at most `maxRetries` times and a refused
+  with fake timers, a 429 retried at most once and a refused
   wait surfacing as `AdapterRateLimitError` with `retryAfter` computed from
   `X-RateLimit-Reset`; one `warn` per rate-limit wait and per refusal to wait,
   none on an unlimited request, and the logger resolved per request; every row
@@ -2210,9 +2209,9 @@ for one scratch space is worse than requiring the two to share it.
   to a repository's pull requests, `client(host)` named as the `backlog-js`
   client for the endpoints the port does not — carrying the same retry and
   errors, and throwing `NO_CLIENT` under a custom `createApi` — and the 429
-  retry stated as a wait of up to `rateLimit.maxWaitMs` that blocks the call —
-  so a serverless deployment must allow more execution time than `maxWaitMs` or
-  lower it and handle `AdapterRateLimitError` itself, with the two `warn` lines
+  retry stated as a wait of up to 60 seconds that blocks the call — so a
+  serverless deployment must allow more execution time than that, with the
+  two `warn` lines
   named as how the wait becomes visible; testing with
   `createInMemoryBacklogApi`, with `createApi` in the configuration table
   because that section passes it; license.
@@ -2300,7 +2299,7 @@ for one scratch space is worse than requiring the two to share it.
 | D2 | Authenticity mandatory: secret per installation or global verifier; 401 on any failure; unknown host is also 401 | Backlog has no HMAC; a shared secret in the URL is the only sender-side control, and skipping verification "because Backlog cannot sign" is exactly the anti-pattern CLAUDE.md forbids. Same body for every failure avoids host enumeration. | Optional secret (silently insecure default); 404 for unknown host (leaks configuration). |
 | D3 | `?host=` required only with >1 installation | The path is fixed by Chat SDK routing (`/api/webhooks/backlog`), so the discriminator must be a query parameter; forcing it for one space is needless friction. | Path segment (framework-dependent); inferring from `project.id` (ids collide across spaces). |
 | D4 | `stream()` buffers and posts once | The core's 500 ms edit loop is ~120 update calls per minute against a documented example limit of 150. | Omitting `stream` (falls into that loop); throttled edits (still wasteful, and a comment edit emits no webhook anyway). |
-| D5 | Bounded retry on 429/13, waiting until the failing response's own `X-RateLimit-Reset`; otherwise `AdapterRateLimitError` with that wait as `retryAfter`. No bucket classification, no per-bucket header capture, no rate-limit snapshot on the port or the adapter | Limits differ per plan and are per user, so a 429 is the only signal that matters and it carries its own reset. `backlog-js` turns a non-2xx into its own error before the headers are visible, so the retry lives in the injected `fetch`. One bounded retry converts most transient 429s into success without hiding sustained exhaustion. Tracking was built and removed: its only consumer was a public `rateLimit(host)` / `getRateLimit()` pair nothing in the adapter read, and neither first-party adapter for a comparable service (GitHub, Linear) tracks limits at all. | Hard-coded 600/150/150/60; unbounded backoff; no retry at all (every 429 becomes a failed reply); classifying each request into read/update/search/icon and recording per-(host, bucket) snapshots (cost without a consumer: the retry needs only the failing response). |
+| D5 | One retry on 429/13, waiting until the failing response's own `X-RateLimit-Reset` for at most 60 s; otherwise `AdapterRateLimitError` with that wait as `retryAfter`. No bucket classification, no per-bucket header capture, no rate-limit snapshot, and no configuration of either bound | Limits differ per plan and are per user, so a 429 is the only signal that matters and it carries its own reset. `backlog-js` turns a non-2xx into its own error before the headers are visible, so the retry lives in the injected `fetch`. One bounded retry converts most transient 429s into success without hiding sustained exhaustion. Tracking was built and removed: its only consumer was a public `rateLimit(host)` / `getRateLimit()` pair nothing in the adapter read, and neither first-party adapter for a comparable service (GitHub, Linear) tracks limits at all. The bounds were once `config.rateLimit.{maxRetries,maxWaitMs}` and were removed for the same reason: neither of those adapters exposes retry tuning, a one-minute window makes a 60 s ceiling sufficient, and the one caller need it served — a serverless timeout below the wait — is met by raising the timeout. | Hard-coded 600/150/150/60; unbounded backoff; no retry at all (every 429 becomes a failed reply); classifying each request into read/update/search/icon and recording per-(host, bucket) snapshots (cost without a consumer: the retry needs only the failing response); `rateLimit.{maxRetries,maxWaitMs}` options (surface and validation for a tuning no caller needs). |
 | D6 | Error class from `errors[].code` first, status second; detail as `cause` | The error-response page maps meaning to codes, not statuses; `cause` keeps `moreInfo` for operators without leaking `backlog-js` types. | Status-only mapping; re-exporting `backlog-js` errors. |
 | D7 | No host-application hooks; `api(host)` is the only escape hatch | Engagement/subscription state is the `StateAdapter`'s job; drop prediction depends on private core keys. | Engagement callback, inbound observer, dedupe-key helpers. |
 | D8 | Numeric ids everywhere; host inside message and user ids | Issue keys change on project-key rename; the core's dedupe key has no thread component. | Issue keys in thread ids; host-less message ids. |
@@ -2373,7 +2372,7 @@ open list.
 | 7 | Empty stream posts `" "` | **confirmed**, and widened to an abort that buffered nothing — see §15.2 | `BacklogAdapter.stream` posts `" "` whenever the buffer is empty (#84) |
 | 8 | Empty summary in `postChannelMessage` | **confirmed** — `ValidationError`, no placeholder | `createChannelIssue` in `src/egress.ts` throws before the port call; `src/adapter.test.ts` "an empty summary is a validation error" (#16) |
 | 9 | Type-4 deletion in the first release | **confirmed** — shipped; see §15.2 | `DISPATCHED_ACTIVITY_TYPES` includes 4 and dispatches `chat.processMessageDeleted` unconditionally (`src/webhook/payload.ts`) (#12) |
-| 10 | Retry defaults | **confirmed** — `maxRetries: 1`, `maxWaitMs: 60_000`, both overridable, `maxRetries: 0` supported | `DEFAULT_MAX_RETRIES` / `DEFAULT_MAX_WAIT_MS` in `src/client/rate-limit.ts`, validated in `src/adapter.ts`; `src/client/rate-limit.test.ts` "retries once when the reset is within maxWaitMs", "gives up without waiting when the wait would exceed maxWaitMs", "maxRetries: 0 never retries even with an imminent reset" (#9, bounded further by #71) |
+| 10 | Retry defaults | **changed** — one retry and a 60 s ceiling, as confirmed, but no longer overridable: the `rateLimit` config option was removed (D5) | `MAX_RETRIES` / `MAX_WAIT_MS` in `src/client/rate-limit.ts`; `src/client/rate-limit.test.ts` "retries the first 429 when its reset is within a minute", "gives up without waiting when the reset is more than a minute away", "gives up on the second 429 even with an imminent reset" (#9, bounded further by #71, made internal by #111) |
 | 11 | Live-suite variables | **changed** — four, not three: `BACKLOG_LIVE_PULL_REQUEST=<repositoryId>:<number>` joined `BACKLOG_HOST`, `BACKLOG_API_KEY`, `BACKLOG_LIVE_ISSUE_ID` | `src/test/live.test.ts` reads all four and skips the pull-request half independently of the issue half, because a pull request needs a Git-enabled project and two coordinates an issue id cannot carry (#15, #24). The suite itself has still never been run — §15.4 |
 | 12 | No timestamp-staleness window | **confirmed** — accepted, with the departure documented rather than CLAUDE.md amended | `src/webhook/verify.ts` applies no timestamp check; §5.1 states the departure and its reason (unsigned timestamps give no protection and would drop measured late redeliveries). The plan's rider "amend CLAUDE.md wording for this adapter" was **not** taken up: CLAUDE.md's "Don't" list is generic adapter guidance, and the reader who needs this adapter's choice is reading §5.1 (#12) |
 | 13 | D-PR10 pull-request comment attachment resolution | **confirmed** — lazy list-and-match by name, newest match wins | The type-20 / `changeLog` attachment builder in `src/subject/pull-request.ts` resolves `fetchData` through `GET …/pullRequests/:number/attachments` only when the consumer asks (#22) |

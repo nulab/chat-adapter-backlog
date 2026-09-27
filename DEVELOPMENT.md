@@ -442,7 +442,7 @@ documents compile. `scripts/consumer-smoke/documented-usage.ts` writes those
 calls out — the `Chat` construction, `chat.webhooks.backlog`, the
 `BacklogPostableExtras` and `BacklogChannelPostableExtras` postables, the
 mention helpers, `installations` with a resolver-function `apiKey`,
-`rateLimit.maxWaitMs`, `adapter.api`/`client`/`botUserName` and
+`adapter.api`/`client`/`botUserName` and
 `createInMemoryBacklogApi` — and the job compiles it strict, under `NodeNext`,
 with `tsc --noEmit`. It reads `message.subject` too, but proves nothing about
 the `'pull_request'` it compares against: `chat` types `subject.type` as

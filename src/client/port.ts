@@ -417,10 +417,3 @@ export type MaybeAsync<T> = T | Promise<T>;
 export type BacklogCredentials =
   | { apiKey: () => MaybeAsync<string>; accessToken?: never }
   | { accessToken: () => MaybeAsync<string>; apiKey?: never };
-
-export interface RetryOptions {
-  /** Maximum number of retries on a 429. Default 1. */
-  maxRetries?: number;
-  /** Maximum wait, in milliseconds, before giving up instead of waiting. Default 60_000. */
-  maxWaitMs?: number;
-}

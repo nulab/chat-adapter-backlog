@@ -57,7 +57,6 @@ import type {
   ListPullRequestsOptions,
   MaybeAsync,
   PullRequestRef,
-  RetryOptions,
   StarTarget,
 } from './port.js';
 import type { Logger } from 'chat';
@@ -173,7 +172,6 @@ export interface CreateBacklogJsApiOptions {
   fetch?: Fetch;
   /** Request timeout via `AbortSignal`, in milliseconds. Default 30 000 (docs/specs/adapter.md §8.2). */
   timeoutMs?: number;
-  retry?: RetryOptions;
   /** Random source for bounded retry jitter; injectable so timing tests stay deterministic. */
   random?: () => number;
   /**
@@ -242,7 +240,6 @@ export function createBacklogJsTransport(
     credentials,
     fetch = globalThis.fetch,
     timeoutMs = 30_000,
-    retry,
     random,
     logger,
   } = options;
@@ -339,7 +336,6 @@ export function createBacklogJsTransport(
         attempt,
         response.headers.get('X-RateLimit-Reset'),
         Date.now(),
-        retry,
         random
       );
       if (decision.shouldRetry) {

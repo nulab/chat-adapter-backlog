@@ -403,24 +403,6 @@ describe('BacklogAdapter construction', () => {
     );
   });
 
-  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    'rejects a rateLimit.maxWaitMs of %s',
-    (maxWaitMs) => {
-      const config = { ...validConfig(), rateLimit: { maxWaitMs } };
-
-      expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
-    }
-  );
-
-  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    'rejects a rateLimit.maxRetries of %s',
-    (maxRetries) => {
-      const config = { ...validConfig(), rateLimit: { maxRetries } };
-
-      expect(() => new BacklogAdapter(config)).toThrow(ValidationError);
-    }
-  );
-
   it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
     'rejects a maxWebhookBodyBytes of %s',
     (maxWebhookBodyBytes) => {
@@ -530,10 +512,9 @@ describe('BacklogAdapter lifecycle and identity', () => {
     expect(adapter['logger'].debug).toBe(debug);
   });
 
-  it('defaults rateLimit and maxWebhookBodyBytes, and carries a configured webhookVerifier', () => {
+  it('defaults maxWebhookBodyBytes, and carries a configured webhookVerifier', () => {
     const adapter = new BacklogAdapter(validConfig());
     expect(adapter['ingressConfig']).toEqual({
-      rateLimit: { maxWaitMs: 60_000, maxRetries: 1 },
       maxWebhookBodyBytes: 5 * 1024 * 1024,
       webhookVerifier: undefined,
     });
@@ -545,11 +526,9 @@ describe('BacklogAdapter lifecycle and identity', () => {
       botUserId: 999,
       botUserName: 'Chatbot',
       webhookVerifier: verifier,
-      rateLimit: { maxWaitMs: 1000, maxRetries: 3 },
       maxWebhookBodyBytes: 1024,
     });
     expect(withVerifier['ingressConfig']).toEqual({
-      rateLimit: { maxWaitMs: 1000, maxRetries: 3 },
       maxWebhookBodyBytes: 1024,
       webhookVerifier: verifier,
     });

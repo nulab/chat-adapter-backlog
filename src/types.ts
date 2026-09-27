@@ -616,7 +616,6 @@ export interface BacklogAdapterConfig {
   webhookVerifier?: BacklogWebhookVerifier;
   userName?: string;
   logger?: Logger;
-  rateLimit?: { maxWaitMs?: number; maxRetries?: number };
   maxWebhookBodyBytes?: number;
   /**
    * Test seam and escape hatch: receives the resolved installation and returns

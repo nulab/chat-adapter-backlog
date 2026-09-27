@@ -109,10 +109,8 @@ not a request to fall back.
 | `webhookVerifier` | `(request, rawBody) => unknown` | — | Replaces the secret check entirely — for a reverse-proxy assertion, mTLS or an IP allowlist. |
 | `userName` | `string` | first installation's bot name | Exposed to the core as `adapter.userName`. One string for the whole adapter; per space, read `adapter.botUserName(host)`. |
 | `logger` | `Logger` | `ConsoleLogger("info")` | Replaced by `chat.getLogger("backlog")` in `initialize`. |
-| `rateLimit.maxWaitMs` | `number` | `60_000` | Longest wait before a 429 retry. Non-negative integer. |
-| `rateLimit.maxRetries` | `number` | `1` | Non-negative integer; `0` disables retries. |
 | `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | Positive integer. Larger bodies get a 413. Description edits carry two full bodies. |
-| `createApi` | `(installation: ResolvedInstallation) => BacklogApi` | the `backlog-js`-backed port | Test seam: replaces the port every Backlog call goes through, so a consumer's suite needs no network — see **Testing**. Replacing it also takes the rate-limit accounting, the 429 retry and `client()` with it. |
+| `createApi` | `(installation: ResolvedInstallation) => BacklogApi` | the `backlog-js`-backed port | Test seam: replaces the port every Backlog call goes through, so a consumer's suite needs no network — see **Testing**. Replacing it also takes the 429 retry and `client()` with it. |
 
 ### Bot identity
 
@@ -626,8 +624,9 @@ throws an `AdapterError` with code `NO_CLIENT`.
 ### A 429 blocks the call for up to a minute
 
 Backlog sends no `Retry-After`, so a 429 is retried once by waiting until
-`X-RateLimit-Reset` — **up to `rateLimit.maxWaitMs`, 60 seconds by default,
-during which the call simply does not return**. On a paid space the wait is
+`X-RateLimit-Reset` — **up to 60 seconds, during which the call simply does
+not return**. A reset further off than that, or a second 429, rejects with
+`AdapterRateLimitError` at once; neither bound is configurable. On a paid space the wait is
 rare; on a free plan (15 updates per minute) a burst of comments reaches it
 easily, and a wait of ~55 seconds was measured on 2026-09-06.
 
@@ -635,13 +634,8 @@ That matters wherever execution time is capped. Serverless runtimes commonly
 stop a request at 60 seconds by default — no longer than the wait itself — and
 kill the call in the middle of it. The comment then disappears without an
 error, because the webhook already answered 200 and the work was running in the
-background. Either raise the runtime's ceiling above `maxWaitMs`, or lower
-`maxWaitMs` and catch `AdapterRateLimitError` yourself:
-
-```ts
-createBacklogAdapter({ rateLimit: { maxWaitMs: 5_000 } });
-// beyond 5 s the call rejects with AdapterRateLimitError instead of blocking
-```
+background. Give the runtime a ceiling comfortably above 60 seconds — on
+Vercel, `export const maxDuration = 90` in the function's module.
 
 Both outcomes are logged, at `warn`, through the Chat SDK logger — one line
 when the adapter starts waiting, one when it refuses to:
