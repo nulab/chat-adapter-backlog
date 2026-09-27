@@ -2,7 +2,7 @@ import { ValidationError } from '@chat-adapter/shared';
 import { z } from 'zod';
 
 import { HOST_PATTERN } from './ids';
-import type { BacklogCredentials } from './client/port';
+import type { Credential } from './client/backlog';
 import type {
   BacklogAdapterConfig,
   BacklogWebhookVerifier,
@@ -97,14 +97,18 @@ const configSchema = z
   )
   .transform(({ apiKey, accessToken, ...rest }, ctx) => {
     if (apiKey !== undefined && accessToken === undefined) {
-      const credentials: BacklogCredentials = { apiKey: () => resolve(apiKey) };
-      return { ...rest, credentials };
+      const credential: Credential = {
+        header: 'Backlog-API-Key',
+        resolve: async () => resolve(apiKey),
+      };
+      return { ...rest, credential };
     }
     if (accessToken !== undefined && apiKey === undefined) {
-      const credentials: BacklogCredentials = {
-        accessToken: () => resolve(accessToken),
+      const credential: Credential = {
+        header: 'Authorization',
+        resolve: async () => `Bearer ${await resolve(accessToken)}`,
       };
-      return { ...rest, credentials };
+      return { ...rest, credential };
     }
     ctx.issues.push({
       code: 'custom',

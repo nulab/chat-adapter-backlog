@@ -1,6 +1,5 @@
 import {
   AdapterError,
-  AdapterRateLimitError,
   ResourceNotFoundError,
   ValidationError,
 } from '@chat-adapter/shared';
@@ -15,11 +14,22 @@ import {
 import type { ChatHandler } from '@chat-adapter/tests/matchers';
 import { Chat } from 'chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 
 import { BacklogAdapter, createBacklogAdapter } from './adapter';
-import { createInMemoryBacklogApi } from './client/in-memory';
-import { conformanceFixture } from './client/conformance';
 import { encodeMessageId } from './ids';
+import {
+  ALICE,
+  BOB,
+  BOT,
+  comment,
+  gitRepository,
+  issue,
+  issueComment,
+  project,
+  pullRequest,
+  star,
+} from './test/fixtures/rest';
 import {
   bulkFieldsChanged,
   FIXTURE,
@@ -30,12 +40,12 @@ import {
   unrelatedActivity,
   webhookRequest,
 } from './test/fixtures/webhooks';
-import type { BacklogApi, BacklogComment } from './client/port';
 import type {
   BacklogAdapterConfig,
   BacklogRawMessage,
   BacklogSubjectRef,
   BacklogThreadId,
+  BacklogUser,
   BacklogWebhookPayload,
 } from './types';
 import type { Adapter, ChatInstance, FormattedContent, Message } from 'chat';
@@ -70,11 +80,17 @@ const ENV_KEYS = [
 
 let savedEnv: Record<string, string | undefined>;
 
+let network: Mock<typeof fetch>;
+
 beforeEach(() => {
   savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
   for (const key of ENV_KEYS) {
     delete process.env[key];
   }
+  network = vi.fn<typeof fetch>(async (input) => {
+    throw new Error(`unexpected network call: ${String(input)}`);
+  });
+  vi.stubGlobal('fetch', network);
 });
 
 afterEach(() => {
@@ -86,36 +102,20 @@ afterEach(() => {
       process.env[key] = value;
     }
   }
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
-type ApiFactory = () => BacklogApi;
-
-/**
- * Runs `adapter` on the port `createApi` builds instead of the `backlog-js`
- * one. Element access is the form TypeScript leaves open to a private member;
- * the public config has no field for this (docs/specs/adapter.md §3.1).
- */
-function onPort(
+/** The headers of each request `adapter.client()` makes, answered with the bot user. */
+async function requestHeaders(
   adapter: BacklogAdapter,
-  createApi: ApiFactory
-): BacklogAdapter {
-  adapter['createTransport'] = () => ({ api: createApi() });
-  return adapter;
-}
-
-function fixturePort(): BacklogApi {
-  return createInMemoryBacklogApi({
-    projects: [conformanceFixture.baseProject()],
-  });
-}
-
-/**
- * The port is private to the adapter. Element access is the one form
- * TypeScript leaves open to a private member, and it is used only here so a
- * test that has to see the port a factory built says so in one place.
- */
-function portOf(adapter: BacklogAdapter, host: string): BacklogApi {
-  return adapter['api'](host);
+  requests = 1
+): Promise<Headers[]> {
+  network.mockImplementation(async () => new Response(JSON.stringify(BOT)));
+  for (let request = 0; request < requests; request += 1) {
+    await adapter.client().getMyself();
+  }
+  return network.mock.calls.map(([, init]) => new Headers(init?.headers));
 }
 
 function validConfig() {
@@ -337,13 +337,7 @@ threadIdContract<BacklogThreadId>({
   ],
 });
 
-describe('BacklogAdapter port wiring', () => {
-  // One test below replaces the global `fetch` so a handed-out client can
-  // answer without a network; nothing in this file restores spies globally.
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
+describe('BacklogAdapter.client', () => {
   const base = {
     host: 'example.backlog.com',
     botUserId: 999,
@@ -351,67 +345,55 @@ describe('BacklogAdapter port wiring', () => {
     webhookSecret: 'test-webhook-secret',
   } as const;
 
-  it('builds a port for a configured host without being given one', () => {
-    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-    expect(typeof portOf(adapter, 'example.backlog.com').getIssue).toBe(
-      'function'
-    );
-  });
-
-  it('reuses one port across calls', () => {
-    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-    expect(portOf(adapter, 'example.backlog.com')).toBe(
-      portOf(adapter, 'example.backlog.com')
-    );
-  });
-
-  it('refuses a host other than the configured space', () => {
-    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-    expect(() => portOf(adapter, 'other.backlog.com')).toThrow(
-      ResourceNotFoundError
-    );
-  });
-
   it('hands out one client across calls', () => {
     const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
 
     expect(adapter.client()).toBe(adapter.client());
   });
 
-  it('a 429 through the handed-out client surfaces as a rate-limit error, like one through the port', async () => {
-    // The point of handing the client out rather than letting a consumer
-    // construct one: a second client would reach Backlog without the
-    // adapter's 429 handling and error mapping.
+  it('refuses a thread on a host other than the configured space', async () => {
     const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-    const resetSeconds = Math.floor(Date.now() / 1000) + 3_600;
-    vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async () =>
-        new Response(
-          JSON.stringify({
-            errors: [{ message: 'Too many requests', code: 13 }],
-          }),
-          {
-            status: 429,
-            headers: { 'X-RateLimit-Reset': String(resetSeconds) },
-          }
-        )
-    );
 
     await expect(
-      adapter.client().getIssue(conformanceFixture.issueId)
-    ).rejects.toBeInstanceOf(AdapterRateLimitError);
+      adapter.fetchThread('backlog:other.backlog.com:500:issue:8001')
+    ).rejects.toBeInstanceOf(ResourceNotFoundError);
+    expect(network).not.toHaveBeenCalled();
   });
 
-  it('has no client to hand out when a custom port replaced the backlog-js one', () => {
-    const adapter = onPort(
-      createBacklogAdapter({
-        ...base,
-        apiKey: 'key',
-      }),
-      () => createInMemoryBacklogApi()
-    );
+  it('sends an api key as the Backlog-API-Key header', async () => {
+    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
 
-    expect(() => adapter.client()).toThrow(AdapterError);
+    const [headers] = await requestHeaders(adapter);
+
+    expect(headers?.get('Backlog-API-Key')).toBe('key');
+    expect(headers?.get('Authorization')).toBeNull();
+  });
+
+  it('sends an access token as a Bearer Authorization header', async () => {
+    const adapter = createBacklogAdapter({ ...base, accessToken: 'token' });
+
+    const [headers] = await requestHeaders(adapter);
+
+    expect(headers?.get('Authorization')).toBe('Bearer token');
+    expect(headers?.get('Backlog-API-Key')).toBeNull();
+  });
+
+  it('asks a credential resolver again for every request', async () => {
+    let calls = 0;
+    const adapter = createBacklogAdapter({
+      ...base,
+      accessToken: async () => {
+        calls += 1;
+        return `token-${calls}`;
+      },
+    });
+
+    const headers = await requestHeaders(adapter, 2);
+
+    expect(headers.map((sent) => sent.get('Authorization'))).toEqual([
+      'Bearer token-1',
+      'Bearer token-2',
+    ]);
   });
 });
 
@@ -424,6 +406,33 @@ function webhookAdapterConfig(overrides: Partial<BacklogAdapterConfig> = {}) {
     webhookSecret: FIXTURE.webhookSecret,
     ...overrides,
   };
+}
+
+function exampleProject(
+  textFormattingRule: 'markdown' | 'backlog' = 'markdown'
+) {
+  return project({
+    projectKey: FIXTURE.projectKey,
+    name: 'Example project',
+    textFormattingRule,
+  });
+}
+
+const EXAMPLE_ISSUE = issue({
+  issueKey: `${FIXTURE.projectKey}-1`,
+  summary: 'Deploy fails on the staging space',
+  createdUser: ALICE,
+});
+
+/** Answers Get Project for the fixture project, which every webhook and formatted write looks up. */
+function withProject(
+  adapter: BacklogAdapter,
+  textFormattingRule: 'markdown' | 'backlog' = 'markdown'
+): BacklogAdapter {
+  vi.spyOn(adapter.client(), 'getProject').mockResolvedValue(
+    exampleProject(textFormattingRule)
+  );
+  return adapter;
 }
 
 type Factory = () => Promise<Message<BacklogRawMessage>>;
@@ -450,12 +459,10 @@ function mockChat(
 }
 
 async function webhookAdapter(
-  config: Record<string, unknown> = {},
-  createApi: ApiFactory = fixturePort
+  config: Record<string, unknown> = {}
 ): Promise<{ adapter: BacklogAdapter; chat: ChatInstance }> {
-  const adapter = onPort(
-    createBacklogAdapter({ ...webhookAdapterConfig(), ...config }),
-    createApi
+  const adapter = withProject(
+    createBacklogAdapter({ ...webhookAdapterConfig(), ...config })
   );
   const chat = mockChat();
   await adapter.initialize(chat);
@@ -485,6 +492,7 @@ function threadIdsProcessedBy(chat: ChatInstance): string[] {
 }
 
 const ISSUE_THREAD_ID = `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`;
+const PULL_REQUEST_THREAD_ID = `backlog:${FIXTURE.host}:${FIXTURE.projectId}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}`;
 
 describe('BacklogAdapter.handleWebhook', () => {
   it('answers an unauthenticated request 401 and dispatches nothing', async () => {
@@ -538,10 +546,7 @@ describe('BacklogAdapter.handleWebhook', () => {
   );
 
   it('answers 503 before initialize() has run', async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
 
     const response = await adapter.handleWebhook(
       webhookRequest(issueCommented())
@@ -565,10 +570,7 @@ describe('BacklogAdapter.handleWebhook', () => {
   it('answers before the dispatched message has been built', async () => {
     let release: (() => void) | undefined;
     const built = vi.fn();
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
+    const adapter = withProject(createBacklogAdapter(webhookAdapterConfig()));
     await adapter.initialize(
       mockChat(async (_adapter, _threadId, factory) => {
         await new Promise<void>((resolve) => {
@@ -594,10 +596,7 @@ describe('BacklogAdapter.handleWebhook', () => {
 
   it('logs a failed dispatch with its thread instead of rejecting', async () => {
     const logger = createMockLogger();
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
+    const adapter = withProject(createBacklogAdapter(webhookAdapterConfig()));
     await adapter.initialize(
       mockChat(async () => {
         throw new Error('handler exploded');
@@ -649,16 +648,10 @@ describe('BacklogAdapter.handleWebhook', () => {
   });
 
   it('looks the project up once for a bulk update, however many issues it touched', async () => {
-    const getProject = vi.fn(() =>
-      Promise.resolve(conformanceFixture.baseProject())
-    );
-    const adapter = onPort(createBacklogAdapter(webhookAdapterConfig()), () => {
-      const api = createInMemoryBacklogApi({
-        projects: [conformanceFixture.baseProject()],
-      });
-      api.getProject = getProject;
-      return api;
-    });
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const getProject = vi
+      .spyOn(adapter.client(), 'getProject')
+      .mockResolvedValue(exampleProject());
     const dispatched = await initializeCapturingDispatches(adapter);
 
     await adapter.handleWebhook(webhookRequest(bulkFieldsChanged()));
@@ -668,10 +661,7 @@ describe('BacklogAdapter.handleWebhook', () => {
   });
 
   it("dispatches a pull-request comment into the pull request's thread", async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
+    const adapter = withProject(createBacklogAdapter(webhookAdapterConfig()));
     const dispatched = await initializeCapturingDispatches(adapter);
 
     await adapter.handleWebhook(webhookRequest(pullRequestCommented()));
@@ -681,11 +671,11 @@ describe('BacklogAdapter.handleWebhook', () => {
   });
 
   it('keeps the repository name a delivery carries, sparing the next thread read a lookup', async () => {
-    const calls: string[] = [];
-    const { adapter } = egressAdapter({
-      seed: pullRequestSeed(),
-      wrapApi: (api) => recordPortCalls(api, calls),
-    });
+    const { adapter, backlog } = egressAdapter();
+    vi.spyOn(backlog.client, 'getPullRequest').mockResolvedValue(
+      pullRequest() as never
+    );
+    const getGitRepository = vi.spyOn(backlog.client, 'getGitRepository');
     await initializeCapturingDispatches(adapter);
 
     await adapter.handleWebhook(webhookRequest(pullRequestCommented()));
@@ -694,16 +684,13 @@ describe('BacklogAdapter.handleWebhook', () => {
     expect(thread.metadata).toMatchObject({
       url: `https://${FIXTURE.host}/git/${FIXTURE.projectKey}/${FIXTURE.repositoryName}/pullRequests/${FIXTURE.pullRequestNumber}`,
     });
-    expect(calls).not.toContain('getGitRepository');
+    expect(getGitRepository).not.toHaveBeenCalled();
   });
 
   it('formats the text with the rule of the project the delivery came from', async () => {
-    const project = {
-      ...conformanceFixture.baseProject(),
-      textFormattingRule: 'backlog' as const,
-    };
-    const adapter = onPort(createBacklogAdapter(webhookAdapterConfig()), () =>
-      createInMemoryBacklogApi({ projects: [project] })
+    const adapter = withProject(
+      createBacklogAdapter(webhookAdapterConfig()),
+      'backlog'
     );
     const dispatched = await initializeCapturingDispatches(adapter);
 
@@ -712,17 +699,7 @@ describe('BacklogAdapter.handleWebhook', () => {
     );
 
     await vi.waitFor(() => expect(dispatched).toHaveLength(1));
-    expect(dispatched[0]?.message.formatted).toEqual({
-      type: 'root',
-      children: [
-        {
-          type: 'paragraph',
-          children: [
-            { type: 'strong', children: [{ type: 'text', value: 'urgent' }] },
-          ],
-        },
-      ],
-    });
+    expect(dispatched[0]?.message.formatted).toEqual(URGENT_CONTENT);
   });
 });
 
@@ -730,10 +707,7 @@ describe('BacklogAdapter.parseMessage', () => {
   async function delivered(
     payload: Record<string, unknown>
   ): Promise<Message<BacklogRawMessage>[]> {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
+    const adapter = withProject(createBacklogAdapter(webhookAdapterConfig()));
     const dispatched = await initializeCapturingDispatches(adapter);
     await adapter.handleWebhook(webhookRequest(payload));
     await vi.waitFor(() => expect(dispatched.length).toBeGreaterThan(0));
@@ -776,15 +750,7 @@ describe('BacklogAdapter.parseMessage', () => {
       host: FIXTURE.host,
       projectId: FIXTURE.projectId,
       subject: { kind: 'issue', issueId: FIXTURE.issueId },
-      comment: {
-        id: 1,
-        content: 'hello',
-        createdUser: { id: FIXTURE.alice.id, name: FIXTURE.alice.name },
-        created: '2026-01-01T00:00:00Z',
-        updated: '2026-01-01T00:00:00Z',
-        changeLog: [],
-        stars: [],
-      },
+      comment: comment({ content: 'hello' }),
       changes: [],
     };
 
@@ -804,32 +770,6 @@ describe('BacklogAdapter.parseMessage', () => {
   });
 });
 
-/** `BacklogUserRef` fixtures matching the project's vocabulary (Chatbot 999, Alice 100, Bob 101). */
-const ALICE_USER_REF = {
-  id: FIXTURE.alice.id,
-  userId: FIXTURE.alice.userId,
-  name: FIXTURE.alice.name,
-  mailAddress: null,
-};
-const BOB_USER_REF = {
-  id: FIXTURE.bob.id,
-  userId: FIXTURE.bob.userId,
-  name: FIXTURE.bob.name,
-  mailAddress: null,
-};
-const CHATBOT_USER_REF = {
-  id: FIXTURE.bot.id,
-  userId: FIXTURE.bot.userId,
-  name: FIXTURE.bot.name,
-  mailAddress: null,
-};
-
-/**
- * The two subjects every id in this file is built from. A pull request is
- * addressed by repository id and number, never by the global
- * `FIXTURE.pullRequestId`, which addresses no endpoint
- * (`.claude/rules/backlog-pull-request-facts.md` "Addressing").
- */
 const ISSUE_SUBJECT: BacklogSubjectRef = {
   kind: 'issue',
   issueId: FIXTURE.issueId,
@@ -839,184 +779,99 @@ const PULL_REQUEST_SUBJECT: BacklogSubjectRef = {
   repositoryId: FIXTURE.repositoryId,
   number: FIXTURE.pullRequestNumber,
 };
+const PULL_REQUEST_COMMENT_ID = 7000001;
+
+const URGENT_CONTENT: FormattedContent = {
+  type: 'root',
+  children: [
+    {
+      type: 'paragraph',
+      children: [
+        { type: 'strong', children: [{ type: 'text', value: 'urgent' }] },
+      ],
+    },
+  ],
+};
 
 /**
- * A `BacklogAdapter` backed by an in-memory port seeded with `FIXTURE`'s
- * project, issue and bot user — used by the egress/reads/stream/reactions
- * tests below, which exercise real port state rather than the webhook
- * ladder. `textFormattingRule` is overridable so a notation-project test
- * doesn't need its own bespoke config.
+ * An adapter on the fixture space whose client answers Get Project,
+ * Get Issue and Add Comment; a test stubs any other method it reaches, and
+ * one it forgot fails on the stubbed global `fetch`.
  */
 function egressAdapter(
   options: {
     textFormattingRule?: 'markdown' | 'backlog';
-    seed?: Partial<Parameters<typeof createInMemoryBacklogApi>[0]>;
     logger?: ReturnType<typeof createMockLogger>;
-    /**
-     * Wraps the port the adapter is handed, leaving the returned `api`
-     * untouched for state assertions — the seam `recordPortCalls` uses to
-     * count reads the in-memory port does not record.
-     */
-    wrapApi?: (api: BacklogApi) => BacklogApi;
   } = {}
-): {
-  adapter: BacklogAdapter;
-  api: ReturnType<typeof createInMemoryBacklogApi>;
-} {
-  const api = createInMemoryBacklogApi({
-    projects: [
-      {
-        id: FIXTURE.projectId,
-        projectKey: FIXTURE.projectKey,
-        name: 'Example project',
-        textFormattingRule: options.textFormattingRule ?? 'markdown',
-      },
-    ],
-    issues: [
-      {
-        id: FIXTURE.issueId,
-        projectId: FIXTURE.projectId,
-        issueKey: `${FIXTURE.projectKey}-1`,
-        summary: 'Deploy fails on the staging space',
-        description: 'Reproduces on every push to main.',
-        issueType: { id: 1, name: 'Task' },
-        priority: { id: 3, name: 'Normal' },
-        status: { id: 1, name: 'Open' },
-        assignee: null,
-        createdUser: ALICE_USER_REF,
-        created: new Date('2026-01-01T00:00:00Z'),
-        updated: new Date('2026-01-01T00:00:00Z'),
-      },
-    ],
-    users: [CHATBOT_USER_REF],
-    me: CHATBOT_USER_REF,
-    ...options.seed,
+) {
+  const adapter = createBacklogAdapter({
+    ...webhookAdapterConfig(),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
-
-  const adapter = onPort(
-    createBacklogAdapter({
-      host: FIXTURE.host,
-      apiKey: 'test-api-key',
-      botUserId: FIXTURE.bot.id,
-      botUserName: FIXTURE.bot.name,
-      webhookSecret: FIXTURE.webhookSecret,
-      ...(options.logger === undefined ? {} : { logger: options.logger }),
-    }),
-    () => options.wrapApi?.(api) ?? api
-  );
-
-  return { adapter, api };
-}
-
-/**
- * Records every port method the adapter calls, in order. The in-memory port
- * records writes only, so a `read`-bucket call nobody asked for is invisible
- * without this — and §7.3 and §7.4 budget those calls exactly.
- */
-function recordPortCalls(api: BacklogApi, calls: string[]): BacklogApi {
-  return new Proxy(api, {
-    get(target, property, receiver) {
-      const value: unknown = Reflect.get(target, property, receiver);
-      if (typeof property !== 'string' || typeof value !== 'function') {
-        return value;
-      }
-      return (...args: unknown[]): unknown => {
-        calls.push(property);
-        return (value as (...rest: unknown[]) => unknown).apply(target, args);
-      };
-    },
-  });
-}
-
-const EGRESS_THREAD_ID = `backlog:${FIXTURE.host}:${FIXTURE.projectId}:issue:${FIXTURE.issueId}`;
-const PULL_REQUEST_THREAD_ID = `backlog:${FIXTURE.host}:${FIXTURE.projectId}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}`;
-
-/**
- * Seed for a project that also has a git repository holding one pull request,
- * so a pull-request thread resolves through the same adapter as an issue one.
- * Comment ids are seven-digit while the issue comments above are 1..n: the two
- * sequences are separate on a real space (measured 2026-09-06), and a fixture
- * where a bare comment id identified one kind would let a
- * `commentId`/`pullRequestCommentId` mix-up pass unnoticed.
- */
-function pullRequestSeed(
-  comments: Partial<BacklogComment>[] = []
-): Partial<Parameters<typeof createInMemoryBacklogApi>[0]> {
-  return {
-    repositories: [
-      conformanceFixture.baseGitRepository({
-        name: FIXTURE.repositoryName,
-      }),
-    ],
-    pullRequests: [conformanceFixture.basePullRequest()],
-    pullRequestComments: {
-      [`${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}`]: comments.map(
-        (overrides) => conformanceFixture.basePullRequestComment(overrides)
+  const client = adapter.client();
+  const backlog = {
+    client,
+    getProject: vi
+      .spyOn(client, 'getProject')
+      .mockResolvedValue(exampleProject(options.textFormattingRule)),
+    getIssue: vi
+      .spyOn(client, 'getIssue')
+      .mockResolvedValue(EXAMPLE_ISSUE as never),
+    postIssueComments: vi
+      .spyOn(client, 'postIssueComments')
+      .mockImplementation(
+        async (_issueIdOrKey, params) =>
+          issueComment({ content: params.content, createdUser: BOT }) as never
       ),
-    },
   };
+  return { adapter, backlog };
 }
 
-const PULL_REQUEST_COMMENT_ID = conformanceFixture.pullRequestCommentIds[0];
+const EGRESS_THREAD_ID = ISSUE_THREAD_ID;
 
-/** One issue comment authored by the bot, editable and deletable by it. */
-function seededComment(): {
-  id: number;
-  issueId: number;
-  content: string;
-  changeLog: [];
-  createdUser: typeof CHATBOT_USER_REF;
-  created: Date;
-  updated: Date;
-  stars: [];
-} {
-  return {
-    id: 1,
-    issueId: FIXTURE.issueId,
-    content: 'Original',
-    changeLog: [],
-    createdUser: CHATBOT_USER_REF,
-    created: new Date('2026-01-01T00:00:00Z'),
-    updated: new Date('2026-01-01T00:00:00Z'),
-    stars: [],
-  };
+function commentMessageId(
+  subject: BacklogSubjectRef = ISSUE_SUBJECT,
+  commentId = 1
+): string {
+  return encodeMessageId({
+    host: FIXTURE.host,
+    subject,
+    part: 'comment',
+    commentId,
+  });
 }
 
-describe('BacklogAdapter.postMessage (§6.1)', () => {
+describe('BacklogAdapter.postMessage', () => {
   it('a reply is posted as a comment on the issue', async () => {
-    const { adapter, api } = egressAdapter();
+    const { adapter, backlog } = egressAdapter();
+
     const result = await adapter.postMessage(EGRESS_THREAD_ID, {
       markdown: 'Any progress on this?',
     });
+
     expect(result.threadId).toBe(EGRESS_THREAD_ID);
-    expect(api.state.recordedInputs).toContainEqual({
-      method: 'addComment',
-      issueId: FIXTURE.issueId,
-      input: { content: 'Any progress on this?' },
+    expect(backlog.postIssueComments).toHaveBeenCalledWith(FIXTURE.issueId, {
+      content: 'Any progress on this?',
     });
   });
 
   it('a channel id, which channel.post() passes, is a validation error and creates nothing', async () => {
-    const { adapter, api } = egressAdapter();
+    const { adapter, backlog } = egressAdapter();
+
     await expect(
       adapter.postMessage(`backlog:${FIXTURE.host}:${FIXTURE.projectId}`, {
         markdown: 'Deploy fails on staging',
       })
     ).rejects.toThrow(ValidationError);
-    expect(api.state.recordedInputs).toEqual([]);
-  });
-
-  it('files are uploaded and attached to the comment', async () => {
-    const { adapter, api } = egressAdapter();
-    await adapter.postMessage(EGRESS_THREAD_ID, {
-      markdown: 'See attached',
-      files: [{ filename: 'notes.txt', data: Buffer.from('hello') }],
-    });
-    expect(api.state.uploads).toHaveLength(1);
+    expect(backlog.postIssueComments).not.toHaveBeenCalled();
   });
 
   it('an ArrayBuffer and a Blob are uploaded like a Buffer, each with its own bytes', async () => {
-    const { adapter, api } = egressAdapter();
+    const { adapter, backlog } = egressAdapter();
+    const postSpaceAttachment = vi
+      .spyOn(backlog.client, 'postSpaceAttachment')
+      .mockImplementation(async () => ({ id: 77 }) as never);
+
     await adapter.postMessage(EGRESS_THREAD_ID, {
       markdown: 'See attached',
       files: [
@@ -1025,8 +880,12 @@ describe('BacklogAdapter.postMessage (§6.1)', () => {
         { filename: 'blob.txt', data: new Blob(['blob!']) },
       ],
     });
+
     expect(
-      api.state.uploads.map((upload) => [upload.name, upload.size])
+      postSpaceAttachment.mock.calls.map(([form]) => {
+        const file = form.get('file') as File;
+        return [file.name, file.size];
+      })
     ).toEqual([
       ['buffer.bin', 3],
       ['array.bin', 4],
@@ -1035,7 +894,9 @@ describe('BacklogAdapter.postMessage (§6.1)', () => {
   });
 
   it('a file whose data is neither a Buffer, an ArrayBuffer nor a Blob is rejected as a backlog error, and neither that file nor the comment reaches Backlog', async () => {
-    const { adapter, api } = egressAdapter();
+    const { adapter, backlog } = egressAdapter();
+    const postSpaceAttachment = vi.spyOn(backlog.client, 'postSpaceAttachment');
+
     const rejection = adapter.postMessage(EGRESS_THREAD_ID, {
       markdown: 'See attached',
       files: [{ filename: 'notes.txt', data: new ReadableStream() }],
@@ -1044,299 +905,188 @@ describe('BacklogAdapter.postMessage (§6.1)', () => {
     await expect(rejection).rejects.toThrow(ValidationError);
     await expect(rejection).rejects.toThrow(/notes\.txt/);
     await expect(rejection).rejects.toMatchObject({ adapter: 'backlog' });
-    expect(api.state.uploads).toEqual([]);
-    expect(
-      api.state.recordedInputs.filter((input) => input.method === 'addComment')
-    ).toEqual([]);
-  });
-
-  it('a mistyped notifiedUserId is a validation error', async () => {
-    const { adapter } = egressAdapter();
-    const message = {
-      markdown: 'hi',
-      notifiedUserId: ['not-a-number'],
-    } as unknown as Parameters<BacklogAdapter['postMessage']>[1];
-    await expect(
-      adapter.postMessage(EGRESS_THREAD_ID, message)
-    ).rejects.toThrow(ValidationError);
+    expect(postSpaceAttachment).not.toHaveBeenCalled();
+    expect(backlog.postIssueComments).not.toHaveBeenCalled();
   });
 
   it('a bold reply on a notation project uses two quotes', async () => {
-    const { adapter, api } = egressAdapter({ textFormattingRule: 'backlog' });
+    const { adapter, backlog } = egressAdapter({
+      textFormattingRule: 'backlog',
+    });
+
     await adapter.postMessage(EGRESS_THREAD_ID, { markdown: '**bold**' });
-    const addComment = api.state.recordedInputs.find(
-      (input) => input.method === 'addComment'
-    );
-    expect(addComment).toMatchObject({ input: { content: "''bold''" } });
+
+    expect(backlog.postIssueComments).toHaveBeenCalledWith(FIXTURE.issueId, {
+      content: "''bold''",
+    });
   });
 
   it('an unreadable project setting degrades to markdown for one call', async () => {
-    const { adapter, api } = egressAdapter();
-    api.getProject = () => Promise.reject(new Error('project lookup failed'));
+    const { adapter, backlog } = egressAdapter();
+    backlog.getProject.mockRejectedValue(new Error('project lookup failed'));
+
     await adapter.postMessage(EGRESS_THREAD_ID, { markdown: '**bold**' });
-    const addComment = api.state.recordedInputs.find(
-      (input) => input.method === 'addComment'
-    );
-    // Markdown passes `{ markdown }` through verbatim (§9.3), so a degraded
-    // call still renders as GFM rather than being escaped or altered.
-    expect(addComment).toMatchObject({ input: { content: '**bold**' } });
+
+    expect(backlog.postIssueComments).toHaveBeenCalledWith(FIXTURE.issueId, {
+      content: '**bold**',
+    });
   });
 });
 
-describe('BacklogAdapter.editMessage / deleteMessage (§6.2, §6.3, D12)', () => {
-  it('the issue body cannot be edited', async () => {
-    const { adapter } = egressAdapter();
-    const issueMessageId = encodeMessageId({
-      host: FIXTURE.host,
-      subject: ISSUE_SUBJECT,
-      part: 'root',
+describe('BacklogAdapter.editMessage / deleteMessage', () => {
+  it("an edit rewrites the comment with the project's formatting rule", async () => {
+    const { adapter, backlog } = egressAdapter({
+      textFormattingRule: 'backlog',
     });
-    await expect(
-      adapter.editMessage(EGRESS_THREAD_ID, issueMessageId, { markdown: 'x' })
-    ).rejects.toThrow(ValidationError);
+    const patchIssueComment = vi
+      .spyOn(backlog.client, 'patchIssueComment')
+      .mockImplementation(
+        async (_issueIdOrKey, commentId, params) =>
+          issueComment({
+            id: commentId,
+            content: params.content,
+            createdUser: BOT,
+          }) as never
+      );
+
+    const result = await adapter.editMessage(
+      EGRESS_THREAD_ID,
+      commentMessageId(),
+      { markdown: '**bold**' }
+    );
+
+    expect(patchIssueComment).toHaveBeenCalledWith(FIXTURE.issueId, 1, {
+      content: "''bold''",
+    });
+    expect(result.id).toBe(commentMessageId());
   });
 
-  it('a fieldchange update with no comment cannot be deleted', async () => {
-    const { adapter } = egressAdapter();
-    const updateMessageId = encodeMessageId({
-      host: FIXTURE.host,
-      subject: ISSUE_SUBJECT,
-      part: 'update',
-      created: '2026-09-03T04:05:06Z',
-    });
-    await expect(
-      adapter.deleteMessage(EGRESS_THREAD_ID, updateMessageId)
-    ).rejects.toThrow(ValidationError);
-  });
+  it('a delete removes the comment from the issue', async () => {
+    const { adapter, backlog } = egressAdapter();
+    const deleteIssueComment = vi
+      .spyOn(backlog.client, 'deleteIssueComment')
+      .mockResolvedValue(issueComment() as never);
 
-  it('editMessage with files is rejected', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: {
-        comments: [
-          {
-            id: 1,
-            issueId: FIXTURE.issueId,
-            content: 'Original',
-            changeLog: [],
-            createdUser: CHATBOT_USER_REF,
-            created: new Date('2026-01-01T00:00:00Z'),
-            updated: new Date('2026-01-01T00:00:00Z'),
-            stars: [],
-          },
-        ],
-      },
-    });
-    void api;
-    const commentMessageId = encodeMessageId({
-      host: FIXTURE.host,
-      subject: ISSUE_SUBJECT,
-      part: 'comment',
-      commentId: 1,
-    });
-    await expect(
-      adapter.editMessage(EGRESS_THREAD_ID, commentMessageId, {
-        markdown: 'x',
-        files: [{ filename: 'a.txt', data: Buffer.from('a') }],
-      })
-    ).rejects.toThrow(ValidationError);
-  });
+    await adapter.deleteMessage(EGRESS_THREAD_ID, commentMessageId());
 
-  it('editing a message that belongs to another thread is rejected', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: { comments: [seededComment()] },
-    });
-    const foreignMessageId = encodeMessageId({
-      host: FIXTURE.host,
-      subject: { kind: 'issue', issueId: FIXTURE.issueId + 1 },
-      part: 'comment',
-      commentId: 1,
-    });
-
-    await expect(
-      adapter.editMessage(EGRESS_THREAD_ID, foreignMessageId, {
-        markdown: 'rewritten',
-      })
-    ).rejects.toThrow(ValidationError);
-    expect(api.state.comments[0]?.content).toBe('Original');
-  });
-
-  it('a message id naming another space is not edited in this one', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: { comments: [seededComment()] },
-    });
-    const otherSpaceMessageId = encodeMessageId({
-      host: 'other.backlog.jp',
-      subject: ISSUE_SUBJECT,
-      part: 'comment',
-      commentId: 1,
-    });
-
-    await expect(
-      adapter.editMessage(EGRESS_THREAD_ID, otherSpaceMessageId, {
-        markdown: 'rewritten',
-      })
-    ).rejects.toThrow(ValidationError);
-    expect(api.state.comments[0]?.content).toBe('Original');
+    expect(deleteIssueComment).toHaveBeenCalledWith(FIXTURE.issueId, 1);
   });
 
   it('deleting a pull request comment through an issue thread is rejected', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: {
-        comments: [seededComment()],
-        ...pullRequestSeed([{ id: PULL_REQUEST_COMMENT_ID }]),
-      },
-    });
-    const pullRequestMessageId = encodeMessageId({
-      host: FIXTURE.host,
-      subject: PULL_REQUEST_SUBJECT,
-      part: 'comment',
-      commentId: PULL_REQUEST_COMMENT_ID,
-    });
+    const { adapter, backlog } = egressAdapter();
+    const deleteIssueComment = vi.spyOn(backlog.client, 'deleteIssueComment');
 
     await expect(
-      adapter.deleteMessage(EGRESS_THREAD_ID, pullRequestMessageId)
+      adapter.deleteMessage(
+        EGRESS_THREAD_ID,
+        commentMessageId(PULL_REQUEST_SUBJECT, PULL_REQUEST_COMMENT_ID)
+      )
     ).rejects.toThrow(ValidationError);
-    expect(api.state.recordedInputs).toEqual([]);
+    expect(deleteIssueComment).not.toHaveBeenCalled();
   });
 
   it('deleting an issue comment through a pull request thread is rejected before any request', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: {
-        comments: [seededComment()],
-        ...pullRequestSeed([{ id: PULL_REQUEST_COMMENT_ID }]),
-      },
-    });
-    const issueMessageId = encodeMessageId({
-      host: FIXTURE.host,
-      subject: ISSUE_SUBJECT,
-      part: 'comment',
-      commentId: 1,
-    });
+    const { adapter, backlog } = egressAdapter();
+    const deleteIssueComment = vi.spyOn(backlog.client, 'deleteIssueComment');
 
     await expect(
-      adapter.deleteMessage(PULL_REQUEST_THREAD_ID, issueMessageId)
+      adapter.deleteMessage(PULL_REQUEST_THREAD_ID, commentMessageId())
     ).rejects.toThrow(ValidationError);
-    expect(api.state.recordedInputs).toEqual([]);
-    expect(api.state.comments).toHaveLength(1);
+    expect(deleteIssueComment).not.toHaveBeenCalled();
+    expect(network).not.toHaveBeenCalled();
   });
 
   it('deleting a pull request comment fails before any request because Backlog has no endpoint', async () => {
-    const { adapter, api } = egressAdapter({
-      seed: pullRequestSeed([{ id: PULL_REQUEST_COMMENT_ID }]),
-    });
-    const commentMessageId = encodeMessageId({
-      host: FIXTURE.host,
-      subject: PULL_REQUEST_SUBJECT,
-      part: 'comment',
-      commentId: PULL_REQUEST_COMMENT_ID,
-    });
+    const { adapter } = egressAdapter();
 
     const failure: unknown = await adapter
-      .deleteMessage(PULL_REQUEST_THREAD_ID, commentMessageId)
+      .deleteMessage(
+        PULL_REQUEST_THREAD_ID,
+        commentMessageId(PULL_REQUEST_SUBJECT, PULL_REQUEST_COMMENT_ID)
+      )
       .then(() => undefined)
       .catch((cause: unknown) => cause);
 
     expect(failure).toBeInstanceOf(AdapterError);
     expect((failure as AdapterError).code).toBe('UNSUPPORTED_OPERATION');
-    expect(api.state.recordedInputs).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
   });
 });
 
-describe('BacklogAdapter.stream (§6.4, D4)', () => {
+describe('BacklogAdapter.stream', () => {
   it('a streamed reply is posted once and never edited', async () => {
-    const { adapter, api } = egressAdapter();
+    const { adapter, backlog } = egressAdapter();
+    const patchIssueComment = vi.spyOn(backlog.client, 'patchIssueComment');
     async function* chunks() {
       yield 'Hello, ';
       yield { type: 'markdown_text' as const, text: 'world' };
     }
+
     const result = await adapter.stream(EGRESS_THREAD_ID, chunks());
 
     expect(result.threadId).toBe(EGRESS_THREAD_ID);
-    expect(
-      api.state.recordedInputs.filter((input) => input.method === 'addComment')
-    ).toHaveLength(1);
-    expect(
-      api.state.recordedInputs.filter(
-        (input) => input.method === 'updateComment'
-      )
-    ).toHaveLength(0);
-    expect(api.state.recordedInputs).toContainEqual({
-      method: 'addComment',
-      issueId: FIXTURE.issueId,
-      input: { content: 'Hello, world' },
+    expect(backlog.postIssueComments).toHaveBeenCalledTimes(1);
+    expect(backlog.postIssueComments).toHaveBeenCalledWith(FIXTURE.issueId, {
+      content: 'Hello, world',
     });
+    expect(patchIssueComment).not.toHaveBeenCalled();
   });
 
   it('an empty stream posts a single space', async () => {
-    const { adapter, api } = egressAdapter();
-    async function* chunks(): AsyncIterable<string> {
-      // no chunks
-    }
+    const { adapter, backlog } = egressAdapter();
+    async function* chunks(): AsyncIterable<string> {}
+
     await adapter.stream(EGRESS_THREAD_ID, chunks());
-    const addComment = api.state.recordedInputs.find(
-      (input) => input.method === 'addComment'
-    );
-    expect(addComment).toMatchObject({ input: { content: ' ' } });
+
+    expect(backlog.postIssueComments).toHaveBeenCalledWith(FIXTURE.issueId, {
+      content: ' ',
+    });
   });
 });
 
-describe('BacklogAdapter reactions (§6.5)', () => {
-  function seedWithComment(
-    presenters: {
-      id: number;
-      userId: string | null;
-      name: string;
-      mailAddress: string | null;
-    }[] = []
-  ) {
-    return egressAdapter({
-      seed: {
-        comments: [
-          {
-            id: 1,
-            issueId: FIXTURE.issueId,
-            content: 'Any progress?',
-            changeLog: [],
-            createdUser: ALICE_USER_REF,
-            created: new Date('2026-01-01T00:00:00Z'),
-            updated: new Date('2026-01-01T00:00:00Z'),
-            stars: presenters.map((presenter, index) => ({
-              id: index + 1,
-              comment: null,
-              url: '',
-              title: '',
-              presenter,
-              created: new Date('2026-01-01T00:00:00Z'),
-            })),
-          },
-        ],
-      },
-    });
+describe('BacklogAdapter reactions', () => {
+  function withCommentStarredBy(presenters: BacklogUser[] = []) {
+    const { adapter, backlog } = egressAdapter();
+    vi.spyOn(backlog.client, 'getIssueComment').mockResolvedValue(
+      issueComment({
+        id: 1,
+        stars: presenters.map((presenter, index) => star(presenter, index + 1)),
+      }) as never
+    );
+    const postStar = vi
+      .spyOn(backlog.client, 'postStar')
+      .mockResolvedValue(undefined);
+    const removeStar = vi
+      .spyOn(backlog.client, 'removeStar')
+      .mockResolvedValue(undefined);
+    return { adapter, postStar, removeStar };
   }
 
-  const commentMessageId = encodeMessageId({
-    host: FIXTURE.host,
-    subject: ISSUE_SUBJECT,
-    part: 'comment',
-    commentId: 1,
-  });
+  it('a reaction stars the comment unless the bot has already starred it', async () => {
+    const unstarred = withCommentStarredBy([ALICE]);
+    const starred = withCommentStarredBy([BOT]);
 
-  it('adding a reaction twice stars the comment once', async () => {
-    const { adapter, api } = seedWithComment();
-    await adapter.addReaction(EGRESS_THREAD_ID, commentMessageId, 'star');
-    await adapter.addReaction(EGRESS_THREAD_ID, commentMessageId, 'star');
-    expect(
-      api.state.recordedInputs.filter((input) => input.method === 'addStar')
-    ).toEqual([{ method: 'addStar', target: { commentId: 1 } }]);
+    await unstarred.adapter.addReaction(
+      EGRESS_THREAD_ID,
+      commentMessageId(),
+      'star'
+    );
+    await starred.adapter.addReaction(
+      EGRESS_THREAD_ID,
+      commentMessageId(),
+      'star'
+    );
+
+    expect(unstarred.postStar).toHaveBeenCalledWith({ commentId: 1 });
+    expect(starred.postStar).not.toHaveBeenCalled();
   });
 
   it("removing a reaction leaves other users' stars", async () => {
-    const { adapter, api } = seedWithComment([CHATBOT_USER_REF, BOB_USER_REF]);
-    await adapter.removeReaction(EGRESS_THREAD_ID, commentMessageId, 'star');
-    const remaining = api.state.comments.find((c) => c.id === 1)?.stars;
-    expect(remaining?.map((star) => star.presenter.id)).toEqual([
-      BOB_USER_REF.id,
-    ]);
+    const { adapter, removeStar } = withCommentStarredBy([BOT, BOB]);
+
+    await adapter.removeReaction(EGRESS_THREAD_ID, commentMessageId(), 'star');
+
+    expect(removeStar.mock.calls).toEqual([[1]]);
   });
 
   it('a non-comment id cannot be starred', async () => {
@@ -1346,133 +1096,32 @@ describe('BacklogAdapter reactions (§6.5)', () => {
       subject: ISSUE_SUBJECT,
       part: 'root',
     });
+
     await expect(
       adapter.addReaction(EGRESS_THREAD_ID, issueMessageId, 'star')
     ).rejects.toThrow(ValidationError);
   });
 });
 
-describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
-  it('backward paging ends with a page holding the issue body', async () => {
-    const { adapter } = egressAdapter({
-      seed: {
-        comments: Array.from({ length: 4 }, (_, index) => ({
-          id: index + 1,
-          issueId: FIXTURE.issueId,
-          content: `Comment ${index + 1}`,
-          changeLog: [],
-          createdUser: ALICE_USER_REF,
-          created: new Date(
-            Date.parse('2026-01-01T00:00:00Z') + (index + 1) * 60_000
-          ),
-          updated: new Date(
-            Date.parse('2026-01-01T00:00:00Z') + (index + 1) * 60_000
-          ),
-          stars: [],
-        })),
-      },
-    });
-
-    let cursor: string | undefined;
-    let last: Awaited<ReturnType<typeof adapter.fetchMessages>>['messages'] =
-      [];
-    for (;;) {
-      const result = await adapter.fetchMessages(
-        EGRESS_THREAD_ID,
-        cursor === undefined
-          ? { limit: 2, direction: 'backward' }
-          : { limit: 2, cursor, direction: 'backward' }
-      );
-      last = result.messages;
-      if (result.nextCursor === undefined) {
-        break;
-      }
-      cursor = result.nextCursor;
-    }
-    expect(last).toHaveLength(1);
-    expect(last[0]?.id).toBe(
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: ISSUE_SUBJECT,
-        part: 'root',
-      })
-    );
-  });
-
-  it('a comment edited on Backlog reports edited and editedAt', async () => {
-    const editedAt = new Date('2026-01-02T00:00:00Z');
-    const { adapter } = egressAdapter({
-      seed: {
-        comments: [
-          {
-            id: 1,
-            issueId: FIXTURE.issueId,
-            content: 'Edited content',
-            changeLog: [],
-            createdUser: ALICE_USER_REF,
-            created: new Date('2026-01-01T00:00:00Z'),
-            updated: editedAt,
-            stars: [],
-          },
-        ],
-      },
-    });
-    const result = await adapter.fetchMessages(EGRESS_THREAD_ID, {
-      limit: 2,
-      direction: 'backward',
-    });
-    const comment = result.messages.find((m) => m.text === 'Edited content');
-    expect(comment?.metadata.edited).toBe(true);
-    expect(comment?.metadata.editedAt).toEqual(editedAt);
-  });
-
+describe('BacklogAdapter.fetchMessages / fetchMessage / fetchThread', () => {
   it('fetchMessage parses a comment with the project formatting rule', async () => {
-    const { adapter } = egressAdapter({
+    const { adapter, backlog } = egressAdapter({
       textFormattingRule: 'backlog',
-      seed: {
-        comments: [
-          {
-            id: 1,
-            issueId: FIXTURE.issueId,
-            content: "''urgent''",
-            changeLog: [],
-            createdUser: ALICE_USER_REF,
-            created: new Date('2026-01-01T00:01:00Z'),
-            updated: new Date('2026-01-01T00:01:00Z'),
-            stars: [],
-          },
-        ],
-      },
     });
+    vi.spyOn(backlog.client, 'getIssueComment').mockResolvedValue(
+      issueComment({ id: 1, content: "''urgent''" }) as never
+    );
 
     const message = await adapter.fetchMessage(
       EGRESS_THREAD_ID,
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: ISSUE_SUBJECT,
-        part: 'comment',
-        commentId: 1,
-      })
+      commentMessageId()
     );
 
-    expect(message?.formatted).toEqual({
-      type: 'root',
-      children: [
-        {
-          type: 'paragraph',
-          children: [
-            { type: 'strong', children: [{ type: 'text', value: 'urgent' }] },
-          ],
-        },
-      ],
-    });
+    expect(message?.formatted).toEqual(URGENT_CONTENT);
   });
 
   it('an id fetchMessage answers null for spends no project lookup', async () => {
-    const calls: string[] = [];
-    const { adapter } = egressAdapter({
-      wrapApi: (port) => recordPortCalls(port, calls),
-    });
+    const { adapter, backlog } = egressAdapter();
 
     const message = await adapter.fetchMessage(
       EGRESS_THREAD_ID,
@@ -1485,59 +1134,34 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
     );
 
     expect(message).toBeNull();
-    expect(calls).toEqual([]);
+    expect(backlog.getProject).not.toHaveBeenCalled();
+    expect(network).not.toHaveBeenCalled();
   });
 
   it('fetchMessages parses comments with the project formatting rule', async () => {
-    const { adapter } = egressAdapter({
+    const { adapter, backlog } = egressAdapter({
       textFormattingRule: 'backlog',
-      seed: {
-        comments: [
-          {
-            id: 1,
-            issueId: FIXTURE.issueId,
-            content: "''urgent''",
-            changeLog: [],
-            createdUser: ALICE_USER_REF,
-            created: new Date('2026-01-01T00:01:00Z'),
-            updated: new Date('2026-01-01T00:01:00Z'),
-            stars: [],
-          },
-        ],
-      },
     });
+    vi.spyOn(backlog.client, 'getIssueComments').mockResolvedValue([
+      issueComment({ id: 1, content: "''urgent''" }),
+    ] as never);
 
     const result = await adapter.fetchMessages(EGRESS_THREAD_ID, {
       limit: 2,
       direction: 'backward',
     });
-    const comment = result.messages.find(
+    const urgent = result.messages.find(
       (message) => message.text === "''urgent''"
     );
 
-    expect(comment?.formatted).toEqual({
-      type: 'root',
-      children: [
-        {
-          type: 'paragraph',
-          children: [
-            { type: 'strong', children: [{ type: 'text', value: 'urgent' }] },
-          ],
-        },
-      ],
-    });
-  });
-
-  it('a channel id passed to fetchMessages is a validation error', async () => {
-    const { adapter } = egressAdapter();
-    await expect(
-      adapter.fetchMessages(`backlog:${FIXTURE.host}:${FIXTURE.projectId}`)
-    ).rejects.toThrow(ValidationError);
+    expect(urgent?.formatted).toEqual(URGENT_CONTENT);
   });
 
   it('fetchThread resolves the issue', async () => {
     const { adapter } = egressAdapter();
+
     const thread = await adapter.fetchThread(EGRESS_THREAD_ID);
+
     expect(thread).toMatchObject({
       channelId: `backlog:${FIXTURE.host}:${FIXTURE.projectId}`,
       channelName: FIXTURE.projectKey,
@@ -1546,22 +1170,28 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
   });
 
   it('thread info names its kind for both issues and pull requests', async () => {
-    const { adapter } = egressAdapter({ seed: pullRequestSeed() });
+    const { adapter, backlog } = egressAdapter();
+    vi.spyOn(backlog.client, 'getPullRequest').mockResolvedValue(
+      pullRequest() as never
+    );
+    vi.spyOn(backlog.client, 'getGitRepository').mockResolvedValue(
+      gitRepository({ name: FIXTURE.repositoryName })
+    );
 
-    const issue = await adapter.fetchThread(EGRESS_THREAD_ID);
-    const pullRequest = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
+    const issueThread = await adapter.fetchThread(EGRESS_THREAD_ID);
+    const pullRequestThread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
 
-    expect(issue.metadata).toMatchObject({
+    expect(issueThread.metadata).toMatchObject({
       kind: 'issue',
       issueId: FIXTURE.issueId,
       url: `https://${FIXTURE.host}/view/${FIXTURE.projectKey}-1`,
     });
-    expect(pullRequest).toMatchObject({
+    expect(pullRequestThread).toMatchObject({
       channelId: `backlog:${FIXTURE.host}:${FIXTURE.projectId}`,
       channelName: FIXTURE.projectKey,
       isDM: false,
     });
-    expect(pullRequest.metadata).toMatchObject({
+    expect(pullRequestThread.metadata).toMatchObject({
       kind: 'pullRequest',
       repositoryId: FIXTURE.repositoryId,
       number: FIXTURE.pullRequestNumber,
@@ -1569,14 +1199,15 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
     });
   });
 
-  it('a pull request thread without a cached repository name is described without a url', async () => {
+  it('a pull request thread whose repository cannot be read is described without a url', async () => {
     const logger = createMockLogger();
-    // The pull request exists, its repository does not answer: the name half
-    // of the web URL cannot be resolved (docs/specs/adapter.md §7.3).
-    const { adapter } = egressAdapter({
-      logger,
-      seed: { pullRequests: [conformanceFixture.basePullRequest()] },
-    });
+    const { adapter, backlog } = egressAdapter({ logger });
+    vi.spyOn(backlog.client, 'getPullRequest').mockResolvedValue(
+      pullRequest() as never
+    );
+    vi.spyOn(backlog.client, 'getGitRepository').mockRejectedValue(
+      new ResourceNotFoundError('backlog', 'gitRepository')
+    );
 
     const thread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
 
@@ -1589,24 +1220,20 @@ describe('BacklogAdapter.fetchMessages / fetchThread (§7.1, §7.3)', () => {
   });
 });
 
-describe('BacklogAdapter read budget (§7.3, §7.4)', () => {
+describe('BacklogAdapter read budget', () => {
   it('resolving an issue thread spends one read', async () => {
-    const calls: string[] = [];
-    const { adapter } = egressAdapter({
-      wrapApi: (api) => recordPortCalls(api, calls),
-    });
+    const { adapter, backlog } = egressAdapter();
 
     const thread = await adapter.fetchThread(EGRESS_THREAD_ID);
 
     expect(thread.metadata).toMatchObject({ kind: 'issue' });
-    expect(calls).toEqual(['getIssue']);
+    expect(backlog.getIssue).toHaveBeenCalledTimes(1);
+    expect(backlog.getProject).not.toHaveBeenCalled();
+    expect(network).not.toHaveBeenCalled();
   });
 
   it('the subject of a serialised issue root spends none', async () => {
-    const calls: string[] = [];
-    const { adapter } = egressAdapter({
-      wrapApi: (api) => recordPortCalls(api, calls),
-    });
+    const { adapter, backlog } = egressAdapter();
     const message = await adapter.fetchMessage(
       EGRESS_THREAD_ID,
       encodeMessageId({
@@ -1618,48 +1245,41 @@ describe('BacklogAdapter read budget (§7.3, §7.4)', () => {
     if (message === null) {
       throw new Error('the issue root was not returned');
     }
-    calls.length = 0;
+    backlog.getIssue.mockClear();
+    backlog.getProject.mockClear();
 
     const subject = await adapter.fetchSubject(message.raw);
 
     expect(subject).toMatchObject({ type: 'issue' });
-    expect(calls).toEqual([]);
+    expect(backlog.getIssue).not.toHaveBeenCalled();
+    expect(backlog.getProject).not.toHaveBeenCalled();
+    expect(network).not.toHaveBeenCalled();
   });
 });
 
-describe('BacklogAdapter.listThreads (§7.6)', () => {
+describe('BacklogAdapter.listThreads', () => {
   it('threads are listed with an offset cursor and a trailing empty page', async () => {
-    const { adapter } = egressAdapter({
-      seed: {
-        issues: Array.from({ length: 3 }, (_, index) => ({
-          id: FIXTURE.issueId + index,
-          projectId: FIXTURE.projectId,
-          issueKey: `${FIXTURE.projectKey}-${index + 1}`,
-          summary: `Issue ${index + 1}`,
-          description: '',
-          issueType: { id: 1, name: 'Task' },
-          priority: { id: 3, name: 'Normal' },
-          status: { id: 1, name: 'Open' },
-          assignee: null,
-          createdUser: ALICE_USER_REF,
-          created: new Date('2026-01-01T00:00:00Z'),
-          updated: new Date('2026-01-01T00:00:00Z'),
-        })),
-      },
-    });
+    const { adapter, backlog } = egressAdapter();
+    const issues = Array.from({ length: 3 }, (_, index) =>
+      issue({
+        id: FIXTURE.issueId + index,
+        issueKey: `${FIXTURE.projectKey}-${index + 1}`,
+        summary: `Issue ${index + 1}`,
+      })
+    );
+    vi.spyOn(backlog.client, 'getIssues').mockImplementation(
+      async ({ offset = 0, count = 20 } = {}) =>
+        issues.slice(offset, offset + count) as never
+    );
     const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
 
     const firstPage = await adapter.listThreads(channelId, { limit: 2 });
     expect(firstPage.threads).toHaveLength(2);
     expect(firstPage.nextCursor).toBe('2');
-    const firstCursor = firstPage.nextCursor;
-    if (firstCursor === undefined) {
-      throw new Error('expected a nextCursor after a full first page');
-    }
 
     const secondPage = await adapter.listThreads(channelId, {
       limit: 2,
-      cursor: firstCursor,
+      cursor: '2',
     });
     expect(secondPage.threads).toHaveLength(1);
     expect(secondPage.nextCursor).toBeUndefined();
@@ -1673,13 +1293,25 @@ describe('BacklogAdapter.listThreads (§7.6)', () => {
   });
 });
 
-describe('BacklogAdapter.getUser (§7.7)', () => {
-  it('a user id round-trips through getUser', async () => {
-    const { adapter } = egressAdapter({
-      seed: { users: [CHATBOT_USER_REF, ALICE_USER_REF] },
+describe('BacklogAdapter.getUser', () => {
+  function answeringUsers(users: BacklogUser[]) {
+    const { adapter, backlog } = egressAdapter();
+    vi.spyOn(backlog.client, 'getUser').mockImplementation(async (id) => {
+      const found = users.find((candidate) => candidate.id === id);
+      if (found === undefined) {
+        throw new ResourceNotFoundError('backlog', 'user', String(id));
+      }
+      return found as never;
     });
+    return adapter;
+  }
+
+  it('a user id round-trips through getUser', async () => {
+    const adapter = answeringUsers([BOT, ALICE]);
     const userId = `${FIXTURE.host}:${FIXTURE.alice.id}`;
+
     const user = await adapter.getUser(userId);
+
     expect(user).toMatchObject({
       userId,
       userName: FIXTURE.alice.userId,
@@ -1689,19 +1321,23 @@ describe('BacklogAdapter.getUser (§7.7)', () => {
   });
 
   it('the bot user reports isBot true', async () => {
-    const { adapter } = egressAdapter();
+    const adapter = answeringUsers([BOT]);
+
     const user = await adapter.getUser(`${FIXTURE.host}:${FIXTURE.bot.id}`);
+
     expect(user?.isBot).toBe(true);
   });
 
   it('an unknown user id resolves to null', async () => {
-    const { adapter } = egressAdapter();
+    const adapter = answeringUsers([BOT]);
+
     const user = await adapter.getUser(`${FIXTURE.host}:999999`);
+
     expect(user).toBeNull();
   });
 });
 
-describe('BacklogAdapter.fetchSubject (§7.4)', () => {
+describe('BacklogAdapter.fetchSubject', () => {
   it('the parent subject is the issue', async () => {
     const { adapter } = egressAdapter();
     const message = await adapter.fetchMessage(
@@ -1713,8 +1349,10 @@ describe('BacklogAdapter.fetchSubject (§7.4)', () => {
       })
     );
     expect(message).not.toBeNull();
+
     const subject =
       message === null ? null : await adapter.fetchSubject(message.raw);
+
     expect(subject).toMatchObject({
       id: EGRESS_THREAD_ID,
       type: 'issue',
@@ -1743,38 +1381,43 @@ describe('BacklogAdapter.fetchChannelInfo', () => {
   });
 });
 
-describe('BacklogAdapter.rehydrateAttachment (§6.6)', () => {
+describe('BacklogAdapter.rehydrateAttachment', () => {
   it('a serialised attachment regains fetchData for a configured host', () => {
-    const { adapter } = egressAdapter();
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
     const attachment = {
       type: 'file' as const,
       name: 'log.txt',
       url: `https://${FIXTURE.host}/api/v2/issues/${FIXTURE.issueId}/attachments/42`,
     };
+
     const rehydrated = adapter.rehydrateAttachment(attachment);
+
     expect(typeof rehydrated.fetchData).toBe('function');
   });
 
   it('an attachment on a foreign host is returned unchanged', () => {
-    const { adapter } = egressAdapter();
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
     const attachment = {
       type: 'file' as const,
       name: 'log.txt',
       url: `https://not-configured.backlog.com/api/v2/issues/${FIXTURE.issueId}/attachments/42`,
     };
+
     const rehydrated = adapter.rehydrateAttachment(attachment);
+
     expect(rehydrated).toEqual(attachment);
     expect(rehydrated.fetchData).toBeUndefined();
   });
 
   it('an attachment with no url is returned unchanged', () => {
-    const { adapter } = egressAdapter();
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
     const attachment = { type: 'file' as const, name: 'log.txt' };
+
     expect(adapter.rehydrateAttachment(attachment)).toEqual(attachment);
   });
 
   it('rehydrating an attachment accepts both url shapes and refuses a foreign host for both', () => {
-    const { adapter } = egressAdapter({ seed: pullRequestSeed() });
+    const adapter = createBacklogAdapter(webhookAdapterConfig());
     const urls = [
       `https://${FIXTURE.host}/api/v2/issues/${FIXTURE.issueId}/attachments/42`,
       `https://${FIXTURE.host}/api/v2/projects/${FIXTURE.projectId}/git/repositories/${FIXTURE.repositoryId}/pullRequests/${FIXTURE.pullRequestNumber}/attachments/42`,
@@ -1810,112 +1453,54 @@ const BOLD_CONTENT: FormattedContent = {
   ],
 };
 
-describe('BacklogAdapter.renderFormatted (§9.1)', () => {
-  it('a bold reply on a notation project uses two quotes', async () => {
+describe('BacklogAdapter.renderFormatted', () => {
+  async function onNotationProject(): Promise<BacklogAdapter> {
     const { adapter } = egressAdapter({ textFormattingRule: 'backlog' });
-    // Prime the cache the way egress would (one Get Project per channel).
     await adapter.postMessage(EGRESS_THREAD_ID, {
       markdown: 'prime the cache',
     });
-    const rendered = adapter.renderFormatted(
-      {
-        type: 'root',
-        children: [
-          {
-            type: 'paragraph',
-            children: [
-              { type: 'strong', children: [{ type: 'text', value: 'bold' }] },
-            ],
-          },
-        ],
-      },
-      EGRESS_THREAD_ID
+    return adapter;
+  }
+
+  it('a bold reply on a notation project uses two quotes', async () => {
+    const adapter = await onNotationProject();
+
+    expect(adapter.renderFormatted(BOLD_CONTENT, EGRESS_THREAD_ID)).toBe(
+      "''bold''"
     );
-    expect(rendered).toBe("''bold''");
   });
 
   it('without a target renders Markdown', () => {
     const adapter = new BacklogAdapter(validConfig());
-    const rendered = adapter.renderFormatted({
-      type: 'root',
-      children: [
-        {
-          type: 'paragraph',
-          children: [
-            { type: 'strong', children: [{ type: 'text', value: 'bold' }] },
-          ],
-        },
-      ],
-    });
-    expect(rendered).toBe('**bold**');
+
+    expect(adapter.renderFormatted(BOLD_CONTENT)).toBe('**bold**');
   });
 
   it("rendering for a channel uses that channel's cached rule", async () => {
-    const { adapter } = egressAdapter({ textFormattingRule: 'backlog' });
-    // Prime the cache the way egress would (one Get Project per channel).
-    await adapter.postMessage(EGRESS_THREAD_ID, {
-      markdown: 'prime the cache',
-    });
+    const adapter = await onNotationProject();
 
-    const rendered = adapter.renderFormatted(
-      BOLD_CONTENT,
-      `backlog:${FIXTURE.host}:${FIXTURE.projectId}`
-    );
-
-    expect(rendered).toBe("''bold''");
+    expect(
+      adapter.renderFormatted(
+        BOLD_CONTENT,
+        `backlog:${FIXTURE.host}:${FIXTURE.projectId}`
+      )
+    ).toBe("''bold''");
   });
 
   it('rendering for a target that is neither a thread nor a channel id renders markdown', async () => {
-    const { adapter } = egressAdapter({ textFormattingRule: 'backlog' });
-    await adapter.postMessage(EGRESS_THREAD_ID, {
-      markdown: 'prime the cache',
-    });
+    const adapter = await onNotationProject();
 
-    const rendered = adapter.renderFormatted(BOLD_CONTENT, 'not-an-id');
-
-    expect(rendered).toBe('**bold**');
+    expect(adapter.renderFormatted(BOLD_CONTENT, 'not-an-id')).toBe('**bold**');
   });
 });
 
 describe('BacklogAdapter wiring with a real Chat instance', () => {
-  it('a mention delivered through handleWebhook is answered with exactly one addComment', async () => {
-    const api = createInMemoryBacklogApi({
-      projects: [conformanceFixture.baseProject()],
-      issues: [
-        {
-          id: FIXTURE.issueId,
-          projectId: FIXTURE.projectId,
-          issueKey: `${FIXTURE.projectKey}-1`,
-          summary: 'Deploy fails on the staging space',
-          description: 'Reproduces on every push to main.',
-          issueType: { id: 1, name: 'Task' },
-          priority: { id: 3, name: 'Normal' },
-          status: { id: 1, name: 'Open' },
-          assignee: null,
-          createdUser: ALICE_USER_REF,
-          created: new Date('2026-01-01T00:00:00Z'),
-          updated: new Date('2026-01-01T00:00:00Z'),
-        },
-      ],
-      users: [CHATBOT_USER_REF],
-      me: CHATBOT_USER_REF,
-    });
-    const adapter = onPort(
-      createBacklogAdapter({
-        host: FIXTURE.host,
-        apiKey: 'test-api-key',
-        botUserId: FIXTURE.bot.id,
-        botUserName: FIXTURE.bot.name,
-        webhookSecret: FIXTURE.webhookSecret,
-      }),
-      () => api
-    );
-
+  it('a mention delivered through handleWebhook is answered with exactly one comment', async () => {
+    const { adapter, backlog } = egressAdapter();
     let resolveMentionHandled: (() => void) | undefined;
     const mentionHandled = new Promise<void>((resolve) => {
       resolveMentionHandled = resolve;
     });
-
     const chat = new Chat({
       adapters: { backlog: adapter },
       state: new MemoryStateAdapter(),
@@ -1936,53 +1521,34 @@ describe('BacklogAdapter wiring with a real Chat instance', () => {
       )
     );
     expect(response.status).toBe(200);
-
     await mentionHandled;
 
-    const addCommentCalls = api.state.recordedInputs.filter(
-      (input) => input.method === 'addComment'
-    );
-    expect(addCommentCalls).toHaveLength(1);
-    expect(addCommentCalls[0]).toMatchObject({
-      issueId: FIXTURE.issueId,
-      input: { content: 'Thanks for the mention, Alice!' },
+    expect(backlog.postIssueComments).toHaveBeenCalledTimes(1);
+    expect(backlog.postIssueComments).toHaveBeenCalledWith(FIXTURE.issueId, {
+      content: 'Thanks for the mention, Alice!',
     });
   });
 });
-
-const CONNECT_BOT_USER_ID = 999;
 
 connectWebhookContract({
   name: 'backlog',
   createChat: () => mockChat(),
   createAdapter: ({ webhookVerifier }) =>
-    onPort(
+    withProject(
       createBacklogAdapter({
         host: FIXTURE.host,
         apiKey: 'connect-key',
-        botUserId: CONNECT_BOT_USER_ID,
+        botUserId: FIXTURE.bot.id,
         botUserName: FIXTURE.bot.name,
         webhookVerifier,
-      }),
-      () =>
-        createInMemoryBacklogApi({
-          projects: [conformanceFixture.baseProject()],
-        })
+      })
     ),
   makeWebhookRequest: () => webhookRequest(issueCommented(), { token: null }),
 });
 
 selfMessageContract({
   name: 'backlog',
-  setup: async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const chat = mockChat();
-    await adapter.initialize(chat);
-    return { adapter, chat };
-  },
+  setup: async () => webhookAdapter(),
   makeOtherMessageRequest: () => webhookRequest(issueCommented()),
   makeSelfMessageRequest: () =>
     webhookRequest(
@@ -2005,15 +1571,7 @@ selfMessageContract({
  */
 selfMessageContract({
   name: 'backlog (pull request)',
-  setup: async () => {
-    const adapter = onPort(
-      createBacklogAdapter(webhookAdapterConfig()),
-      fixturePort
-    );
-    const chat = mockChat();
-    await adapter.initialize(chat);
-    return { adapter, chat };
-  },
+  setup: async () => webhookAdapter(),
   makeOtherMessageRequest: () => webhookRequest(pullRequestCommented()),
   makeSelfMessageRequest: () =>
     webhookRequest(
@@ -2027,19 +1585,11 @@ selfMessageContract({
     ),
 });
 
-/**
- * A port whose `getMyself` answers the fixture bot and counts its calls, for
- * the configurations below that leave the identity to the API.
- */
-function myselfCountingApi(host: string = FIXTURE.host) {
-  const api = createInMemoryBacklogApi({
-    projects: [conformanceFixture.baseProject()],
-    issues: [conformanceFixture.baseIssue()],
-    users: [CHATBOT_USER_REF],
-    me: CHATBOT_USER_REF,
-  });
-  const getMyself = vi.spyOn(api, 'getMyself');
-  return { api, getMyself, host };
+/** Answers `GET /users/myself` with the fixture bot, and Get Project. */
+function answeringMyself(adapter: BacklogAdapter) {
+  const client = adapter.client();
+  vi.spyOn(client, 'getProject').mockResolvedValue(exampleProject());
+  return vi.spyOn(client, 'getMyself').mockResolvedValue(BOT as never);
 }
 
 function identitylessConfig() {
@@ -2060,19 +1610,16 @@ function selfAuthoredComment() {
   });
 }
 
-describe('BacklogAdapter bot identity (§3.2, D23)', () => {
+describe('BacklogAdapter bot identity (D23)', () => {
   it('a configured botUserId and botUserName cost no GET /users/myself at all', async () => {
-    const { api, getMyself } = myselfCountingApi();
-    const adapter = onPort(
-      createBacklogAdapter({
-        ...identitylessConfig(),
-        botUserId: FIXTURE.bot.id,
-        botUserName: FIXTURE.bot.name,
-      }),
-      () => api
-    );
-    const chat = mockChat();
-    await adapter.initialize(chat);
+    const adapter = createBacklogAdapter({
+      ...identitylessConfig(),
+      botUserId: FIXTURE.bot.id,
+      botUserName: FIXTURE.bot.name,
+    });
+    const getMyself = answeringMyself(adapter);
+    vi.spyOn(adapter.client(), 'getUser').mockResolvedValue(BOT as never);
+    await adapter.initialize(mockChat());
 
     await adapter.handleWebhook(webhookRequest(issueCommented()));
     await adapter.handleWebhook(webhookRequest(selfAuthoredComment()));
@@ -2082,15 +1629,13 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   });
 
   it('a configured botUserId without a name costs no GET /users/myself, and initialize warns once', async () => {
-    const { api, getMyself } = myselfCountingApi();
+    const adapter = createBacklogAdapter({
+      ...identitylessConfig(),
+      botUserId: FIXTURE.bot.id,
+    });
+    const getMyself = answeringMyself(adapter);
+    vi.spyOn(adapter.client(), 'getUser').mockResolvedValue(BOT as never);
     const logger = createMockLogger();
-    const adapter = onPort(
-      createBacklogAdapter({
-        ...identitylessConfig(),
-        botUserId: FIXTURE.bot.id,
-      }),
-      () => api
-    );
     const chat = mockChat(undefined, logger);
     await adapter.initialize(chat);
 
@@ -2107,12 +1652,11 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   });
 
   it('without a botUserName, a typed @name is not a mention but a notification to the bot is', async () => {
-    const adapter = onPort(
+    const adapter = withProject(
       createBacklogAdapter({
         ...identitylessConfig(),
         botUserId: FIXTURE.bot.id,
-      }),
-      fixturePort
+      })
     );
     const dispatched = await initializeCapturingDispatches(adapter);
 
@@ -2144,15 +1688,10 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   });
 
   it('constructing without a bot identity validates synchronously and calls nothing', () => {
-    const createApi = vi.fn(() => myselfCountingApi().api);
-
-    const adapter = onPort(
-      createBacklogAdapter(identitylessConfig()),
-      createApi
-    );
+    const adapter = createBacklogAdapter(identitylessConfig());
 
     expect(adapter.name).toBe('backlog');
-    expect(createApi).not.toHaveBeenCalled();
+    expect(network).not.toHaveBeenCalled();
   });
 
   it('constructs from BACKLOG_HOST, BACKLOG_API_KEY and BACKLOG_WEBHOOK_SECRET alone', () => {
@@ -2166,11 +1705,8 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   it('blank BACKLOG_BOT_USER_ID and BACKLOG_BOT_USER_NAME are looked up rather than rejected', async () => {
     process.env.BACKLOG_BOT_USER_ID = '';
     process.env.BACKLOG_BOT_USER_NAME = '';
-    const { api, getMyself } = myselfCountingApi();
-    const adapter = onPort(
-      createBacklogAdapter(identitylessConfig()),
-      () => api
-    );
+    const adapter = createBacklogAdapter(identitylessConfig());
+    const getMyself = answeringMyself(adapter);
 
     await adapter.initialize(mockChat());
 
@@ -2179,25 +1715,18 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   });
 
   it('with neither configured, initialize reads both from one GET /users/myself', async () => {
-    const { api, getMyself } = myselfCountingApi();
-    const adapter = onPort(
-      createBacklogAdapter(identitylessConfig()),
-      () => api
-    );
-    const chat = mockChat();
+    const adapter = createBacklogAdapter(identitylessConfig());
+    const getMyself = answeringMyself(adapter);
 
-    await adapter.initialize(chat);
+    await adapter.initialize(mockChat());
 
     expect(getMyself).toHaveBeenCalledTimes(1);
     expect(adapter.userName).toBe(FIXTURE.bot.name);
   });
 
   it('the fetched id suppresses the bot’s own comments and the lookup is not repeated', async () => {
-    const { api, getMyself } = myselfCountingApi();
-    const adapter = onPort(
-      createBacklogAdapter(identitylessConfig()),
-      () => api
-    );
+    const adapter = createBacklogAdapter(identitylessConfig());
+    const getMyself = answeringMyself(adapter);
     const chat = mockChat();
     await adapter.initialize(chat);
 
@@ -2215,14 +1744,11 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   });
 
   it('a configured botUserName wins over the fetched name, and the id still comes from the API', async () => {
-    const { api } = myselfCountingApi();
-    const adapter = onPort(
-      createBacklogAdapter({
-        ...identitylessConfig(),
-        botUserName: 'Support Bot',
-      }),
-      () => api
-    );
+    const adapter = createBacklogAdapter({
+      ...identitylessConfig(),
+      botUserName: 'Support Bot',
+    });
+    answeringMyself(adapter);
     const chat = mockChat();
     await adapter.initialize(chat);
 
@@ -2232,13 +1758,10 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   });
 
   it('a failed lookup does not fail initialize; it is logged and retried by the next webhook', async () => {
-    const { api, getMyself } = myselfCountingApi();
+    const adapter = createBacklogAdapter(identitylessConfig());
+    const getMyself = answeringMyself(adapter);
     getMyself.mockRejectedValueOnce(new Error('network down'));
     const logger = createMockLogger();
-    const adapter = onPort(
-      createBacklogAdapter(identitylessConfig()),
-      () => api
-    );
     const chat = mockChat(undefined, logger);
 
     await expect(adapter.initialize(chat)).resolves.toBeUndefined();
@@ -2261,12 +1784,8 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   it('a webhook whose bot identity cannot be learned is answered 503 and not dispatched', async () => {
     // Dispatching without the id would skip the self-message check, and a
     // bot that answers its own comments answers them forever.
-    const { api, getMyself } = myselfCountingApi();
-    getMyself.mockRejectedValue(new Error('network down'));
-    const adapter = onPort(
-      createBacklogAdapter(identitylessConfig()),
-      () => api
-    );
+    const adapter = createBacklogAdapter(identitylessConfig());
+    answeringMyself(adapter).mockRejectedValue(new Error('network down'));
     const chat = mockChat();
     await adapter.initialize(chat);
 
@@ -2280,10 +1799,7 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   });
 
   it('parseMessage before the identity is known is refused rather than guessed', () => {
-    const adapter = onPort(
-      createBacklogAdapter(identitylessConfig()),
-      () => myselfCountingApi().api
-    );
+    const adapter = createBacklogAdapter(identitylessConfig());
 
     let failure: unknown;
     try {
@@ -2302,11 +1818,11 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   });
 
   it('a mention of the fetched name reaches a real Chat, which answers once', async () => {
-    const { api } = myselfCountingApi();
-    const adapter = onPort(
-      createBacklogAdapter(identitylessConfig()),
-      () => api
-    );
+    const adapter = createBacklogAdapter(identitylessConfig());
+    answeringMyself(adapter);
+    const postIssueComments = vi
+      .spyOn(adapter.client(), 'postIssueComments')
+      .mockResolvedValue(issueComment({ createdUser: BOT }) as never);
     let resolveMentionHandled: (() => void) | undefined;
     const mentionHandled = new Promise<void>((resolve) => {
       resolveMentionHandled = resolve;
@@ -2331,19 +1847,15 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
     );
     await mentionHandled;
 
-    expect(
-      api.state.recordedInputs.filter((input) => input.method === 'addComment')
-    ).toHaveLength(1);
+    expect(postIssueComments).toHaveBeenCalledTimes(1);
   });
 });
 
 selfMessageContract({
   name: 'backlog (identity from GET /users/myself)',
   setup: async () => {
-    const adapter = onPort(
-      createBacklogAdapter(identitylessConfig()),
-      () => myselfCountingApi().api
-    );
+    const adapter = createBacklogAdapter(identitylessConfig());
+    answeringMyself(adapter);
     const chat = mockChat();
     await adapter.initialize(chat);
     return { adapter, chat };

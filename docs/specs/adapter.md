@@ -19,8 +19,8 @@ Every Backlog API claim below cites a
 [developer.nulab.com](https://developer.nulab.com/docs/backlog/) page or says
 "measured on \<date\>".
 
-Conventions: "the core" is the `Chat` class in `chat@4.40.0`; "the port" is the
-internal `BacklogApi` interface (§8); "the space" is the one Backlog space an
+Conventions: "the core" is the `Chat` class in `chat@4.40.0`; "the client" is
+the adapter's `backlog-js` client (§8); "the space" is the one Backlog space an
 adapter is configured for. `MUST`/`MUST NOT` are requirements; `SHOULD` is a default an implementer
 may deviate from with a Why-not comment. Items marked ⚑ are decisions the
 register in §15 tracks; each one has a verdict there — confirmed, changed or
@@ -151,9 +151,9 @@ Types: `BacklogAdapterConfig`, `Resolvable`,
 `BacklogWebhookVerifier` — the config and what it references;
 `BacklogThreadId` and `BacklogSubjectRef`; `BacklogRawMessage` and every
 type it reaches — `BacklogRawIssue`, `BacklogRawComment`,
-`BacklogRawPullRequest`, `BacklogChange` (the raw side's, with ISO strings)
-and `BacklogWebhookPayload`, since a consumer that receives a value must be
-able to name its type;
+`BacklogRawPullRequest`, `BacklogUser`, `BacklogStar`, `BacklogChangeLog`,
+`BacklogChange` and `BacklogWebhookPayload`, since a consumer that receives a
+value must be able to name its type;
 `BacklogMessageId`, `BacklogMessagePart` and `BacklogUserId`, which the two
 decoders return; `BacklogPostableExtras`, without which the Backlog-only
 field of §3.4 cannot be typed at all;
@@ -169,15 +169,12 @@ encoders are not exported, because a consumer never builds a message or user
 id. The mention notation is Backlog's documented syntax (§5.4), which a
 consumer writes as it would any other markup, so it is not wrapped either.
 
-Not exported: the port (`BacklogApi`) and its domain types, the in-memory port
-(§8.3) and the seam that injects one, the id encoders and
-`channelIdFromThreadId` as free functions, the mention helpers and
-`mentionPattern`, the format converters (§9 — rendering is the adapter's
-`renderFormatted`), the parsed config, the
-internal subject layer (`SubjectClient`, `subjectClientFor`) that selects
-the issue or pull-request endpoint family for a thread (D-PR2), the port's
-`backlog-js` wrapper factory, zod schemas, the plain-text fallback converter
-and fixtures.
+Not exported: the id encoders and `channelIdFromThreadId` as free functions,
+the mention helpers and `mentionPattern`, the format converters (§9 —
+rendering is the adapter's `renderFormatted`), the parsed config, the internal subject layer (`SubjectClient`,
+`subjectClientFor`) that selects the issue or pull-request endpoint family for
+a thread (D-PR2), the client factory and its response schemas (§8), the
+plain-text fallback converter and fixtures.
 
 Nothing from `zod` appears in an exported type, and `chat` and `backlog-js`
 are the only modules `dist/index.d.ts` may import. `scripts/check-published-types.mjs`
@@ -198,10 +195,6 @@ types move with `backlog-js`'s, which is accepted because it is the library
 the adapter is built on and the same vendor ships both. It is the one escape
 hatch, as `octokit` is `@chat-adapter/github`'s.
 
-`client()` throws `AdapterError` (`code: 'NO_CLIENT'`) when the adapter
-was built on the internal port seam, which only this repository's tests can
-reach: the port is then not `backlog-js`-backed and there is no client to
-hand out.
 
 ### 3.2 `createBacklogAdapter(config?)`
 
@@ -363,8 +356,19 @@ pull-request comment carries no parent reference of its own
 (`.claude/rules/backlog-pull-request-facts.md`); `BacklogRawComment` therefore
 has no `issueId`. The two root variants stay flat (`issue`, `pullRequest`)
 rather than one `root` with a nested discriminator, so `raw.issue` is reachable
-after one `kind` check. Raw shapes carry ISO strings where the port's domain
-types carry `Date` (`src/index.ts`).
+after one `kind` check.
+
+`issue`, `pullRequest` and `comment` are the REST response as its schema
+(§8.3) parsed it: every key Backlog sent, with ISO-string timestamps — the
+same value the adapter itself read, not a copy narrowed for the queue. Their
+types are `backlog-js`'s `Entity.Issue.Issue`, `Entity.PullRequest.PullRequest`
+and `Entity.PullRequest.Comment` with the measured deviations laid over them:
+`userId` is `null` for a Nulab-account user (`BacklogUser`), a star's
+`comment` is `null` (`BacklogStar`), an `assignee` and a pull request's
+`issue`, commits and close/merge dates are `null` when unset, and a comment's
+`content` is `null` on a system comment. A comment's `changeLog[]`
+(`BacklogChangeLog`) keeps `backlog-js`'s `originalValue`; `changes` below is
+where it reads `oldValue`, like a webhook change.
 
 `changes` is normalised to `{ field: string; newValue: string | null; oldValue: string | null }`.
 Value systems are **not** unified: webhook `status` changes carry ids and
@@ -638,7 +642,7 @@ Behavioural consequences of measured facts (details and dates in
   with an authenticated API URL, not a public link:
   `https://<host>/api/v2/issues/<issueId>/attachments/<id>` on an issue and
   `https://<host>/api/v2/projects/<projectId>/git/repositories/<repositoryId>/pullRequests/<number>/attachments/<id>`
-  on a pull request (§6.6), and `fetchData()` downloading via the port. MIME
+  on a pull request (§6.6), and `fetchData()` downloading via the client. MIME
   type is unknown until download.
 - **The issue snapshot is webhook-only.** `assignee`, `status`, `priority` and
   the rest of the issue's post-event state are on every type 1, 2, 3 and 17
@@ -804,7 +808,7 @@ that notifies without a visible mention.
 ## 6. Egress
 
 Every egress member decodes `threadId`, refuses a host other than the
-configured space, and uses the port through the subject client the thread id's `subject`
+configured space, and uses the client through the subject client the thread id's `subject`
 selects (issue endpoints or pull-request endpoints, D-PR2). The behaviour
 below is the same for both kinds unless a subsection says otherwise.
 Non-comment message ids (`:r`, `:u:`) are rejected with
@@ -944,12 +948,10 @@ Outbound is §6.1 step 1. Inbound attachments are `Attachment` objects:
 | Webhook types 18–20 `content.attachments[]`, when present | same, with the pull-request URL below |
 | Webhook type 20 `changes[field="attachment"]` and REST pull-request comment `changeLog[field="attachment"]` | `type: "file"`, `name = new_value / newValue`; **no id is carried** (the pull-request `changeLog` has no `attachmentInfo`, measured 2026-09-06), so `url` and `fetchData` resolve the id lazily through `GET …/pullRequests/:number/attachments` by name — the newest match when names collide ⚑ D-PR10 |
 
-A **root** message carries no attachments at all, of either kind. The port
-returns neither object's `attachments[]`: `getIssue` does not surface one, and
-`BacklogPullRequest` drops the `attachments[]` a real pull request carries
-(measured 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`
-"Addressing"), so §7.1 builds a root message with `attachments: []`. Listing
-them is one extra read on **every** root message — `GET /issues/:issueIdOrKey/attachments`
+A **root** message carries no attachments at all, of either kind (§7.1
+builds it with `attachments: []`), although the raw pull request keeps the
+`attachments[]` Backlog sends. Resolving them is one extra read on **every**
+root message — `GET /issues/:issueIdOrKey/attachments`
 and `GET /projects/:projectId/git/repositories/:repositoryId/pullRequests/:number/attachments`
 — for a source that matters only when a body has files, so the adapter does
 not spend it and a consumer that wants them asks through `client()`
@@ -959,7 +961,7 @@ not spend it and a consumer that wants them asks through `client()`
 ([Get Issue Attachment](https://developer.nulab.com/docs/backlog/api/2/get-issue-attachment/))
 or `GET /projects/:projectId/git/repositories/:repositoryId/pullRequests/:number/attachments/:attachmentId`
 ([Download Pull Request Attachment](https://developer.nulab.com/docs/backlog/api/2/download-pull-request-attachment/))
-through the port and returns a `Buffer`. `rehydrateAttachment(attachment)`
+through the client and returns a `Buffer`. `rehydrateAttachment(attachment)`
 rebuilds `fetchData` from `attachment.url` after a JSON round trip; it accepts
 only URLs whose host is the configured space and whose path matches
 `/api/v2/issues/<posint>/attachments/<posint>` or
@@ -1130,133 +1132,97 @@ page is full, so a trailing empty page is possible and documented.
 adapter (the core infers adapters from id shape and does not know
 `<host>:<id>`); README says to call `adapter.getUser()` directly.
 
-## 8. Backlog client port
+## 8. Backlog client
 
-### 8.1 Interface
+### 8.1 Calls
 
-Every method takes and returns port-owned domain types (no `backlog-js`
-types), throws only §3.6 classes, and is implemented twice (§8.2, §8.3).
+The adapter calls `backlog-js`'s typed methods on the one client that
+`client()` also hands out (§3.1); there is no port in front of it.
+Every member reaches Backlog through the calls below, and nothing else.
 
-| Method | Endpoint | Backlog limit |
+| Call | Endpoint | Backlog limit |
 | --- | --- | --- |
 | `getIssue(issueId)` | `GET /issues/:id` | read |
 | `getProject(projectId)` | `GET /projects/:id` | read |
 | `getUser(userId)` | `GET /users/:id` | read |
 | `getMyself()` | `GET /users/myself` — the user the credential acts as; the bot identity when it is not configured (§3.2, D23) | read |
-| `listIssues(projectId, { count, offset? })` | `GET /issues?projectId[]=` | **search** |
-| `listComments(issueId, { count, order, minId?, maxId? })` | `GET /issues/:id/comments` | read |
-| `getComment(issueId, commentId)` | `GET /issues/:id/comments/:cid` | read |
-| `addComment(issueId, { content, notifiedUserId?, attachmentId? })` | `POST /issues/:id/comments` | update |
-| `updateComment(issueId, commentId, content)` | `PATCH /issues/:id/comments/:cid` | update |
-| `deleteComment(issueId, commentId)` | `DELETE /issues/:id/comments/:cid` | update |
-| `addStar(target)` — `target = { commentId }` or `{ pullRequestCommentId }` | `POST /stars` | update |
-| `deleteStar(starId)` | `DELETE /stars/:id` | update |
-| `uploadAttachment(filename, data, mimeType?)` | `POST /space/attachment` (multipart) | update |
-| `downloadAttachment(issueId, attachmentId)` | `GET /issues/:id/attachments/:aid` | read |
-| `listGitRepositories(projectId)` | `GET /projects/:id/git/repositories` | read |
+| `getIssues({ projectId: [id], count, offset })` | `GET /issues?projectId[]=` | **search** |
+| `getIssueComments(issueId, { count, order, minId?, maxId? })` | `GET /issues/:id/comments` | read |
+| `getIssueComment(issueId, commentId)` | `GET /issues/:id/comments/:cid` | read |
+| `postIssueComments(issueId, { content, notifiedUserId?, attachmentId? })` | `POST /issues/:id/comments` | update |
+| `patchIssueComment(issueId, commentId, { content })` | `PATCH /issues/:id/comments/:cid` | update |
+| `deleteIssueComment(issueId, commentId)` | `DELETE /issues/:id/comments/:cid` | update |
+| `postStar({ commentId })` or `postStar({ pullRequestCommentId })` | `POST /stars` | update |
+| `removeStar(starId)` | `DELETE /stars/:id` | update |
+| `postSpaceAttachment(form)` — one multipart part named `file` | `POST /space/attachment` | update |
+| `getIssueAttachment(issueId, attachmentId)` | `GET /issues/:id/attachments/:aid` | read |
 | `getGitRepository(projectId, repositoryId)` | `GET /projects/:id/git/repositories/:rid` | read |
-| `listPullRequests(projectId, repositoryId, { count, offset?, statusId? })` | `GET …/pullRequests` | read (measured 2026-09-06, not search) |
-| `getPullRequest(ref)` — `ref = { projectId, repositoryId, number }` | `GET …/pullRequests/:number` | read |
-| `listPullRequestComments(ref, { count, order, minId?, maxId? })` | `GET …/pullRequests/:number/comments` | read |
-| `addPullRequestComment(ref, { content, notifiedUserId?, attachmentId? })` | `POST …/pullRequests/:number/comments` | update |
-| `updatePullRequestComment(ref, commentId, content)` | `PATCH …/pullRequests/:number/comments/:cid` | update |
-| `listPullRequestAttachments(ref)` | `GET …/pullRequests/:number/attachments` | read |
-| `downloadPullRequestAttachment(ref, attachmentId)` | `GET …/pullRequests/:number/attachments/:aid` | read |
+| `getPullRequest(projectId, repositoryId, number)` | `GET …/pullRequests/:number` | read |
+| `getPullRequestComments(projectId, repositoryId, number, { count, order, minId?, maxId? })` | `GET …/pullRequests/:number/comments` | read |
+| `postPullRequestComments(projectId, repositoryId, number, { content, notifiedUserId?, attachmentId? })` | `POST …/pullRequests/:number/comments` | update |
+| `patchPullRequestComments(projectId, repositoryId, number, commentId, { content })` | `PATCH …/pullRequests/:number/comments/:cid` | update |
+| `getPullRequestAttachments(projectId, repositoryId, number)` | `GET …/pullRequests/:number/attachments` | read |
+| `getPullRequestAttachment(projectId, repositoryId, number, attachmentId)` | `GET …/pullRequests/:number/attachments/:aid` | read |
 
-`addStar` takes a discriminated `StarTarget` (`{ commentId }` or
-`{ pullRequestCommentId }`) rather than a bare number, so the kind cannot be
-lost between the subject layer and the request. No method deletes a
+A pull request is addressed by `projectId`, `repositoryId` and `number`,
+never by its space-wide `id`, which addresses no endpoint. No call deletes a
 pull-request comment or fetches one by id: neither route exists
-(`.claude/rules/backlog-pull-request-facts.md`).
-
-The two download methods name the file from `Content-Disposition`, the only
-place Backlog puts it, and never fail over the name: a download whose bytes
-arrived is a success. `filename*` is preferred over plain `filename` when a
-header carries both ([RFC 6266
-§4.3](https://www.rfc-editor.org/rfc/rfc6266#section-4.3)); only `filename*`
-is percent-decoded, because RFC 6266 leaves plain `filename` a quoted string
-(so `filename="100%.png"` is that name, not a decode failure); a `filename*`
-that will not decode falls back to its raw value; and a header naming no file
-falls back to the attachment id. Only the `UTF-8''` prefix is stripped, so
-another charset or a populated `language` field is left in the returned name.
+(`.claude/rules/backlog-pull-request-facts.md`). `attachmentId[]` is sent to
+`postPullRequestComments` although `backlog-js` leaves it out of that
+method's parameter type; Backlog accepts it (measured 2026-09-06).
 
 The last column is Backlog's fact, not the adapter's: which of the per-user
 limits on the
 [Rate limit](https://developer.nulab.com/docs/backlog/rate-limit/) page the
-endpoint draws on (read = GET except Search and Icon; update =
-POST/PATCH/DELETE; search = Get Issue List, Count Issue, Get Wiki Page List,
-Count Wiki Page; icon = the five icon endpoints). It is recorded so the cost of
-a member can be reasoned about; the adapter neither classifies requests nor
-tracks the limits (D5, §8.4).
+endpoint draws on. It is recorded so the cost of a member can be reasoned
+about; the adapter neither classifies requests nor tracks the limits (D5,
+§8.4).
 
-Domain types normalise nullish API fields: `issue.description ?? ""`,
-`comment.content: string | null` (assignee-change comments are `null`),
-`comment.changeLog ?? []`, `comment.stars ?? []`, `user.userId ?? null`.
-`BacklogComment` is the shape both endpoint families share (`id, content,
-changeLog, createdUser, created, updated, stars`); `BacklogIssueComment`
-extends it with `issueId`, which pull-request comments do not have.
-`BacklogPullRequest` carries `id, projectId, repositoryId, number, summary,
-description, base, branch, status, assignee | null, issue: { id, issueKey } | null,
-baseCommit | null, branchCommit | null, mergeCommit | null, closeAt | null,
-mergeAt | null, createdUser, created, updated, stars` — the `issue` field is a
-full Issue on every endpoint (the list page's stub example is wrong, measured
-2026-09-06) and is normalised to the two identity fields. `BacklogGitRepository`
-carries `id, projectId, name, description`.
-Responses are validated with zod because `backlog-js` declarations diverge from
-the live API; a validation failure is an `AdapterError("backlog", …, "SCHEMA")`
-naming the endpoint and the failing path, never a `ZodError`.
+### 8.2 The injected `fetch`
 
-### 8.2 `backlog-js` implementation
+`backlog-js` entity methods return parsed bodies and discard the `Response`,
+and `checkStatus` turns a non-2xx into `backlog-js`'s own error, so neither
+the failing response's `X-RateLimit-Reset` nor its `errors[].code` can be
+read off a return value. Both are read in the **`fetch` injected into the
+client**, the one seam every method reaches the network through
+(`request()` ends in `this.fetch(url, init).then(this.checkStatus)`,
+0.20.1). The credential, the 429 retry (§8.4) and the error mapping (§8.5)
+live there, so they apply alike to the adapter's own calls and to a
+consumer's through `client()` (§3.1). A non-2xx throws from the injected
+`fetch`, before `checkStatus` can turn it into a `backlog-js` error.
 
-Wraps `backlog-js@^0.20.1`. Two constraints shape it:
-
-- **The injected `fetch`.** `backlog-js` entity methods return parsed bodies
-  and discard the `Response`, and `checkStatus` turns a non-2xx into
-  `backlog-js`'s own error, so neither the failing response's
-  `X-RateLimit-Reset` nor its `errors[].code` can be read off a return value.
-  Both are read in the **injected `fetch`** instead, which is the one seam
-  every method reaches the network through (`request()` ends in
-  `this.fetch(url, init).then(this.checkStatus)`, 0.20.1). The 429 retry
-  (§8.4) and the error mapping (§8.5) live there, so they apply whether the
-  call came from this port's own `request()` or from a consumer holding
-  `client()` (§3.1). A non-2xx throws from the injected `fetch`, before
-  `checkStatus` can turn it into a `backlog-js` error, so a mapped
-  `@chat-adapter/shared` error is what escapes either route.
 - **Per-call credentials.** The client is constructed carrying **no**
-  credential — `request()` sets an auth header only for a credential it was
-  configured with — and the resolver is awaited on every attempt, its result
-  placed on the `Backlog-API-Key` or `Authorization: Bearer` header
+  credential — `request()` sets an auth header only for one it was configured
+  with — and the resolver is awaited on every attempt, its result placed on
+  the `Backlog-API-Key` or `Authorization: Bearer` header
   ([Authentication](https://developer.nulab.com/docs/backlog/auth/)); the
   query-string `apiKey` form is never used (it leaks into logs and proxies).
   That is also what makes the client safe to hand out: it holds no secret of
-  its own, and a token refreshed between calls is picked up by both routes.
-  A resolved credential the header rejects — one carrying CR/LF — is an
-  `AuthenticationError`, not a transport failure (§8.5).
+  its own. A resolved credential the header rejects — one carrying CR/LF — is
+  an `AuthenticationError`, not a transport failure (§8.5).
+- **Timeout.** `backlog-js`'s `timeout` option is not a real fetch timeout;
+  every request carries `AbortSignal.timeout(30 s)`, which also bounds reading
+  the body, so a stalled body stream cannot outlive the request. An abort is a
+  `NetworkError`.
 
-Timeouts: `backlog-js`'s `timeout` option is not a real fetch timeout; the
-implementation uses an `AbortSignal` (default 30 s) and maps aborts to
-`NetworkError`. The timer covers consuming the response body as JSON or an
-`ArrayBuffer`, not only receiving its headers, so a stalled body stream cannot
-outlive the request timeout.
+### 8.3 Responses
 
-### 8.3 In-memory implementation
+Every response is parsed once, in `src/client/responses.ts`, by a `zod`
+schema of only the fields the adapter reads; every other key is kept as
+Backlog sent it. The parsed value is typed as `backlog-js`'s entity with the
+measured deviations laid over it (§3.5), and it is what `message.raw`
+carries — no second shape, and no `Date`. The schemas normalise what
+Backlog sends inconsistently: an issue's or a pull request's `description`
+`?? ""`, a comment's `content: string | null` (a system comment such as an
+assignee change is `null`), `changeLog ?? []`, `stars ?? []`,
+`user.userId ?? null`, `assignee ?? null` and `changeLog[].attachmentInfo ??
+null`. A response that fails its schema is an `AdapterError("backlog", …,
+"SCHEMA")` naming the failing path, never a `ZodError`; a 2xx body that is
+not JSON, or one whose read fails, is a `NetworkError`.
 
-`createInMemoryBacklogApi(seed?)` backs this repository's own tests and is
-not exported (§3.1): a consumer tests its handlers with `@chat-adapter/tests`
-and mocks `client()`, as it would with any first-party adapter. Seed:
-`projects`, `issues`, `comments`, `users`, `repositories`, `pullRequests`,
-`pullRequestComments` (keyed by `{ repositoryId, number }`), `me` (the bot
-user), `now()`. It exposes
-`state` (issues, comments, stars, uploads and recorded inputs) for assertions,
-allocates ids from a single counter initialised above every seeded id (issues
-included), applies exclusive `minId`/`maxId`, sorts by `order`, mirrors
-`deleteStar` in `state`, and throws the same error classes as §8.2 — not only
-for a missing resource, but for the two refusals a write can meet on a real
-space: an empty comment body is a `ValidationError` on add and on update (a single space
-is a body — §4.2 `stream` posts one), and updating or deleting a comment whose
-`createdUser` is not `me` is a `PermissionError`. `uploadAttachment` keeps the
-bytes it was handed: `size` reports their length, `recordedInputs` carries a
-copy, and a download of that id returns them.
+A download's bytes are read from the body `backlog-js` returns; the file's
+name is not read from `Content-Disposition` at all, because every caller
+already has the name from the comment or the payload that named the file.
 
 ### 8.4 429 retry (D5)
 
@@ -1288,9 +1254,9 @@ copy, and a download of that id returns them.
   - about to throw: `rate limited; not retrying` with the same fields.
   `remaining` and `resetAt` are omitted when the response carried no usable
   `X-RateLimit-Remaining` / `X-RateLimit-Reset`; `attempt` is the 1-based
-  number of the request that hit the limit. The port takes the `Logger` as an
-  accessor resolved per request, because `initialize` replaces the adapter's
-  logger while `api(host)` caches the port built before it.
+  number of the request that hit the limit. The client takes the `Logger` as
+  an accessor resolved per request, because `initialize` replaces the
+  adapter's logger while `client()` caches the client built before it.
 - Both bounds — one retry, a 60-second ceiling on the wait — are internal
   constants, not configuration (D5). A Backlog window is one minute, so the
   ceiling covers any reset a live window can report.
@@ -1309,15 +1275,15 @@ then HTTP status when the body has no code, then transport.
 | --- | --- |
 | code 11 AuthenticationError | `AuthenticationError` |
 | code 4 AccessDeniedError, 5 UnauthorizedOperationError | `PermissionError(action)` |
-| code 6 NoResourceError | `ResourceNotFoundError(resourceType, resourceId)` |
+| code 6 NoResourceError | `ResourceNotFoundError("resource")` |
 | code 7 InvalidRequestError, 10 TooLargeFileError | `ValidationError` |
 | code 13 TooManyRequestsError | `AdapterRateLimitError(retryAfterSeconds)` after §8.4 |
 | code 1, 2, 3, 8, 9, 12 | `AdapterError(message, "backlog", String(code))` |
 | status 401 / 403 / 404 / 400 / 429 without a code | `AuthenticationError` / `PermissionError` / `ResourceNotFoundError` / `ValidationError` / `AdapterRateLimitError` |
 | other status | `AdapterError(message, "backlog", String(status))` |
 | `fetch` rejection, abort, DNS failure; unreadable JSON or binary response body | `NetworkError(message, cause)` |
-| response fails the zod schema | `AdapterError(…, "SCHEMA")` |
-| credential resolver throws, or resolves a value `backlog-js` refuses at construction | `AuthenticationError` |
+| response fails its schema (§8.3) | `AdapterError(…, "SCHEMA")` |
+| credential resolver throws, or resolves a value the header refuses (CR/LF) | `AuthenticationError` |
 
 Every mapped error sets `error.cause` to a plain
 `BacklogApiErrorDetail { status, code?, message, moreInfo?, url }` — never the
@@ -1330,76 +1296,7 @@ from the ids and the delay — so a code 6's "No such issue" is appended to what
 the class wrote rather than reaching the caller on `cause` alone, where no log
 line that prints the error would show it.
 
-### 8.6 Conformance suite
-
-`describeBacklogApiConformance(name, factory)` runs the same behavioural
-suite against both implementations (the `backlog-js` one over a fake `fetch`
-that returns recorded response shapes).
-
-The factory hands the suite a `BacklogApi` and nothing else, so a guarantee
-belongs here only if **both** implementations reach it through ordinary calls.
-A guarantee that needs a crafted response — a 429, a body that violates the
-schema, an error code no operation produces — belongs to the wrapper's own
-tests (§12.2, the **client** row), and the two lists below say which is which.
-The split is deliberate rather than a gap: a fault-injection seam on the
-factory would make the in-memory implementation assert retries, header
-arithmetic and zod validation it does not have — it has no wire, no schema and
-no retry — and a conformance suite only one implementation can satisfy is not
-a conformance suite.
-
-Guaranteed by the suite, on both implementations:
-
-- issue/project/user/comment fetch and 404 → `ResourceNotFoundError`; a
-  comment id from another issue is a 404;
-- `getMyself()` answers the credential's own user — the one every write
-  is authored by;
-- comment add/edit/delete reflected in the list, and `addComment` accepts
-  `notifiedUserId`/`attachmentId`;
-- an empty comment body is a `ValidationError` on add and on update, on an
-  issue and on a pull request, while a single space is accepted (§4.2
-  `stream` posts one for an empty stream);
-- updating or deleting a comment written by another user is a
-  `PermissionError` that leaves the comment unchanged — on issues, and on
-  update for pull requests, which have no delete at all;
-- list paging with `count`/`order`/`minId`/`maxId` and exclusive bounds; issue
-  list paging with `count`/`offset`;
-- stars carry `presenter` and are removable by star id; deleting a missing
-  star is a 404;
-- an upload returns `{ id, name, size }` with `size` the byte length of the
-  file it was given — the only place this interface makes the bytes
-  observable, so it is what separates a client that sent the file from one
-  that sent an empty part;
-- pull requests: a repository and a pull request fetch, and 404 →
-  `ResourceNotFoundError`; the list pages with `count`/`offset`; comments page with exclusive `minId`/`maxId` and head-cut `count`;
-  `addPullRequestComment` accepts `notifiedUserId`/`attachmentId`; a
-  one-element window returns exactly the named comment;
-  `addStar({ pullRequestCommentId })` stars the pull-request comment and
-  `addStar({ commentId })` an issue comment; a pull-request attachment downloads, carrying as
-  many bytes as its listing reported.
-
-Left to the wrapper's tests, because only the wire client has anything to
-exercise them against: 429 with a near `reset` retried once and then
-succeeding, 429 with a distant `reset` throwing `AdapterRateLimitError`
-without waiting, and the retry's timing, jitter and `warn` lines (§8.4); the
-codes of the §8.5 table neither fake models — 11, 10 and 1/2/3/8/9/12 — and
-the status-only fallbacks; a response that violates the schema becoming
-`AdapterError("SCHEMA")` and never a `ZodError`; non-JSON, empty and
-unreadable bodies becoming `NetworkError`; the credential resolver's failure
-modes; and the shape of the request itself — the key in a header and never in
-the query string, one multipart part named `file`, a pull request addressed by
-three coordinates.
-
-Unmodelled is not unreachable, and 10 `TooLargeFileError` is the one to keep
-apart: an oversized upload produces it against a real space, and neither fake
-enforces a size limit, so it is absent from the suite because nothing here
-models the limit rather than because no operation reaches it.
-
-Three codes of the §8.5 table are covered on both implementations, and by
-operations rather than by synthesised responses: **6** through every
-missing-resource call, **7** through the two `ValidationError` refusals above,
-**5** through the ownership refusals.
-
-### 8.7 Auth modes
+### 8.6 Auth modes
 
 API key (`Backlog-API-Key` header) or OAuth 2.0 bearer token
 (`Authorization: Bearer`). Tokens expire after 3600 s and are refreshed by the
@@ -1407,14 +1304,7 @@ caller through the resolver form; the adapter performs no OAuth flow
 ([Authentication](https://developer.nulab.com/docs/backlog/auth/)). Both
 identify the bot **user**; rate limits are per user, not per key.
 
-**Exactly one** of the two. The `BacklogCredentials` union
-says so, and says it with an `apiKey?: never` / `accessToken?: never` on its
-members, because a union target on its own rejects only a property that
-appears in **no** member — `{ apiKey, accessToken }` type-checks clean against
-the bare union, since `accessToken` is not excess there, it belongs to the
-other member. The port checks the same thing again when it is built, for a
-value that reached it through a type assertion: both or neither is a
-`ValidationError` naming the host. Both is never a silent preference for the
+**Exactly one** of the two, checked when the adapter is constructed (§3.2). Both is never a silent preference for the
 API key — a deployment that adds an OAuth token means to stop sending its
 space's long-lived key, and going on sending it is the one outcome nothing in
 the logs would reveal.
@@ -1438,10 +1328,11 @@ web URL needs the `projectKey` and its REST object does not carry one (§7.3):
   setting is picked up on restart.
 - Lookup failure (`PermissionError`, `NetworkError`, …) → `warn`
   `project lookup failed`, then Markdown for that call only; nothing is cached.
-- A `textFormattingRule` Backlog adds later fails the closed enum in
-  `src/client/schemas.ts`, so it arrives as a lookup failure and takes the row
-  above. The converters are keyed by `TextFormattingRule`, so widening that
-  type does not compile until the new rule has a converter.
+- A `textFormattingRule` Backlog adds later fails the closed enum of the
+  project schema in `src/client/responses.ts`, so it arrives as a lookup
+  failure and takes the row above. The converters are keyed by `backlog-js`'s
+  `Types.TextFormattingRule`, so widening that type does not compile until the
+  new rule has a converter.
 - `renderFormatted(content, target?)` and `parseMessage(raw)` are synchronous
   and consult only the cache; uncached → Markdown plus one `warn`
   `textFormattingRule uncached; assuming markdown`. A `target` that is neither
@@ -1734,7 +1625,7 @@ Tests are colocated `src/**/*.test.ts`, named after the behaviour they specify.
 | Suite | What this adapter provides |
 | --- | --- |
 | `threadIdContract` | `encode`/`decode` bound to an instance; cases for `.backlog.com`, `.backlog.jp`, `.backlogtool.com` hosts with pinned encoded strings; `isDM` split omitted (always false) or asserted false for every case. |
-| `selfMessageContract` | `setup()` builds an adapter with the in-memory port and `botUserId: 999`, `createMockChatInstance()`; `makeOtherMessageRequest` = fixture type-3 comment by `Alice` with `?token=`; `makeSelfMessageRequest` = same comment by `createdUser.id === 999`. Expects 200 + dispatched vs 200 + not dispatched. |
+| `selfMessageContract` | `setup()` builds an adapter with `botUserId: 999`, `createMockChatInstance()`; `makeOtherMessageRequest` = fixture type-3 comment by `Alice` with `?token=`; `makeSelfMessageRequest` = same comment by `createdUser.id === 999`. Expects 200 + dispatched vs 200 + not dispatched. |
 | `connectWebhookContract` | `createAdapter({ webhookVerifier })` without a `webhookSecret`; `createAdapterWithSecretAndVerifier` proves the verifier wins. |
 
 Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
@@ -1804,8 +1695,8 @@ Matchers from `@chat-adapter/tests/matchers` (`toHavePosted`,
   project's rule; `fetchThread`, `fetchSubject`,
   `fetchChannelInfo`, `listThreads` (offset, trailing empty page, clamp),
   `getUser` (round trip, bot, bare number rejected, null on 404).
-- **client**: §8.6 conformance over both implementations; retry timing
-  with fake timers, a 429 retried at most once and a refused
+- **client**: the injected `fetch` against a stubbed `fetch`, and the
+  response schemas; retry timing with fake timers, a 429 retried at most once and a refused
   wait surfacing as `AdapterRateLimitError` with `retryAfter` computed from
   `X-RateLimit-Reset`; one `warn` per rate-limit wait and per refusal to wait,
   none on an unlimited request, and the logger resolved per request; every row
@@ -1862,7 +1753,7 @@ comment, attach one upload; at most 6 write calls. The comments it
 adds stay on the pull request, so the variable must name a scratch one. It also
 needs `BACKLOG_LIVE_ISSUE_ID`, and the pull request has to live in that issue's
 project: every pull-request endpoint is keyed by project + repository + number,
-the variable carries only the last two, and neither Backlog nor the port maps a
+the variable carries only the last two, and neither Backlog nor the adapter maps a
 repository id back to its project, so the project comes from one Get Issue in
 `beforeAll`. A third variable would be the alternative; naming the project twice
 for one scratch space is worse than requiring the two to share it.
@@ -1995,7 +1886,7 @@ for one scratch space is worse than requiring the two to share it.
 | D8 | Numeric ids everywhere; host inside message and user ids | Issue keys change on project-key rename; the core's dedupe key has no thread component. | Issue keys in thread ids; host-less message ids. |
 | D9 | Mention = the bot in the webhook's `notifications[]` (any `reason`), display name in text (left-bounded, case-sensitive), or assignment to the bot | The webhook's `notifications[]` **is** populated (measured 2026-09-06) and is the only signal for a comment addressed through the notification field, which leaves no `@name` in the text; text and assignment still carry every delivery that has no notification, including an activity-API body replayed as a webhook. Assignee changes arrive by display name. Only explicit addressing lands in that list: an account merely **watching** an issue stayed out of `notifications[]` across a comment and two field-only `PATCH`es, while a non-watching user addressed on the same issue arrived with `reason: 2` (measured 2026-09-06), so no `reason` needs excluding. | Text and assignment only (silently ignores the notification field, the UI's normal way to address someone); filtering to `reason: 2` (drops reason codes not measured here for no gain, since assignment is already covered and watching was measured not to notify at all); case-insensitive match (Japanese names have no case, ASCII names would over-match). |
 | D10 | Types 1, 2, 3, 14 and 18, 19, 20 processed, 4 optional deletion, rest ignored; register `activityTypeIds`, never `allEvent` | Only issue and pull-request activity maps to a thread; 14 was ignored here until 2026-09-06 on the ground that it "has no per-issue comment", which measurement disproved — `content.link[].comment.id` is a comment that exists (D22); 17 carries the **original** comment, so dispatching it would re-deliver a message id already dispatched; 21 was never observed (D-PR5). | `allEvent` (wiki/git/document noise). Dispatching 17: `dedupe:backlog:<message.id>` suppresses the repeat only for `dedupeTtlMs` (§5.5), and a notification added a day later fires the same comment a second time. The accepted cost is a blind spot — a 17 whose `notifications[]` names the bot is the only signal that the bot was mentioned on a comment **after** it was posted, and acting on it needs a message id that distinguishes the notification from the comment it repeats. The pair was measured on a development space, 2026-09-06: a type 3 naming one recipient and, three seconds later, a type 17 naming another carry different activity ids but the same `content.comment.id`, the same text and an identical `content`, so `content.comment.id` cannot separate them and `notifications[]` — a delta, not the comment's recipient list — is the only field that names what the second delivery added (`.claude/rules/backlog-webhook-facts.md`). |
-| D11 | Two-step uploads; inbound `fetchData` through the port; `rehydrateAttachment` via API URL | Backlog attachments require auth to download; a URL is the only serialisable handle that survives queue round trips. | Public URLs (do not exist); `fetchMetadata` blobs. |
+| D11 | Two-step uploads; inbound `fetchData` through the client; `rehydrateAttachment` via API URL | Backlog attachments require auth to download; a URL is the only serialisable handle that survives queue round trips. | Public URLs (do not exist); `fetchMetadata` blobs. |
 | D12 | `:r`/`:u:` cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Backlog can edit an issue body, but `editMessage` semantics ("edit what I posted") do not fit rewriting a human's issue; `:u:` has no fetchable resource. | Mapping `editMessage(:r)` to Update Issue. |
 | D13 | Optional set as in §4.2; `listThreads` uses Backlog's default order | Each implemented member has a one-to-one endpoint; each unsupported one has no counterpart. Sorting or filtering in the adapter would hide the search-bucket cost. | "Open issues first" (an extra filter, surprising to callers). |
 | D14 ⚑ | Per-project rule, cached for the process's lifetime; sync members use the cache | Correctness on notation projects is not optional (a third of projects on a measured space); a TTL adds a read per project per interval for a setting that rarely changes, and no consumer has asked to refresh one without a restart. | TTL cache; `fetchChannelInfo` replacing the entry and clearing the repository names (built, then removed: a read member rewriting caches is a side effect no caller can see, for a need nobody named); Markdown-only converter. |
@@ -2065,7 +1956,7 @@ open list.
 | 12 | No timestamp-staleness window | **confirmed** — accepted, with the departure documented in §5.1; CLAUDE.md's "Don't" list was later reconciled with it rather than left contradicting it | `src/webhook/verify.ts` applies no timestamp check; §5.1 states the departure and its reason (unsigned timestamps give no protection and would drop measured late redeliveries). (#12) |
 | 13 | D-PR10 pull-request comment attachment resolution | **confirmed** — lazy list-and-match by name, newest match wins | The type-20 / `changeLog` attachment builder in `src/subject/pull-request.ts` resolves `fetchData` through `GET …/pullRequests/:number/attachments` only when the consumer asks (#22) |
 | 14 | D-PR2 nested `subject` in the id grammar | **confirmed** — nested `BacklogSubjectRef`, kind keyword explicit for both kinds | `BacklogSubjectRef` (`src/types.ts`) is written and read only by `src/ids.ts` and dispatched only by `subjectClientFor` (`src/subject/client.ts`) (#22) |
-| 15 | D-PR7 `listThreads` population | **confirmed** — issues only, documented, with the pull-request route named | `BacklogAdapter.listThreads` and its Why-not comment; a caller holding a repository uses `api(host).listPullRequests`, which spends `read` rather than `search` (measured 2026-09-06); README row (#24, #25) |
+| 15 | D-PR7 `listThreads` population | **confirmed** — issues only, documented, with the pull-request route named | `BacklogAdapter.listThreads` and its Why-not comment; a caller holding a repository uses `client().getPullRequests`, which spends `read` rather than `search` (measured 2026-09-06); README row (#24, #25) |
 | 16 | Webhook form of types 18–20 | **confirmed** — measured, and rule 4 gained the predicted mention; see §15.2 | Two captures on a deployed receiver, 2026-09-06, matched to their activities by id (`.claude/rules/backlog-pull-request-facts.md`); `src/webhook/inbound.ts` reads `content.assignee` on 18, not on 19 or 20 (#23, narrowed to the root activities by #32) |
 | 17 | D9 rule 6 accepts any `reason` | **confirmed** — measured; a watcher appears in no `notifications[]`; see §15.2 | Measured 2026-09-06 (`.claude/rules/backlog-webhook-facts.md`); `src/webhook/inbound.ts` reads every `reason` (#35) |
 | 18 | P0 documentation title scope: `docs(docs)` or `docs(adapter)` | **confirmed** — `docs(docs)`, and it is now history | #2 landed as `docs(docs): add adapter specification and implementation plan`; CLAUDE.md's scope table lists `docs` as covering `docs/`. Nothing is left to decide |
@@ -2178,7 +2069,7 @@ named PR amends, which is where it must be read from.
 | Decision | Verdict | Where it is specified |
 | --- | --- | --- |
 | A forward first page fetches one comment (`limit: 1`) | **confirmed** — as it stands | §7.1. The one comment is what distinguishes "there are comments, so restart at cursor 0" from "there are none, so this is the end". Backlog does expose Count Comment, but it costs the same one `read`, so asking it instead saves nothing (#88) |
-| `ThreadInfo.metadata` timestamps | **superseded** by D24 — `metadata` no longer carries a timestamp; at the time: ISO strings, not `Date` (breaking) | §7.3. `metadata` is `Record<string, unknown>`, so a `Date` in it is invisible to the type and turns into a string in any consumer that round-trips the object through JSON — the same reason `src/types.ts`'s raw shapes carry ISO strings while `src/client/port.ts` carries `Date` (#88) |
+| `ThreadInfo.metadata` timestamps | **superseded** by D24 — `metadata` no longer carries a timestamp; at the time: ISO strings, not `Date` (breaking) | §7.3. `metadata` is `Record<string, unknown>`, so a `Date` in it is invisible to the type and turns into a string in any consumer that round-trips the object through JSON — the same reason every shape in `src/types.ts` carries ISO strings (#88) |
 | Ids, hosts and numeric config the adapter cannot honour | **changed** — rejected with a `ValidationError` instead of being carried into a request (breaking) | §2 grammar, §3.2 config table (#88) |
 | `dist/index.d.ts.map` | **changed** — no longer emitted; the JavaScript map stays | `files` does not ship `src/`, so a declaration map could only point at sources that are not published (#95, split out of #82) |
 | The d.ts pass under TypeScript 7 | **confirmed** — as it stands | attw at the `esm-only` profile, publint and `scripts/check-published-types.mjs` all pass on the current output; the follow-up #95 named — asserting that the built `.d.ts` still *declares* the package's entry points — is described in that PR and not yet filed (§15.4) |
@@ -2216,7 +2107,7 @@ The release criterion: before `0.1.0`, the live suite runs at least once
 against a real space and the result is recorded in the release PR. §12.3 is
 written for that run. It needs credentials
 and a Git-enabled project on a development space (**#52**). Recommendation:
-keep the criterion. The suite is the only thing that ever executes the port
+keep the criterion. The suite is the only thing that ever executes the client
 against Backlog's real wire shapes, and #19 (`fix(client): use the wire
 shapes Backlog actually sends and accepts`) is what that class of mistake
 looks like when it is found late. Two other items ride along on that run and

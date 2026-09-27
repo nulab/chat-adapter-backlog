@@ -24,28 +24,33 @@ Layout, mirroring the PR scopes so a change's scope is its path:
 plus environment, one schema), `src/ids.ts` (the id grammar), `src/types.ts`
 (public types, including the serialisable raw-message shapes), `src/egress.ts` and `src/reads.ts`, `src/subject/*` (the issue and
 pull-request halves of a thread behind one `SubjectClient`), `src/webhook/*`
-(ingress), `src/client/*` (the Backlog API port), `src/format/*` (the
-converters), and `src/test/fixtures/*`.
+(ingress), `src/client/*` (the `backlog-js` client and its response schemas),
+`src/format/*` (the converters), and `src/test/fixtures/*`.
 
 `src/subject/*` is where behaviour that differs between an issue and a pull
 request belongs, and nowhere else: `subjectClientFor` in
 `src/subject/client.ts` picks the half once, and every member reaches Backlog
 as `decode -> subjectClientFor -> one code path for both kinds`. The only other
 module that may ask what kind a subject is is the codec `src/ids.ts`, which has
-no port to route through (D-PR2).
+no client to route through (D-PR2).
 
-**Types.** The target, which the code does not reach yet: `backlog-js`'s
-`Entity.*` types are the source of truth for every Backlog shape, and this
-repository declares only the deviations measured against them (recorded in
-`.claude/rules/*.md`) as an overlay on those types. Nothing converts to `Date`:
-timestamps stay the ISO strings Backlog sends, everywhere, so one type serves
-the API response and `message.raw`, which must survive a JSON round trip
-through the queue anyway. The current split — `src/client/port.ts` with
-`Date`-carrying domain types beside ISO-string raw types in `src/types.ts`,
-is what that refactor removes; until it lands, only the raw side is published
-(docs/specs/adapter.md §3.1). zod types
-never reach the published `.d.ts`: `scripts/check-published-types.mjs` fails
-the build on any import there but `chat` and `backlog-js`.
+**Types.** `backlog-js`'s `Entity.*` types are the source of truth for every
+Backlog shape, and `src/types.ts` declares only the deviations measured against
+them (recorded in `.claude/rules/*.md`) as an overlay on those types. Nothing
+converts to `Date` until a value becomes a `Message`'s `metadata`: timestamps
+stay the ISO strings Backlog sends, so one type serves the API response and
+`message.raw`, which must survive a JSON round trip through the queue anyway.
+Each response schema in `src/client/responses.ts` is paired with its
+overlaid type exactly once, in a named reader (`readIssue`,
+`readPullRequestComments`, …) whose parameter is `z.ZodType<Validated<T>>`,
+so a field the adapter validates cannot drift from the type it publishes.
+Call sites take a reader, never a schema and a type argument: `Validated<T>`
+accepts any subset of `T`'s fields, so a schema passed with the wrong type
+would compile. zod types never
+reach the published `.d.ts`: `scripts/check-published-types.mjs` fails the
+build on any import there but `chat` and `backlog-js`, and on a declared type
+`src/index.ts` does not export — so an overlay helper type a raw shape
+references is exported too.
 
 `.github/workflows/ci.yml`'s `consumer` job builds the package, packs the
 tarball, installs it with npm outside the repository — lifecycle scripts
@@ -108,10 +113,7 @@ emphasis, it is the version that goes stale.
   requirement misleads the next reader. Never cite a plan from code.
 
 When a document and this file disagree, the document is newer; fix this file
-in the same PR. The one exception is temporary: for Surface (YAGNI), Parse at
-the boundary, the Types target and Test strategy, this file is ahead of the
-spec — which still requires the in-memory port, its conformance suite and
-`Date`-returning ports — until the refactor PRs rewrite those spec sections.
+in the same PR.
 
 ## Comments
 
@@ -262,7 +264,7 @@ would be `build:` elsewhere is `chore(build)` or `fix(build)`.
 | Scope       | Covers                                                                                                                    |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `adapter`   | the `Adapter` surface: the class, `createBacklogAdapter`, thread-ID codec, egress, reads, reactions, presence, `stream()` |
-| `client`    | the Backlog API port: the `backlog-js` wrapper, auth, the 429 retry, typed errors                                         |
+| `client`    | the `backlog-js` client: the injected `fetch`, auth, the 429 retry, typed errors, the response schemas                    |
 | `webhook`   | webhook ingress: verification, body parsing, the `processMessage` dispatch                                                |
 | `format`    | markup conversion — the `BaseFormatConverter` subclass and its AST both ways                                              |
 | `build`     | tsdown, `exports`/`files`, `tsconfig.json`, publint/attw                                                                  |
@@ -478,10 +480,9 @@ into them or track them (docs/specs/adapter.md D5).
 ## Dependency plan
 
 Build on [`backlog-js`](https://github.com/nulab/backlog-js) (v0.20.1, MIT,
-Nulab's own, tsdown-built, single runtime dependency `qs`). The narrow
-internal port it is currently wrapped behind is being removed in favour of
-calling `backlog-js` directly (see Types and Test strategy). It does not
-provide, and this repo must add:
+Nulab's own, tsdown-built, single runtime dependency `qs`), and call its typed
+methods directly — there is no port in front of it. It does not provide, and
+this repo must add:
 
 1. Typed errors derived from `errors[].code`.
 2. 429 retry with backoff computed from `X-RateLimit-Reset`: one retry, a
@@ -492,14 +493,13 @@ built and removed: its only consumer was a public snapshot nothing in the
 adapter read, and the retry needs only the failing response's own header
 (docs/specs/adapter.md D5).
 
-Both live in the **`fetch` injected into the client**, not around the
-port's call sites, because that is the only seam every `backlog-js` method
-funnels through. That is what lets `adapter.client()` hand a consumer the
-very client the port speaks through — for the endpoints the port does not name
-— without either being bypassed. The consequence, taken knowingly:
-`backlog-js` appears in the published types, so dropping it for plain `fetch`
-is no longer a change invisible to consumers (docs/specs/adapter.md §3.1,
-§8.2).
+Both live in the **`fetch` injected into the client** (`src/client/backlog.ts`),
+not around the adapter's call sites, because that is the only seam every
+`backlog-js` method funnels through. That is what lets `adapter.client()`
+hand a consumer the very client the adapter speaks through without either
+being bypassed. The consequence, taken knowingly: `backlog-js` appears in the
+published types, so dropping it for plain `fetch` is no longer a change
+invisible to consumers.
 
 ## Test strategy
 
@@ -578,7 +578,7 @@ Two rules about what an example may do, both load-bearing:
   missing variable or a non-numeric id fails the first cold start rather than
   sending `NaN` to Backlog later.
 - **Reach Backlog through `backlog.client()`.** That is the `backlog-js`
-  client the adapter hands out for the endpoints its port does not name, and it
+  client the adapter hands out for the endpoints it does not cover, and it
   carries the adapter's bounded 429 retry and its error classes. An example must not build a Backlog client of its own, and
   must not depend on `backlog-js` directly.
 

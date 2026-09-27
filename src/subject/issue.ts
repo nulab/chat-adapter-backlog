@@ -1,46 +1,40 @@
-/**
- * The issue half of the subject layer (D-PR2): today's issue behaviour behind
- * the `SubjectClient` interface, so `src/egress.ts` and `src/reads.ts` never
- * name an issue endpoint again.
- */
+import { AdapterError, ResourceNotFoundError } from '@chat-adapter/shared';
 
-import { AdapterError } from '@chat-adapter/shared';
-
-import { fromRawIssue, toRawIssue } from './raw';
+import {
+  download,
+  readIssue,
+  readIssueComment,
+  readIssueComments,
+  send,
+} from '../client/responses';
 import { issueAttachmentUrl } from './url';
 
 import type {
-  AddCommentInput,
-  BacklogApi,
-  BacklogComment,
-  BacklogIssue,
-  ListCommentsOptions,
-  StarTarget,
-} from '../client/port';
-import type {
   BacklogChange,
+  BacklogRawComment,
+  BacklogRawIssue,
   BacklogRawMessage,
   BacklogSubjectRef,
 } from '../types';
 import type {
+  AddCommentInput,
+  ListCommentsOptions,
   SubjectClient,
   SubjectContext,
   SubjectNames,
   SubjectRoot,
 } from './client';
+import type { Backlog, Option } from 'backlog-js';
 import type { Attachment } from 'chat';
 
 type IssueRef = Extract<BacklogSubjectRef, { kind: 'issue' }>;
 
 /**
- * `SubjectRoot.source` is a union both kinds share, so the mismatched arm is
- * reachable only by handing an issue client a pull request's root, which
- * `subjectClientFor` cannot do. It throws rather than rebuilding what it needs
- * from `SubjectRoot` because `issueKey`, `issueType` and `priority` are not on
- * that shape at all, and a silent placeholder would ship a wrong issue key
- * into a thread's metadata and web URL.
+ * Throws rather than rebuilding what it needs from `SubjectRoot`, because
+ * `issueKey`, `issueType` and `priority` are not on that shape, and a
+ * placeholder would ship a wrong issue key into a thread's metadata and URL.
  */
-function issueOf(root: SubjectRoot): BacklogIssue {
+function issueOf(root: SubjectRoot): BacklogRawIssue {
   if (root.source.kind !== 'issue') {
     throw new AdapterError(
       'a pull request root was passed to the issue subject client',
@@ -51,39 +45,29 @@ function issueOf(root: SubjectRoot): BacklogIssue {
   return root.source.issue;
 }
 
-/**
- * `https://<host>/view/<issueKey>`, the only web URL an issue needs — unlike a
- * pull request, everything in it is on the object the read already fetched
- * (docs/specs/adapter.md §7.3).
- */
 function issueWebUrl(host: string, issueKey: string): string {
   return `https://${host}/view/${issueKey}`;
 }
 
-/**
- * The project key an issue key carries: `issueKey` is `<projectKey>-<number>`,
- * so trimming at its last `-` spares the Get Project call a `channelName`
- * would otherwise cost (docs/specs/adapter.md §7.3).
- */
+/** `<projectKey>-<number>`, which spares a `channelName` a Get Project. */
 function projectKeyOf(issueKey: string): string {
   const lastDash = issueKey.lastIndexOf('-');
   return lastDash === -1 ? issueKey : issueKey.slice(0, lastDash);
 }
 
 export function createIssueSubjectClient(
-  api: BacklogApi,
+  client: Backlog,
   ref: IssueRef,
   context: SubjectContext
 ): SubjectClient {
   const { host } = context;
   const { issueId } = ref;
 
-  async function downloadAttachment(attachmentId: number): Promise<Buffer> {
-    const file = await api.downloadAttachment(issueId, attachmentId);
-    return file.data;
+  function downloadAttachment(attachmentId: number): Promise<Buffer> {
+    return download(client.getIssueAttachment(issueId, attachmentId));
   }
 
-  function rootOf(issue: BacklogIssue): SubjectRoot {
+  function rootOf(issue: BacklogRawIssue): SubjectRoot {
     return {
       ref,
       title: issue.summary,
@@ -92,69 +76,77 @@ export function createIssueSubjectClient(
       assignee: issue.assignee,
       createdUser: issue.createdUser,
       created: issue.created,
-      updated: issue.updated,
       source: { kind: 'issue', issue },
     };
+  }
+
+  function readComment(request: Promise<unknown>): Promise<BacklogRawComment> {
+    return readIssueComment(request);
   }
 
   return {
     ref,
 
     async fetchRoot(): Promise<SubjectRoot> {
-      return rootOf(await api.getIssue(issueId));
+      return rootOf(await readIssue(client.getIssue(issueId)));
     },
 
     rootFrom(raw: BacklogRawMessage): SubjectRoot | undefined {
-      // A `webhook` or `comment` raw names its subject without carrying it,
-      // and a `pullRequest` raw is another subject's root, so both are a read
-      // the caller still has to spend.
-      return raw.kind === 'issue' ? rootOf(fromRawIssue(raw.issue)) : undefined;
+      return raw.kind === 'issue' ? rootOf(raw.issue) : undefined;
     },
 
-    listComments(options: ListCommentsOptions): Promise<BacklogComment[]> {
-      return api.listComments(issueId, options);
+    listComments(options: ListCommentsOptions): Promise<BacklogRawComment[]> {
+      return readIssueComments(client.getIssueComments(issueId, options));
     },
 
-    getComment(commentId: number): Promise<BacklogComment> {
-      return api.getComment(issueId, commentId);
+    /**
+     * Get Comment answers for a comment id under any issue id, so a comment
+     * of another issue is refused here rather than read into this thread.
+     */
+    async getComment(commentId: number): Promise<BacklogRawComment> {
+      const comment = await readIssueComment(
+        client.getIssueComment(issueId, commentId)
+      );
+      if (comment.issueId !== issueId) {
+        throw new ResourceNotFoundError(
+          'backlog',
+          'comment',
+          String(commentId)
+        );
+      }
+      return comment;
     },
 
-    addComment(input: AddCommentInput): Promise<BacklogComment> {
-      return api.addComment(issueId, input);
+    addComment(input: AddCommentInput): Promise<BacklogRawComment> {
+      return readComment(client.postIssueComments(issueId, input));
     },
 
-    updateComment(commentId: number, content: string): Promise<BacklogComment> {
-      return api.updateComment(issueId, commentId, content);
+    updateComment(
+      commentId: number,
+      content: string
+    ): Promise<BacklogRawComment> {
+      return readComment(
+        client.patchIssueComment(issueId, commentId, { content })
+      );
     },
 
     async deleteComment(commentId: number): Promise<void> {
-      // Delete Comment answers 200 with the deleted comment
-      // (`.claude/rules/backlog-api-facts.md`); the body says nothing a caller
-      // of `deleteMessage` can use, so it is discarded rather than widening
-      // the interface with a value only one kind could ever return.
-      await api.deleteComment(issueId, commentId);
+      await send(client.deleteIssueComment(issueId, commentId));
     },
 
-    starTarget(commentId: number): StarTarget {
+    starTarget(commentId: number): Option.Project.PostStarParams {
       return { commentId };
     },
 
     rootRaw(root: SubjectRoot): BacklogRawMessage {
-      return {
-        kind: 'issue',
-        host,
-        issue: toRawIssue(issueOf(root)),
-        changes: [],
-      };
+      return { kind: 'issue', host, issue: issueOf(root), changes: [] };
     },
 
-    commentAttachments(comment: BacklogComment): Attachment[] {
+    commentAttachments(comment: BacklogRawComment): Attachment[] {
       const attachments: Attachment[] = [];
       for (const change of comment.changeLog) {
-        // A removal names the file in `originalValue` (`oldValue` here) and
-        // leaves `newValue` null; it is skipped because it names a file that
-        // is no longer on the issue. `size` stays unset: a changelog entry
-        // does not carry one, only the webhook payload does.
+        // A removal names the file in `originalValue` and leaves `newValue`
+        // null: it names a file that is no longer on the issue.
         if (
           change.field !== 'attachment' ||
           change.newValue === null ||
@@ -181,9 +173,6 @@ export function createIssueSubjectClient(
       return {
         type: 'file',
         name: attachment.name,
-        // Spread rather than `size: attachment.size`: a payload that omits
-        // `size` (§5.2) has to leave the key unset, which is not the same as
-        // setting it to `undefined` under `exactOptionalPropertyTypes`.
         ...(attachment.size === undefined ? {} : { size: attachment.size }),
         url: issueAttachmentUrl(host, issueId, attachment.id),
         fetchData: () => downloadAttachment(attachment.id),
@@ -191,13 +180,9 @@ export function createIssueSubjectClient(
     },
 
     /**
-     * Nothing, on every entry: an issue webhook carries no
-     * `changes[field="attachment"]` at all. An attachment add arrives as a
-     * type-2 changelog comment whose change is visible only in that comment's
-     * REST `changeLog` (measured 2026-08,
-     * `.claude/rules/backlog-webhook-facts.md`), which is why §6.6's issue row
-     * names the REST source and no webhook one — the file is not missing here,
-     * it was never in the payload.
+     * An issue webhook carries no `changes[field="attachment"]` at all: an
+     * attachment add arrives as a changelog comment whose change is visible
+     * only in that comment's REST `changeLog` (measured).
      */
     webhookChangeAttachment(_change: BacklogChange): Attachment | undefined {
       return undefined;
@@ -219,7 +204,7 @@ export function createIssueSubjectClient(
         issueId,
         issueKey: issue.issueKey,
         summary: issue.summary,
-        status: issue.status,
+        status: { id: issue.status.id, name: issue.status.name },
         url: issueWebUrl(host, issue.issueKey),
       };
     },

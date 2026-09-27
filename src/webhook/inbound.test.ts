@@ -21,6 +21,7 @@ import {
   RESOLVED_MENTION,
   statusChanged,
 } from '../test/fixtures/webhooks';
+import { comment, fileData, stubClient } from '../test/fixtures/rest';
 import { createPullRequestSubjectClient } from '../subject/pull-request';
 import { buildBulkUpdateMessage, buildInboundMessage } from './inbound';
 import { parseDelivery } from './payload';
@@ -30,7 +31,6 @@ import type {
   InboundContext,
   MessageActivity,
 } from './inbound';
-import type { BacklogApi, BacklogComment } from '../client/port';
 import type { SubjectClient } from '../subject/client';
 import type { BacklogChange } from '../types';
 import type { Attachment } from 'chat';
@@ -1095,56 +1095,44 @@ describe('buildBulkUpdateMessage', () => {
 
 describe('one pull request comment seen twice (§6.6)', () => {
   const ATTACHMENT_ID = 4242;
-  const ENDPOINT_REF = {
-    projectId: FIXTURE.projectId,
-    repositoryId: FIXTURE.repositoryId,
-    number: FIXTURE.pullRequestNumber,
-  };
+  const ENDPOINT_REF = [
+    FIXTURE.projectId,
+    String(FIXTURE.repositoryId),
+    FIXTURE.pullRequestNumber,
+  ];
 
   /** The comment `fetchMessages` reads back for the file the webhook announced. */
-  function restComment(fileName: string): BacklogComment {
-    return {
+  function restComment(fileName: string) {
+    return comment({
       id: 7000001,
       content: 'Trace attached.',
       changeLog: [
         {
           field: 'attachment',
           newValue: fileName,
-          oldValue: '',
+          originalValue: '',
           attachmentInfo: null,
         },
       ],
-      createdUser: {
-        id: FIXTURE.alice.id,
-        userId: FIXTURE.alice.userId,
-        name: FIXTURE.alice.name,
-        mailAddress: null,
-      },
-      created: new Date('2026-09-03T04:05:06Z'),
-      updated: new Date('2026-09-03T04:05:06Z'),
-      stars: [],
-    };
+      created: '2026-09-03T04:05:06Z',
+      updated: '2026-09-03T04:05:06Z',
+    });
   }
 
   it('the same pull request comment carries the same attachment through the webhook and through a read', async () => {
-    const listPullRequestAttachments = vi.fn().mockResolvedValue([
+    const getPullRequestAttachments = vi.fn().mockResolvedValue([
       {
         id: ATTACHMENT_ID,
         name: 'trace.log',
         size: 12,
-        created: new Date('2026-09-03T04:05:06Z'),
+        created: '2026-09-03T04:05:06Z',
       },
     ]);
-    const downloadPullRequestAttachment = vi.fn().mockResolvedValue({
-      filename: 'trace.log',
-      contentType: 'text/plain',
-      data: Buffer.from('trace'),
-    });
+    const getPullRequestAttachment = vi
+      .fn()
+      .mockImplementation(async () => fileData('trace'));
     const subject = createPullRequestSubjectClient(
-      {
-        listPullRequestAttachments,
-        downloadPullRequestAttachment,
-      } as unknown as BacklogApi,
+      stubClient({ getPullRequestAttachments, getPullRequestAttachment }),
       {
         kind: 'pullRequest',
         repositoryId: FIXTURE.repositoryId,
@@ -1177,9 +1165,9 @@ describe('one pull request comment seen twice (§6.6)', () => {
     await fromWebhook[0]?.fetchData?.();
     await fromRead[0]?.fetchData?.();
 
-    expect(downloadPullRequestAttachment.mock.calls).toEqual([
-      [ENDPOINT_REF, ATTACHMENT_ID],
-      [ENDPOINT_REF, ATTACHMENT_ID],
+    expect(getPullRequestAttachment.mock.calls).toEqual([
+      [...ENDPOINT_REF, ATTACHMENT_ID],
+      [...ENDPOINT_REF, ATTACHMENT_ID],
     ]);
   });
 });

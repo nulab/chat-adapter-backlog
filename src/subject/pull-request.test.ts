@@ -1,307 +1,141 @@
 import { AdapterError, ResourceNotFoundError } from '@chat-adapter/shared';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createIssueSubjectClient } from './issue';
+import {
+  ALICE,
+  BOB,
+  REST,
+  comment,
+  fileData,
+  issue,
+  pullRequest,
+  stubClient,
+} from '../test/fixtures/rest';
 import { createPullRequestSubjectClient } from './pull-request';
 
 import type {
-  BacklogApi,
-  BacklogComment,
-  BacklogIssue,
-  BacklogPullRequest,
-  BacklogUserRef,
-} from '../client/port';
-import type { BacklogRawMessage, BacklogSubjectRef } from '../types';
+  BacklogRawComment,
+  BacklogRawMessage,
+  BacklogRawPullRequest,
+  BacklogSubjectRef,
+} from '../types';
 import type { SubjectClient, SubjectNames, SubjectRoot } from './client';
+import type { Backlog, Entity } from 'backlog-js';
 
-const HOST = 'example.backlog.com';
-const PROJECT_ID = 500;
-const REPOSITORY_ID = 700;
-const REPOSITORY_NAME = 'example-repo';
-const PROJECT_KEY = 'PROJECT';
-const PULL_REQUEST_NUMBER = 12;
-const PULL_REQUEST_ID = 90001;
 const COMMENT_ID = 7000001;
 const ATTACHMENT_ID = 4242;
 
-const ALICE: BacklogUserRef = {
-  id: 100,
-  userId: 'alice',
-  name: 'Alice',
-  mailAddress: null,
-};
-const BOB: BacklogUserRef = {
-  id: 101,
-  userId: 'bob',
-  name: 'Bob',
-  mailAddress: null,
-};
-
 const REF: Extract<BacklogSubjectRef, { kind: 'pullRequest' }> = {
   kind: 'pullRequest',
-  repositoryId: REPOSITORY_ID,
-  number: PULL_REQUEST_NUMBER,
+  repositoryId: REST.repositoryId,
+  number: REST.pullRequestNumber,
 };
 
-/** The three coordinates every pull-request endpoint is keyed by. */
-const ENDPOINT_REF = {
-  projectId: PROJECT_ID,
-  repositoryId: REPOSITORY_ID,
-  number: PULL_REQUEST_NUMBER,
-};
-
-const PULL_REQUEST: BacklogPullRequest = {
-  id: PULL_REQUEST_ID,
-  projectId: PROJECT_ID,
-  repositoryId: REPOSITORY_ID,
-  number: PULL_REQUEST_NUMBER,
-  summary: 'Retry the login request once',
-  description: 'Retries a failed login once before giving up',
-  base: 'main',
-  branch: 'feature/login-retry',
-  status: { id: 1, name: 'Open' },
-  assignee: ALICE,
-  issue: { id: 8001, issueKey: 'PROJECT-42' },
-  baseCommit: 'aaa',
-  branchCommit: 'bbb',
-  mergeCommit: null,
-  closeAt: null,
-  mergeAt: null,
-  createdUser: BOB,
-  created: new Date('2026-09-01T10:00:00.000Z'),
-  updated: new Date('2026-09-02T11:30:00.000Z'),
-  stars: [],
-};
-
-const ISSUE: BacklogIssue = {
-  id: 8001,
-  projectId: PROJECT_ID,
-  issueKey: 'PROJECT-42',
-  summary: 'Login fails on retry',
-  description: 'Steps to reproduce',
-  issueType: { id: 1, name: 'Bug' },
-  priority: { id: 3, name: 'Normal' },
-  status: { id: 1, name: 'Open' },
-  assignee: ALICE,
-  createdUser: BOB,
-  created: new Date('2026-09-01T10:00:00.000Z'),
-  updated: new Date('2026-09-02T11:30:00.000Z'),
-};
-
-function comment(
-  id: number,
-  changeLog: BacklogComment['changeLog'] = []
-): BacklogComment {
-  return {
-    id,
-    content: 'looks good',
-    changeLog,
-    createdUser: BOB,
-    created: new Date('2026-09-02T11:30:00.000Z'),
-    updated: new Date('2026-09-02T11:30:00.000Z'),
-    stars: [],
-  };
-}
-
-function attachmentChange(name: string): BacklogComment['changeLog'][number] {
-  return {
-    field: 'attachment',
-    newValue: name,
-    oldValue: '',
-    attachmentInfo: null,
-  };
-}
-
-/** See `stubApi` in `./issue.test.ts`: unstubbed methods fail loudly and every call is recorded. */
-function stubApi(overrides: Partial<BacklogApi> = {}): {
-  api: BacklogApi;
-  calls: string[];
-} {
-  const calls: string[] = [];
-  const api = new Proxy(overrides as BacklogApi, {
-    get(target, property, receiver): unknown {
-      const member: unknown = Reflect.get(target, property, receiver);
-      return (...args: unknown[]): unknown => {
-        calls.push(String(property));
-        if (typeof member !== 'function') {
-          throw new Error(
-            `the subject client called an unstubbed port method: ${String(property)}`
-          );
-        }
-        return (member as (...called: unknown[]) => unknown)(...args);
-      };
-    },
-  });
-  return { api, calls };
-}
-
-function clientWith(overrides: Partial<BacklogApi> = {}): {
-  subject: SubjectClient;
-  calls: string[];
-} {
-  const { api, calls } = stubApi(overrides);
-  return {
-    subject: createPullRequestSubjectClient(api, REF, {
-      host: HOST,
-      projectId: PROJECT_ID,
-    }),
-    calls,
-  };
-}
-
-function rootOf(pullRequest: BacklogPullRequest = PULL_REQUEST): SubjectRoot {
-  return {
-    ref: REF,
-    title: pullRequest.summary,
-    body: pullRequest.description,
-    status: pullRequest.status,
-    assignee: pullRequest.assignee,
-    createdUser: pullRequest.createdUser,
-    created: pullRequest.created,
-    updated: pullRequest.updated,
-    source: { kind: 'pullRequest', pullRequest },
-  };
-}
-
-/**
- * An issue's root and a comment, as `message.raw` carries them: neither
- * describes a pull request's root, however much of the same thread they are
- * about.
- */
-const ISSUE_RAW: BacklogRawMessage = {
-  kind: 'issue',
-  host: HOST,
-  changes: [],
-  issue: {
-    id: ISSUE.id,
-    issueKey: 'PROJECT-42',
-    projectId: PROJECT_ID,
-    summary: ISSUE.summary,
-    description: ISSUE.description,
-    status: { id: 1, name: 'Open' },
-    issueType: { id: 1, name: 'Bug' },
-    priority: { id: 3, name: 'Normal' },
-    assignee: { id: ALICE.id, name: ALICE.name },
-    createdUser: { id: BOB.id, name: BOB.name, userId: BOB.userId },
-    created: '2026-09-01T10:00:00.000Z',
-    updated: '2026-09-02T11:30:00.000Z',
-  },
-};
-
-const COMMENT_RAW: BacklogRawMessage = {
-  kind: 'comment',
-  host: HOST,
-  projectId: PROJECT_ID,
-  subject: REF,
-  changes: [],
-  comment: {
-    id: COMMENT_ID,
-    content: 'looks good',
-    createdUser: { id: BOB.id, name: BOB.name, userId: BOB.userId },
-    created: '2026-09-02T11:30:00.000Z',
-    updated: '2026-09-02T11:30:00.000Z',
-    changeLog: [],
-    stars: [],
-  },
-};
+/** The coordinates every pull-request endpoint of `backlog-js` takes first. */
+const ENDPOINT = [
+  REST.projectId,
+  String(REST.repositoryId),
+  REST.pullRequestNumber,
+] as const;
 
 const NAMES: SubjectNames = {
-  projectKey: PROJECT_KEY,
-  repositoryName: REPOSITORY_NAME,
+  projectKey: REST.projectKey,
+  repositoryName: REST.repositoryName,
 };
 
-/** See `subjectView` in `./issue.test.ts`. */
-function subjectView(
-  subject: SubjectClient,
-  root: SubjectRoot,
-  names: SubjectNames
-): Record<string, unknown> {
+function subjectOn(client: Backlog = stubClient({})): SubjectClient {
+  return createPullRequestSubjectClient(client, REF, {
+    host: REST.host,
+    projectId: REST.projectId,
+  });
+}
+
+function pullRequestRaw(
+  fixture: BacklogRawPullRequest = pullRequest()
+): BacklogRawMessage {
   return {
-    title: root.title,
-    description: root.body,
-    status: root.status.name,
-    author: { id: root.createdUser.id, name: root.createdUser.name },
-    assignee:
-      root.assignee === null
-        ? null
-        : { id: root.assignee.id, name: root.assignee.name },
-    labels: subject.subjectLabels(root),
-    url: subject.webUrl(root, names),
-    channelName: subject.channelName(root, names),
-    metadata: subject.threadMetadata(root, names),
+    kind: 'pullRequest',
+    host: REST.host,
+    pullRequest: fixture,
+    changes: [],
   };
 }
 
-/** See `rootFrom` in `./issue.test.ts`. */
-function rootFrom(subject: SubjectClient, raw: BacklogRawMessage): SubjectRoot {
-  const root = subject.rootFrom(raw);
+function rootOf(
+  subject: SubjectClient,
+  fixture: BacklogRawPullRequest = pullRequest()
+): SubjectRoot {
+  const root = subject.rootFrom(pullRequestRaw(fixture));
   if (root === undefined) {
-    throw new Error('the raw did not describe this subject root');
+    throw new Error('a pull request raw did not yield a pull request root');
   }
   return root;
 }
 
+function attachmentComment(name: string): BacklogRawComment {
+  return comment({
+    id: COMMENT_ID,
+    changeLog: [
+      {
+        field: 'attachment',
+        newValue: name,
+        originalValue: null,
+        attachmentInfo: null,
+      },
+    ],
+  });
+}
+
+function attachment(
+  id: number,
+  name: string,
+  created: string
+): Pick<Entity.File.PullRequestFileInfo, 'id' | 'name' | 'size' | 'created'> {
+  return { id, name, size: 12, created };
+}
+
 describe('the pull request subject client', () => {
   it('addresses a pull request by its repository and number, never by its global id', async () => {
-    const getPullRequest = vi.fn().mockResolvedValue(PULL_REQUEST);
-    const { subject } = clientWith({ getPullRequest });
+    const fixture = pullRequest({ assignee: BOB });
+    const getPullRequest = vi.fn().mockResolvedValue(fixture);
+    const subject = subjectOn(stubClient({ getPullRequest }));
 
     const root = await subject.fetchRoot();
 
-    expect(getPullRequest).toHaveBeenCalledWith(ENDPOINT_REF);
-    expect(root).toMatchObject({
+    expect(getPullRequest).toHaveBeenCalledWith(...ENDPOINT);
+    expect(root).toEqual({
       ref: REF,
-      title: 'Retry the login request once',
-      body: 'Retries a failed login once before giving up',
+      title: 'Add the thing',
+      body: 'Body of the PR.',
       status: { id: 1, name: 'Open' },
-      assignee: ALICE,
-      createdUser: BOB,
-      source: { kind: 'pullRequest', pullRequest: PULL_REQUEST },
+      assignee: BOB,
+      createdUser: ALICE,
+      created: '2026-09-01T10:00:00Z',
+      source: { kind: 'pullRequest', pullRequest: fixture },
     });
-  });
-
-  it('normalises a root into the fields the adapter reads and no others', async () => {
-    const { subject } = clientWith({
-      getPullRequest: vi.fn().mockResolvedValue(PULL_REQUEST),
-    });
-
-    const root = await subject.fetchRoot();
-
-    expect(Object.keys(root).sort()).toEqual([
-      'assignee',
-      'body',
-      'created',
-      'createdUser',
-      'ref',
-      'source',
-      'status',
-      'title',
-      'updated',
-    ]);
   });
 
   it('a single pull request comment is fetched through a one-element window', async () => {
-    const listPullRequestComments = vi
+    const getPullRequestComments = vi
       .fn()
-      .mockResolvedValue([comment(COMMENT_ID)]);
-    const { subject, calls } = clientWith({ listPullRequestComments });
+      .mockResolvedValue([comment({ id: COMMENT_ID })]);
+    const subject = subjectOn(stubClient({ getPullRequestComments }));
 
     const fetched = await subject.getComment(COMMENT_ID);
 
-    expect(listPullRequestComments).toHaveBeenCalledWith(ENDPOINT_REF, {
+    expect(getPullRequestComments).toHaveBeenCalledWith(...ENDPOINT, {
       minId: COMMENT_ID - 1,
       maxId: COMMENT_ID + 1,
       count: 1,
       order: 'desc',
     });
-    expect(calls).toEqual(['listPullRequestComments']);
     expect(fetched.id).toBe(COMMENT_ID);
   });
 
   it('an empty one-element window is a comment that does not exist', async () => {
-    const { subject } = clientWith({
-      listPullRequestComments: vi.fn().mockResolvedValue([]),
-    });
+    const subject = subjectOn(
+      stubClient({ getPullRequestComments: vi.fn().mockResolvedValue([]) })
+    );
 
     await expect(subject.getComment(COMMENT_ID)).rejects.toBeInstanceOf(
       ResourceNotFoundError
@@ -309,11 +143,13 @@ describe('the pull request subject client', () => {
   });
 
   it('a one-element window that comes back holding a different comment is not found', async () => {
-    const { subject } = clientWith({
-      listPullRequestComments: vi
-        .fn()
-        .mockResolvedValue([comment(COMMENT_ID + 5)]),
-    });
+    const subject = subjectOn(
+      stubClient({
+        getPullRequestComments: vi
+          .fn()
+          .mockResolvedValue([comment({ id: COMMENT_ID + 5 })]),
+      })
+    );
 
     await expect(subject.getComment(COMMENT_ID)).rejects.toBeInstanceOf(
       ResourceNotFoundError
@@ -321,7 +157,7 @@ describe('the pull request subject client', () => {
   });
 
   it('deleting a pull request comment fails before any request because Backlog has no endpoint', async () => {
-    const { subject, calls } = clientWith();
+    const subject = subjectOn();
 
     const rejection = await subject
       .deleteComment(COMMENT_ID)
@@ -332,55 +168,23 @@ describe('the pull request subject client', () => {
       code: 'UNSUPPORTED_OPERATION',
       message: 'Backlog has no endpoint to delete a pull request comment',
     });
-    expect(calls).toEqual([]);
-  });
-
-  it('the subject of a serialised pull request root is read without a call', () => {
-    const { subject, calls } = clientWith();
-
-    const root = rootFrom(subject, subject.rootRaw(rootOf()));
-
-    expect(calls).toEqual([]);
-    expect(subject.subjectRaw(root)).toEqual({
-      ...PULL_REQUEST,
-      assignee: { ...ALICE, userId: null },
-    });
-  });
-
-  it("a raw belonging to the other kind is not mistaken for this subject's root", () => {
-    const { subject, calls } = clientWith();
-
-    expect(subject.rootFrom(ISSUE_RAW)).toBeUndefined();
-    expect(subject.rootFrom(COMMENT_RAW)).toBeUndefined();
-    expect(calls).toEqual([]);
-  });
-
-  it('the round trip through a serialised root keeps every field the subject shows', () => {
-    const { subject } = clientWith();
-    const serialised = JSON.parse(
-      JSON.stringify(subject.rootRaw(rootOf()))
-    ) as BacklogRawMessage;
-
-    const root = rootFrom(subject, serialised);
-
-    expect(subjectView(subject, root, NAMES)).toEqual(
-      subjectView(subject, rootOf(), NAMES)
-    );
   });
 
   it('a comment posted on a pull request carries its attachment ids to the pull request endpoint', async () => {
-    const addPullRequestComment = vi
+    const postPullRequestComments = vi
       .fn()
-      .mockResolvedValue(comment(COMMENT_ID));
-    const updatePullRequestComment = vi
+      .mockResolvedValue(comment({ id: COMMENT_ID }));
+    const patchPullRequestComments = vi
       .fn()
-      .mockResolvedValue(comment(COMMENT_ID));
-    const listPullRequestComments = vi.fn().mockResolvedValue([]);
-    const { subject } = clientWith({
-      addPullRequestComment,
-      updatePullRequestComment,
-      listPullRequestComments,
-    });
+      .mockResolvedValue(comment({ id: COMMENT_ID }));
+    const getPullRequestComments = vi.fn().mockResolvedValue([]);
+    const subject = subjectOn(
+      stubClient({
+        postPullRequestComments,
+        patchPullRequestComments,
+        getPullRequestComments,
+      })
+    );
 
     await subject.addComment({
       content: 'ship it',
@@ -389,155 +193,172 @@ describe('the pull request subject client', () => {
     await subject.updateComment(COMMENT_ID, 'ship it now');
     await subject.listComments({ count: 20, order: 'desc' });
 
-    expect(addPullRequestComment).toHaveBeenCalledWith(ENDPOINT_REF, {
+    expect(postPullRequestComments).toHaveBeenCalledWith(...ENDPOINT, {
       content: 'ship it',
       attachmentId: [ATTACHMENT_ID],
     });
-    expect(updatePullRequestComment).toHaveBeenCalledWith(
-      ENDPOINT_REF,
+    expect(patchPullRequestComments).toHaveBeenCalledWith(
+      ...ENDPOINT,
       COMMENT_ID,
-      'ship it now'
+      { content: 'ship it now' }
     );
-    expect(listPullRequestComments).toHaveBeenCalledWith(ENDPOINT_REF, {
+    expect(getPullRequestComments).toHaveBeenCalledWith(...ENDPOINT, {
       count: 20,
       order: 'desc',
     });
   });
 
   it('stars a pull request comment as a pull request comment', () => {
-    const { subject } = clientWith();
-
-    expect(subject.starTarget(COMMENT_ID)).toEqual({
+    expect(subjectOn().starTarget(COMMENT_ID)).toEqual({
       pullRequestCommentId: COMMENT_ID,
     });
   });
 
-  it('carries the root into raw data with timestamps a queue can serialise', () => {
-    const { subject } = clientWith();
+  it('carries the pull request it read into raw data unchanged', () => {
+    const subject = subjectOn();
+    const fixture = pullRequest();
+
+    expect(subject.rootRaw(rootOf(subject, fixture))).toEqual(
+      pullRequestRaw(fixture)
+    );
+  });
+
+  it('the subject of a pull request raw is the pull request it carries, read without a request', () => {
+    const subject = subjectOn();
+    const fixture = pullRequest();
+
+    expect(subject.subjectRaw(rootOf(subject, fixture))).toBe(fixture);
+  });
+
+  it('a root survives a JSON round trip through its raw', () => {
+    const subject = subjectOn();
+    const root = rootOf(subject);
+    const serialised = JSON.parse(
+      JSON.stringify(subject.rootRaw(root))
+    ) as BacklogRawMessage;
+
+    expect(subject.rootFrom(serialised)).toEqual(root);
+  });
+
+  it("a raw belonging to another kind is not mistaken for this subject's root", () => {
+    const subject = subjectOn();
 
     expect(
-      subject.rootRaw(
-        rootOf({
-          ...PULL_REQUEST,
-          mergeAt: new Date('2026-09-03T09:00:00.000Z'),
-          closeAt: new Date('2026-09-03T09:00:00.000Z'),
-        })
-      )
-    ).toEqual({
-      kind: 'pullRequest',
-      host: HOST,
-      changes: [],
-      pullRequest: {
-        id: PULL_REQUEST_ID,
-        projectId: PROJECT_ID,
-        repositoryId: REPOSITORY_ID,
-        number: PULL_REQUEST_NUMBER,
-        summary: 'Retry the login request once',
-        description: 'Retries a failed login once before giving up',
-        base: 'main',
-        branch: 'feature/login-retry',
-        status: { id: 1, name: 'Open' },
-        assignee: { id: ALICE.id, name: ALICE.name },
-        issue: { id: 8001, issueKey: 'PROJECT-42' },
-        baseCommit: 'aaa',
-        branchCommit: 'bbb',
-        mergeCommit: null,
-        closeAt: '2026-09-03T09:00:00.000Z',
-        mergeAt: '2026-09-03T09:00:00.000Z',
-        createdUser: { id: BOB.id, name: BOB.name, userId: BOB.userId },
-        created: '2026-09-01T10:00:00.000Z',
-        updated: '2026-09-02T11:30:00.000Z',
-      },
-    });
+      subject.rootFrom({
+        kind: 'issue',
+        host: REST.host,
+        issue: issue(),
+        changes: [],
+      })
+    ).toBeUndefined();
+    expect(
+      subject.rootFrom({
+        kind: 'comment',
+        host: REST.host,
+        projectId: REST.projectId,
+        subject: REF,
+        comment: comment(),
+        changes: [],
+      })
+    ).toBeUndefined();
+  });
+
+  it('an issue root is refused rather than read as a pull request', () => {
+    const subject = subjectOn();
+    const root: SubjectRoot = {
+      ...rootOf(subject),
+      source: { kind: 'issue', issue: issue() },
+    };
+
+    expect(() => subject.subjectLabels(root)).toThrow(AdapterError);
   });
 
   it('a pull request comment attachment resolves its id by name when it is first read', async () => {
-    const listPullRequestAttachments = vi.fn().mockResolvedValue([
-      {
-        id: 1,
-        name: 'other.log',
-        size: 3,
-        created: new Date('2026-09-01T00:00:00.000Z'),
-      },
-      {
-        id: ATTACHMENT_ID,
-        name: 'trace.log',
-        size: 12,
-        created: new Date('2026-09-02T00:00:00.000Z'),
-      },
-    ]);
-    const downloadPullRequestAttachment = vi.fn().mockResolvedValue({
-      filename: 'trace.log',
-      contentType: 'text/plain',
-      data: Buffer.from('trace'),
-    });
-    const { subject, calls } = clientWith({
-      listPullRequestAttachments,
-      downloadPullRequestAttachment,
-    });
+    const getPullRequestAttachments = vi
+      .fn()
+      .mockResolvedValue([
+        attachment(1, 'other.log', '2026-09-01T00:00:00Z'),
+        attachment(ATTACHMENT_ID, 'trace.log', '2026-09-02T00:00:00Z'),
+      ]);
+    const getPullRequestAttachment = vi
+      .fn()
+      .mockResolvedValue(fileData('trace'));
+    const subject = subjectOn(
+      stubClient({ getPullRequestAttachments, getPullRequestAttachment })
+    );
 
     const attachments = subject.commentAttachments(
-      comment(COMMENT_ID, [attachmentChange('trace.log')])
+      attachmentComment('trace.log')
     );
 
     expect(attachments).toHaveLength(1);
     expect(attachments[0]).toMatchObject({ type: 'file', name: 'trace.log' });
     expect(attachments[0]?.url).toBeUndefined();
-    expect(calls).toEqual([]);
+    expect(getPullRequestAttachments).not.toHaveBeenCalled();
 
     const data = await attachments[0]?.fetchData?.();
 
-    expect(calls).toEqual([
-      'listPullRequestAttachments',
-      'downloadPullRequestAttachment',
-    ]);
-    expect(downloadPullRequestAttachment).toHaveBeenCalledWith(
-      ENDPOINT_REF,
+    expect(getPullRequestAttachments).toHaveBeenCalledWith(...ENDPOINT);
+    expect(getPullRequestAttachment).toHaveBeenCalledWith(
+      ...ENDPOINT,
       ATTACHMENT_ID
     );
-    expect(Buffer.from(data as Buffer).toString()).toBe('trace');
+    expect(data?.toString()).toBe('trace');
   });
 
   it('the newest attachment wins when two carry the same name', async () => {
-    const listPullRequestAttachments = vi.fn().mockResolvedValue([
-      {
-        id: 9,
-        name: 'trace.log',
-        size: 3,
-        created: new Date('2026-09-04T00:00:00.000Z'),
-      },
-      {
-        id: 1,
-        name: 'trace.log',
-        size: 12,
-        created: new Date('2026-09-01T00:00:00.000Z'),
-      },
-    ]);
-    const downloadPullRequestAttachment = vi.fn().mockResolvedValue({
-      filename: 'trace.log',
-      contentType: 'text/plain',
-      data: Buffer.from('newest'),
-    });
-    const { subject } = clientWith({
-      listPullRequestAttachments,
-      downloadPullRequestAttachment,
-    });
-
-    const attachments = subject.commentAttachments(
-      comment(COMMENT_ID, [attachmentChange('trace.log')])
+    const getPullRequestAttachment = vi
+      .fn()
+      .mockResolvedValue(fileData('newest'));
+    const subject = subjectOn(
+      stubClient({
+        getPullRequestAttachments: vi
+          .fn()
+          .mockResolvedValue([
+            attachment(9, 'trace.log', '2026-09-04T00:00:00Z'),
+            attachment(1, 'trace.log', '2026-09-01T00:00:00Z'),
+          ]),
+        getPullRequestAttachment,
+      })
     );
-    await attachments[0]?.fetchData?.();
 
-    expect(downloadPullRequestAttachment).toHaveBeenCalledWith(ENDPOINT_REF, 9);
+    await subject
+      .commentAttachments(attachmentComment('trace.log'))[0]
+      ?.fetchData?.();
+
+    expect(getPullRequestAttachment).toHaveBeenCalledWith(...ENDPOINT, 9);
+  });
+
+  it('two same-named attachments uploaded in the same instant resolve to the later id', async () => {
+    const getPullRequestAttachment = vi
+      .fn()
+      .mockResolvedValue(fileData('later'));
+    const subject = subjectOn(
+      stubClient({
+        getPullRequestAttachments: vi
+          .fn()
+          .mockResolvedValue([
+            attachment(5, 'trace.log', '2026-09-04T00:00:00Z'),
+            attachment(3, 'trace.log', '2026-09-04T00:00:00Z'),
+          ]),
+        getPullRequestAttachment,
+      })
+    );
+
+    await subject
+      .commentAttachments(attachmentComment('trace.log'))[0]
+      ?.fetchData?.();
+
+    expect(getPullRequestAttachment).toHaveBeenCalledWith(...ENDPOINT, 5);
   });
 
   it('a changelog name that matches no attachment fails when the file is read, not when the message is built', async () => {
-    const { subject } = clientWith({
-      listPullRequestAttachments: vi.fn().mockResolvedValue([]),
-    });
+    const subject = subjectOn(
+      stubClient({ getPullRequestAttachments: vi.fn().mockResolvedValue([]) })
+    );
 
     const attachments = subject.commentAttachments(
-      comment(COMMENT_ID, [attachmentChange('gone.log')])
+      attachmentComment('gone.log')
     );
 
     expect(attachments).toHaveLength(1);
@@ -547,48 +368,50 @@ describe('the pull request subject client', () => {
   });
 
   it('the attachment a webhook names resolves its id by name when it is first read', async () => {
-    const listPullRequestAttachments = vi.fn().mockResolvedValue([
-      {
-        id: ATTACHMENT_ID,
-        name: 'trace.log',
-        size: 12,
-        created: new Date('2026-09-02T00:00:00.000Z'),
-      },
-    ]);
-    const downloadPullRequestAttachment = vi.fn().mockResolvedValue({
-      filename: 'trace.log',
-      contentType: 'text/plain',
-      data: Buffer.from('trace'),
-    });
-    const { subject, calls } = clientWith({
-      listPullRequestAttachments,
-      downloadPullRequestAttachment,
-    });
+    const getPullRequestAttachments = vi
+      .fn()
+      .mockResolvedValue([
+        attachment(ATTACHMENT_ID, 'trace.log', '2026-09-02T00:00:00Z'),
+      ]);
+    const getPullRequestAttachment = vi
+      .fn()
+      .mockResolvedValue(fileData('trace'));
+    const subject = subjectOn(
+      stubClient({ getPullRequestAttachments, getPullRequestAttachment })
+    );
 
-    const attachment = subject.webhookChangeAttachment({
+    const named = subject.webhookChangeAttachment({
       field: 'attachment',
       newValue: 'trace.log',
       oldValue: '',
     });
 
-    expect(attachment).toMatchObject({ type: 'file', name: 'trace.log' });
-    expect(attachment?.url).toBeUndefined();
-    expect(calls).toEqual([]);
+    expect(named).toMatchObject({ type: 'file', name: 'trace.log' });
+    expect(named?.url).toBeUndefined();
+    expect(getPullRequestAttachments).not.toHaveBeenCalled();
 
-    const data = await attachment?.fetchData?.();
+    const data = await named?.fetchData?.();
 
-    expect(downloadPullRequestAttachment).toHaveBeenCalledWith(
-      ENDPOINT_REF,
+    expect(getPullRequestAttachment).toHaveBeenCalledWith(
+      ...ENDPOINT,
       ATTACHMENT_ID
     );
-    expect(Buffer.from(data as Buffer).toString()).toBe('trace');
+    expect(data?.toString()).toBe('trace');
+  });
+
+  it('a webhook change that names no file is no attachment', () => {
+    expect(
+      subjectOn().webhookChangeAttachment({
+        field: 'attachment',
+        newValue: null,
+        oldValue: 'trace.log',
+      })
+    ).toBeUndefined();
   });
 
   it('a webhook attachment on a pull request points at the pull request endpoint', () => {
-    const { subject } = clientWith();
-
     expect(
-      subject.webhookAttachment({
+      subjectOn().webhookAttachment({
         id: ATTACHMENT_ID,
         name: 'trace.log',
         size: 12,
@@ -597,145 +420,69 @@ describe('the pull request subject client', () => {
       type: 'file',
       name: 'trace.log',
       size: 12,
-      url: `https://${HOST}/api/v2/projects/${PROJECT_ID}/git/repositories/${REPOSITORY_ID}/pullRequests/${PULL_REQUEST_NUMBER}/attachments/${ATTACHMENT_ID}`,
+      url: `https://${REST.host}/api/v2/projects/${REST.projectId}/git/repositories/${REST.repositoryId}/pullRequests/${REST.pullRequestNumber}/attachments/${ATTACHMENT_ID}`,
     });
   });
 
   it('a pull request web url needs the project key and the repository name', () => {
-    const { subject } = clientWith();
-    const root = rootOf();
+    const subject = subjectOn();
+    const root = rootOf(subject);
 
-    expect(
-      subject.webUrl(root, {
-        projectKey: PROJECT_KEY,
-        repositoryName: REPOSITORY_NAME,
-      })
-    ).toBe(
+    expect(subject.webUrl(root, NAMES)).toBe(
       'https://example.backlog.com/git/PROJECT/example-repo/pullRequests/12'
     );
     expect(
-      subject.webUrl(root, {
-        projectKey: PROJECT_KEY,
-        repositoryName: undefined,
-      })
+      subject.webUrl(root, { ...NAMES, repositoryName: undefined })
     ).toBeUndefined();
     expect(
-      subject.webUrl(root, {
-        projectKey: undefined,
-        repositoryName: REPOSITORY_NAME,
-      })
+      subject.webUrl(root, { ...NAMES, projectKey: undefined })
     ).toBeUndefined();
   });
 
   it('the channel of a pull request thread is named by its project, not its repository', () => {
-    const { subject } = clientWith();
+    const subject = subjectOn();
 
-    expect(
-      subject.channelName(rootOf(), {
-        projectKey: PROJECT_KEY,
-        repositoryName: REPOSITORY_NAME,
-      })
-    ).toBe(PROJECT_KEY);
+    expect(subject.channelName(rootOf(subject), NAMES)).toBe(REST.projectKey);
   });
 
   it('a pull request thread carries its ids, summary, status and url, under its own kind', () => {
-    const { subject } = clientWith();
+    const subject = subjectOn();
 
-    expect(
-      subject.threadMetadata(rootOf(), {
-        projectKey: PROJECT_KEY,
-        repositoryName: REPOSITORY_NAME,
-      })
-    ).toEqual({
+    expect(subject.threadMetadata(rootOf(subject), NAMES)).toEqual({
       kind: 'pullRequest',
-      host: HOST,
-      projectId: PROJECT_ID,
-      repositoryId: REPOSITORY_ID,
-      number: PULL_REQUEST_NUMBER,
-      summary: 'Retry the login request once',
+      host: REST.host,
+      projectId: REST.projectId,
+      repositoryId: REST.repositoryId,
+      number: REST.pullRequestNumber,
+      summary: 'Add the thing',
       status: { id: 1, name: 'Open' },
       url: 'https://example.backlog.com/git/PROJECT/example-repo/pullRequests/12',
     });
   });
 
   it('a thread whose repository name is unknown omits the url rather than guessing', () => {
-    const { subject } = clientWith();
+    const subject = subjectOn();
 
-    const metadata = subject.threadMetadata(rootOf(), {
-      projectKey: PROJECT_KEY,
+    const metadata = subject.threadMetadata(rootOf(subject), {
+      ...NAMES,
       repositoryName: undefined,
     });
 
     expect(metadata).not.toHaveProperty('url');
-    expect(metadata['number']).toBe(PULL_REQUEST_NUMBER);
+    expect(metadata['number']).toBe(REST.pullRequestNumber);
   });
 
   it('describes a pull request subject by its status and the branches it joins', () => {
-    const { subject } = clientWith();
+    const subject = subjectOn();
 
     expect(subject.subjectType).toBe('pull_request');
-    expect(subject.subjectLabels(rootOf())).toEqual([
+    expect(subject.subjectLabels(rootOf(subject))).toEqual([
       'Open',
-      'main ← feature/login-retry',
+      'main ← feature/thing',
     ]);
   });
 
   it('names the repository whose display name its url needs', () => {
-    const { subject } = clientWith();
-
-    expect(subject.repositoryIdForName).toBe(REPOSITORY_ID);
-  });
-});
-
-describe('the two kinds side by side', () => {
-  it('thread info names its kind for both issues and pull requests', () => {
-    const { api } = stubApi();
-    const issue = createIssueSubjectClient(
-      api,
-      { kind: 'issue', issueId: ISSUE.id },
-      { host: HOST, projectId: PROJECT_ID }
-    );
-    const pullRequest = createPullRequestSubjectClient(api, REF, {
-      host: HOST,
-      projectId: PROJECT_ID,
-    });
-    const issueRoot: SubjectRoot = {
-      ref: { kind: 'issue', issueId: ISSUE.id },
-      title: ISSUE.summary,
-      body: ISSUE.description,
-      status: ISSUE.status,
-      assignee: ISSUE.assignee,
-      createdUser: ISSUE.createdUser,
-      created: ISSUE.created,
-      updated: ISSUE.updated,
-      source: { kind: 'issue', issue: ISSUE },
-    };
-    const names = {
-      projectKey: PROJECT_KEY,
-      repositoryName: REPOSITORY_NAME,
-    };
-
-    expect(issue.threadMetadata(issueRoot, names)['kind']).toBe('issue');
-    expect(pullRequest.threadMetadata(rootOf(), names)['kind']).toBe(
-      'pullRequest'
-    );
-    expect([issue.subjectType, pullRequest.subjectType]).toEqual([
-      'issue',
-      'pull_request',
-    ]);
-  });
-
-  it('a subject client refuses a root of the other kind rather than reading the wrong fields', () => {
-    const { api } = stubApi();
-    const pullRequest = createPullRequestSubjectClient(api, REF, {
-      host: HOST,
-      projectId: PROJECT_ID,
-    });
-    const issueRoot = {
-      ...rootOf(),
-      source: { kind: 'issue', issue: ISSUE },
-    } as unknown as SubjectRoot;
-
-    expect(() => pullRequest.subjectLabels(issueRoot)).toThrow(AdapterError);
+    expect(subjectOn().repositoryIdForName).toBe(REST.repositoryId);
   });
 });

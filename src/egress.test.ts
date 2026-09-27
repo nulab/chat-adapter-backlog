@@ -1,5 +1,5 @@
 import { ValidationError } from '@chat-adapter/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   addReaction,
@@ -11,133 +11,43 @@ import {
   requireCommentInThread,
   uploadFiles,
 } from './egress';
-import { createInMemoryBacklogApi } from './client/in-memory';
 import { BacklogMarkdownConverter } from './format/markdown';
 import { encodeMessageId } from './ids';
-import { subjectClientFor } from './subject/client';
-import type { InMemoryBacklogApi } from './client/in-memory';
-import type { BacklogComment } from './client/port';
+import {
+  BOB,
+  BOT,
+  comment,
+  REST,
+  star,
+  stubClient,
+} from './test/fixtures/rest';
+
 import type { SubjectClient } from './subject/client';
 import type { BacklogPostableExtras, BacklogSubjectRef } from './types';
 import type { PostableMarkdown } from 'chat';
 
-const HOST = 'example.backlog.com';
-const PROJECT_ID = 500;
-const ISSUE_ID = 8001;
-const REPOSITORY_ID = 700;
-const PULL_REQUEST_NUMBER = 12;
-const PULL_REQUEST_ID = 90001;
-const PULL_REQUEST_KEY = `${REPOSITORY_ID}:${PULL_REQUEST_NUMBER}`;
+const { host: HOST, projectId: PROJECT_ID } = REST;
 const PULL_REQUEST_COMMENT_ID = 7000001;
-const BOT_USER_ID = 999;
-const ALICE = { id: 100, userId: 'alice', name: 'Alice', mailAddress: null };
-const BOB = { id: 101, userId: 'bob', name: 'Bob', mailAddress: null };
-const CHATBOT = {
-  id: BOT_USER_ID,
-  userId: 'chatbot',
-  name: 'Chatbot',
-  mailAddress: null,
-};
 
-const ISSUE: BacklogSubjectRef = { kind: 'issue', issueId: ISSUE_ID };
+const ISSUE: BacklogSubjectRef = { kind: 'issue', issueId: REST.issueId };
 const PULL_REQUEST: BacklogSubjectRef = {
   kind: 'pullRequest',
-  repositoryId: REPOSITORY_ID,
-  number: PULL_REQUEST_NUMBER,
+  repositoryId: REST.repositoryId,
+  number: REST.pullRequestNumber,
 };
 
-const THREAD_ID = `backlog:${HOST}:${PROJECT_ID}:issue:${ISSUE_ID}`;
-const PULL_REQUEST_THREAD_ID = `backlog:${HOST}:${PROJECT_ID}:pr:${REPOSITORY_ID}:${PULL_REQUEST_NUMBER}`;
+const THREAD_ID = `backlog:${HOST}:${PROJECT_ID}:issue:${REST.issueId}`;
+const PULL_REQUEST_THREAD_ID = `backlog:${HOST}:${PROJECT_ID}:pr:${REST.repositoryId}:${REST.pullRequestNumber}`;
 
-function api(overrides: Parameters<typeof createInMemoryBacklogApi>[0] = {}) {
-  return createInMemoryBacklogApi({
-    projects: [
-      {
-        id: PROJECT_ID,
-        projectKey: 'PROJECT',
-        name: 'Project',
-        textFormattingRule: 'markdown',
-      },
-    ],
-    issues: [
-      {
-        id: ISSUE_ID,
-        projectId: PROJECT_ID,
-        issueKey: 'PROJECT-1',
-        summary: 'Deploy fails',
-        description: '',
-        issueType: { id: 1, name: 'Task' },
-        priority: { id: 3, name: 'Normal' },
-        status: { id: 1, name: 'Open' },
-        assignee: null,
-        createdUser: ALICE,
-        created: new Date('2026-01-01T00:00:00Z'),
-        updated: new Date('2026-01-01T00:00:00Z'),
-      },
-    ],
-    repositories: [
-      {
-        id: REPOSITORY_ID,
-        projectId: PROJECT_ID,
-        name: 'example-repo',
-        description: '',
-      },
-    ],
-    pullRequests: [
-      {
-        id: PULL_REQUEST_ID,
-        projectId: PROJECT_ID,
-        repositoryId: REPOSITORY_ID,
-        number: PULL_REQUEST_NUMBER,
-        summary: 'Fix the deploy',
-        description: '',
-        base: 'main',
-        branch: 'fix-deploy',
-        status: { id: 1, name: 'Open' },
-        assignee: null,
-        issue: null,
-        baseCommit: null,
-        branchCommit: null,
-        mergeCommit: null,
-        closeAt: null,
-        mergeAt: null,
-        createdUser: ALICE,
-        created: new Date('2026-01-01T00:00:00Z'),
-        updated: new Date('2026-01-01T00:00:00Z'),
-        stars: [],
-      },
-    ],
-    ...overrides,
-  });
-}
-
-function subjectOf(
-  backlogApi: InMemoryBacklogApi,
-  ref: BacklogSubjectRef
+function subjectStub(
+  ref: BacklogSubjectRef,
+  members: Partial<SubjectClient> = {}
 ): SubjectClient {
-  return subjectClientFor(backlogApi, ref, {
-    host: HOST,
-    projectId: PROJECT_ID,
-  });
+  return { ref, ...members } as SubjectClient;
 }
 
-function markdownConverter() {
-  return new BacklogMarkdownConverter();
-}
-
-function pullRequestComment(
-  overrides: Partial<BacklogComment> = {}
-): BacklogComment {
-  return {
-    id: PULL_REQUEST_COMMENT_ID,
-    content: 'Any progress?',
-    changeLog: [],
-    createdUser: ALICE,
-    created: new Date('2026-01-01T00:00:00Z'),
-    updated: new Date('2026-01-01T00:00:00Z'),
-    stars: [],
-    ...overrides,
-  };
+function noFiles(): Promise<Buffer> {
+  return Promise.reject(new Error('no files expected'));
 }
 
 describe('requireCommentInThread', () => {
@@ -168,23 +78,16 @@ describe('requireCommentInThread', () => {
   });
 
   it.each([
-    {
-      label: 'issue',
-      threadId: THREAD_ID,
-      subject: ISSUE,
-      commentId: 42,
-      projectId: PROJECT_ID,
-    },
+    { label: 'issue', threadId: THREAD_ID, subject: ISSUE, commentId: 42 },
     {
       label: 'pull request',
       threadId: PULL_REQUEST_THREAD_ID,
       subject: PULL_REQUEST,
       commentId: PULL_REQUEST_COMMENT_ID,
-      projectId: PROJECT_ID,
     },
   ])(
     'a comment id resolves its host, project, subject and comment on a $label thread',
-    ({ threadId, subject, commentId, projectId }) => {
+    ({ threadId, subject, commentId }) => {
       const messageId = encodeMessageId({
         host: HOST,
         subject,
@@ -193,7 +96,7 @@ describe('requireCommentInThread', () => {
       });
       expect(requireCommentInThread(threadId, messageId, 'starred')).toEqual({
         host: HOST,
-        projectId,
+        projectId: PROJECT_ID,
         subject,
         commentId,
       });
@@ -260,64 +163,82 @@ describe('extractNotifiedUserId', () => {
 });
 
 describe('postComment', () => {
-  it('a reply is posted as a comment on the issue', async () => {
-    const backlogApi = api();
-    const result = await postComment({
-      host: HOST,
-      projectId: PROJECT_ID,
-      subject: subjectOf(backlogApi, ISSUE),
-      api: backlogApi,
-      converter: markdownConverter(),
-      message: { markdown: 'Any progress?' },
-      toBuffer: () => Promise.reject(new Error('no files expected')),
-    });
+  it.each([
+    { label: 'issue', ref: ISSUE, threadId: THREAD_ID },
+    {
+      label: 'pull request',
+      ref: PULL_REQUEST,
+      threadId: PULL_REQUEST_THREAD_ID,
+    },
+  ])(
+    'a reply on a $label thread is posted as a comment on that subject',
+    async ({ ref, threadId }) => {
+      const posted = comment({ id: 5, content: 'Any progress?' });
+      const addComment = vi.fn().mockResolvedValue(posted);
+      const result = await postComment({
+        host: HOST,
+        projectId: PROJECT_ID,
+        subject: subjectStub(ref, { addComment }),
+        client: stubClient({}),
+        converter: new BacklogMarkdownConverter(),
+        message: { markdown: 'Any progress?' },
+        toBuffer: noFiles,
+      });
 
-    expect(result.threadId).toBe(
-      `backlog:${HOST}:${PROJECT_ID}:issue:${ISSUE_ID}`
-    );
-    expect(backlogApi.state.recordedInputs).toContainEqual({
-      method: 'addComment',
-      issueId: ISSUE_ID,
-      input: { content: 'Any progress?' },
-    });
-  });
-
-  it('a reply on a pull request thread is posted as a pull request comment', async () => {
-    const backlogApi = api();
-    const result = await postComment({
-      host: HOST,
-      projectId: PROJECT_ID,
-      subject: subjectOf(backlogApi, PULL_REQUEST),
-      api: backlogApi,
-      converter: markdownConverter(),
-      message: { markdown: 'Any progress?' },
-      toBuffer: () => Promise.reject(new Error('no files expected')),
-    });
-
-    expect(result.threadId).toBe(
-      `backlog:${HOST}:${PROJECT_ID}:pr:${REPOSITORY_ID}:${PULL_REQUEST_NUMBER}`
-    );
-    expect(backlogApi.state.recordedInputs).toEqual([
-      {
-        method: 'addPullRequestComment',
-        ref: {
+      expect(addComment).toHaveBeenCalledWith({ content: 'Any progress?' });
+      expect(result).toEqual({
+        id: encodeMessageId({
+          host: HOST,
+          subject: ref,
+          part: 'comment',
+          commentId: 5,
+        }),
+        threadId,
+        raw: {
+          kind: 'comment',
+          host: HOST,
           projectId: PROJECT_ID,
-          repositoryId: REPOSITORY_ID,
-          number: PULL_REQUEST_NUMBER,
+          subject: ref,
+          comment: posted,
+          changes: [],
         },
-        input: { content: 'Any progress?' },
-      },
-    ]);
-  });
+      });
+    }
+  );
 
-  it('files are uploaded and attached to the comment', async () => {
-    const backlogApi = api();
+  it('notifiedUserId reaches the comment as the users to notify', async () => {
+    const addComment = vi.fn().mockResolvedValue(comment());
+    const message: PostableMarkdown & BacklogPostableExtras = {
+      markdown: 'Any progress?',
+      notifiedUserId: [100],
+    };
     await postComment({
       host: HOST,
       projectId: PROJECT_ID,
-      subject: subjectOf(backlogApi, ISSUE),
-      api: backlogApi,
-      converter: markdownConverter(),
+      subject: subjectStub(ISSUE, { addComment }),
+      client: stubClient({}),
+      converter: new BacklogMarkdownConverter(),
+      message,
+      toBuffer: noFiles,
+    });
+
+    expect(addComment).toHaveBeenCalledWith({
+      content: 'Any progress?',
+      notifiedUserId: [100],
+    });
+  });
+
+  it('files are uploaded to the space and attached to the comment', async () => {
+    const postSpaceAttachment = vi
+      .fn()
+      .mockResolvedValue({ id: 77, name: 'notes.txt', size: 5 });
+    const addComment = vi.fn().mockResolvedValue(comment());
+    await postComment({
+      host: HOST,
+      projectId: PROJECT_ID,
+      subject: subjectStub(ISSUE, { addComment }),
+      client: stubClient({ postSpaceAttachment }),
+      converter: new BacklogMarkdownConverter(),
       message: {
         markdown: 'See attached',
         files: [{ filename: 'notes.txt', data: Buffer.from('hello') }],
@@ -325,44 +246,45 @@ describe('postComment', () => {
       toBuffer: (file) => Promise.resolve(Buffer.from(String(file.data))),
     });
 
-    expect(backlogApi.state.uploads).toHaveLength(1);
-    expect(backlogApi.state.uploads[0]).toMatchObject({ name: 'notes.txt' });
-    const addCommentInput = backlogApi.state.recordedInputs.find(
-      (input) => input.method === 'addComment'
-    );
-    expect(addCommentInput).toMatchObject({
-      input: { attachmentId: [backlogApi.state.uploads[0]?.id] },
+    const form = postSpaceAttachment.mock.calls[0]?.[0] as FormData;
+    const part = form.get('file') as File;
+    expect(part.name).toBe('notes.txt');
+    expect(await part.text()).toBe('hello');
+    expect(addComment).toHaveBeenCalledWith({
+      content: 'See attached',
+      attachmentId: [77],
     });
   });
 
   it('a failed comment call rejects instead of returning a synthetic message', async () => {
-    const backlogApi = api();
-    backlogApi.addComment = () => Promise.reject(new Error('boom'));
     await expect(
       postComment({
         host: HOST,
         projectId: PROJECT_ID,
-        subject: subjectOf(backlogApi, ISSUE),
-        api: backlogApi,
-        converter: markdownConverter(),
+        subject: subjectStub(ISSUE, {
+          addComment: vi.fn().mockRejectedValue(new Error('boom')),
+        }),
+        client: stubClient({}),
+        converter: new BacklogMarkdownConverter(),
         message: 'hi',
-        toBuffer: () => Promise.reject(new Error('no files expected')),
+        toBuffer: noFiles,
       })
     ).rejects.toThrow('boom');
   });
 
   it('never mutates the caller-supplied message object', async () => {
-    const backlogApi = api();
     const message = { markdown: 'Any progress?', notifiedUserId: [100] };
     const snapshot = { ...message };
     await postComment({
       host: HOST,
       projectId: PROJECT_ID,
-      subject: subjectOf(backlogApi, ISSUE),
-      api: backlogApi,
-      converter: markdownConverter(),
+      subject: subjectStub(ISSUE, {
+        addComment: vi.fn().mockResolvedValue(comment()),
+      }),
+      client: stubClient({}),
+      converter: new BacklogMarkdownConverter(),
       message,
-      toBuffer: () => Promise.reject(new Error('no files expected')),
+      toBuffer: noFiles,
     });
     expect(message).toEqual(snapshot);
   });
@@ -370,28 +292,19 @@ describe('postComment', () => {
 
 describe('editComment', () => {
   it('renders the postable and updates the comment', async () => {
-    const backlogApi = api({
-      comments: [
-        {
-          id: 1,
-          issueId: ISSUE_ID,
-          content: 'Original',
-          changeLog: [],
-          createdUser: CHATBOT,
-          created: new Date('2026-01-01T00:00:00Z'),
-          updated: new Date('2026-01-01T00:00:00Z'),
-          stars: [],
-        },
-      ],
-    });
+    const updateComment = vi
+      .fn()
+      .mockResolvedValue(comment({ id: 1, content: 'Edited' }));
     const result = await editComment({
       host: HOST,
       projectId: PROJECT_ID,
-      subject: subjectOf(backlogApi, ISSUE),
+      subject: subjectStub(ISSUE, { updateComment }),
       commentId: 1,
-      converter: markdownConverter(),
+      converter: new BacklogMarkdownConverter(),
       message: { markdown: 'Edited' },
     });
+
+    expect(updateComment).toHaveBeenCalledWith(1, 'Edited');
     expect(result.id).toBe(
       encodeMessageId({
         host: HOST,
@@ -400,59 +313,16 @@ describe('editComment', () => {
         commentId: 1,
       })
     );
-    expect(backlogApi.state.comments.find((c) => c.id === 1)?.content).toBe(
-      'Edited'
-    );
-  });
-
-  it('editing a pull request comment updates it through the pull request endpoint', async () => {
-    const backlogApi = api({
-      pullRequestComments: {
-        [PULL_REQUEST_KEY]: [
-          pullRequestComment({ content: 'Original', createdUser: CHATBOT }),
-        ],
-      },
-    });
-    const result = await editComment({
-      host: HOST,
-      projectId: PROJECT_ID,
-      subject: subjectOf(backlogApi, PULL_REQUEST),
-      commentId: PULL_REQUEST_COMMENT_ID,
-      converter: markdownConverter(),
-      message: { markdown: 'Edited' },
-    });
-    expect(result.id).toBe(
-      encodeMessageId({
-        host: HOST,
-        subject: PULL_REQUEST,
-        part: 'comment',
-        commentId: PULL_REQUEST_COMMENT_ID,
-      })
-    );
-    expect(backlogApi.state.recordedInputs).toContainEqual({
-      method: 'updatePullRequestComment',
-      ref: {
-        projectId: PROJECT_ID,
-        repositoryId: REPOSITORY_ID,
-        number: PULL_REQUEST_NUMBER,
-      },
-      commentId: PULL_REQUEST_COMMENT_ID,
-      content: 'Edited',
-    });
-    expect(
-      backlogApi.state.pullRequestComments[PULL_REQUEST_KEY]?.[0]?.content
-    ).toBe('Edited');
   });
 
   it('rejects files on an edit', async () => {
-    const backlogApi = api();
     await expect(
       editComment({
         host: HOST,
         projectId: PROJECT_ID,
-        subject: subjectOf(backlogApi, ISSUE),
+        subject: subjectStub(ISSUE),
         commentId: 1,
-        converter: markdownConverter(),
+        converter: new BacklogMarkdownConverter(),
         message: {
           markdown: 'x',
           files: [{ filename: 'a.txt', data: Buffer.from('a') }],
@@ -462,7 +332,6 @@ describe('editComment', () => {
   });
 
   it('rejects notifiedUserId on an edit', async () => {
-    const backlogApi = api();
     const message: PostableMarkdown & BacklogPostableExtras = {
       markdown: 'x',
       notifiedUserId: [100],
@@ -471,9 +340,9 @@ describe('editComment', () => {
       editComment({
         host: HOST,
         projectId: PROJECT_ID,
-        subject: subjectOf(backlogApi, ISSUE),
+        subject: subjectStub(ISSUE),
         commentId: 1,
-        converter: markdownConverter(),
+        converter: new BacklogMarkdownConverter(),
         message,
       })
     ).rejects.toThrow(ValidationError);
@@ -481,211 +350,69 @@ describe('editComment', () => {
 });
 
 describe('addReaction', () => {
-  function seededComment() {
-    return {
-      id: 1,
-      issueId: ISSUE_ID,
-      content: 'Any progress?',
-      changeLog: [],
-      createdUser: ALICE,
-      created: new Date('2026-01-01T00:00:00Z'),
-      updated: new Date('2026-01-01T00:00:00Z'),
-      stars: [] as {
-        id: number;
-        comment: null;
-        url: string;
-        title: string;
-        presenter: {
-          id: number;
-          userId: string | null;
-          name: string;
-          mailAddress: string | null;
-        };
-        created: Date;
-      }[],
-    };
-  }
-
-  it('adding a reaction twice stars the comment once', async () => {
-    const backlogApi = api({ comments: [seededComment()] });
+  it("an unstarred comment is starred at the subject's star target", async () => {
+    const postStar = vi.fn().mockResolvedValue(undefined);
     await addReaction({
-      api: backlogApi,
-      subject: subjectOf(backlogApi, ISSUE),
-      commentId: 1,
-      botUserId: BOT_USER_ID,
-    });
-    await addReaction({
-      api: backlogApi,
-      subject: subjectOf(backlogApi, ISSUE),
-      commentId: 1,
-      botUserId: BOT_USER_ID,
+      client: stubClient({ postStar }),
+      subject: subjectStub(PULL_REQUEST, {
+        getComment: vi.fn().mockResolvedValue(comment({ stars: [star(BOB)] })),
+        starTarget: (commentId) => ({ pullRequestCommentId: commentId }),
+      }),
+      commentId: PULL_REQUEST_COMMENT_ID,
+      botUserId: BOT.id,
     });
 
-    expect(
-      backlogApi.state.recordedInputs.filter(
-        (input) => input.method === 'addStar'
-      )
-    ).toEqual([{ method: 'addStar', target: { commentId: 1 } }]);
+    expect(postStar).toHaveBeenCalledExactlyOnceWith({
+      pullRequestCommentId: PULL_REQUEST_COMMENT_ID,
+    });
   });
 
-  it('reacting to a pull request comment stars it as a pull request comment', async () => {
-    const backlogApi = api({
-      pullRequestComments: { [PULL_REQUEST_KEY]: [pullRequestComment()] },
-    });
+  it('a comment the bot has already starred is not starred again', async () => {
+    const postStar = vi.fn();
     await addReaction({
-      api: backlogApi,
-      subject: subjectOf(backlogApi, PULL_REQUEST),
-      commentId: PULL_REQUEST_COMMENT_ID,
-      botUserId: BOT_USER_ID,
+      client: stubClient({ postStar }),
+      subject: subjectStub(ISSUE, {
+        getComment: vi.fn().mockResolvedValue(comment({ stars: [star(BOT)] })),
+      }),
+      commentId: 1,
+      botUserId: BOT.id,
     });
 
-    expect(
-      backlogApi.state.recordedInputs.filter(
-        (input) => input.method === 'addStar'
-      )
-    ).toEqual([
-      {
-        method: 'addStar',
-        target: { pullRequestCommentId: PULL_REQUEST_COMMENT_ID },
-      },
-    ]);
+    expect(postStar).not.toHaveBeenCalled();
   });
 });
 
 describe('removeReaction', () => {
-  it("removing a reaction leaves other users' stars", async () => {
-    const backlogApi = api({
-      comments: [
-        {
-          id: 1,
-          issueId: ISSUE_ID,
-          content: 'Any progress?',
-          changeLog: [],
-          createdUser: ALICE,
-          created: new Date('2026-01-01T00:00:00Z'),
-          updated: new Date('2026-01-01T00:00:00Z'),
-          stars: [
-            {
-              id: 1,
-              comment: null,
-              url: '',
-              title: '',
-              presenter: CHATBOT,
-              created: new Date('2026-01-01T00:00:00Z'),
-            },
-            {
-              id: 2,
-              comment: null,
-              url: '',
-              title: '',
-              presenter: BOB,
-              created: new Date('2026-01-01T00:00:00Z'),
-            },
-          ],
-        },
-      ],
-    });
-
+  it("removes every star the bot gave and leaves other users' stars", async () => {
+    const removeStar = vi.fn().mockResolvedValue(undefined);
     await removeReaction({
-      api: backlogApi,
-      subject: subjectOf(backlogApi, ISSUE),
+      client: stubClient({ removeStar }),
+      subject: subjectStub(ISSUE, {
+        getComment: vi
+          .fn()
+          .mockResolvedValue(
+            comment({ stars: [star(BOT, 1), star(BOB, 2), star(BOT, 3)] })
+          ),
+      }),
       commentId: 1,
-      botUserId: BOT_USER_ID,
+      botUserId: BOT.id,
     });
 
-    const remaining = backlogApi.state.comments.find((c) => c.id === 1)?.stars;
-    expect(remaining?.map((star) => star.presenter.id)).toEqual([BOB.id]);
+    expect(removeStar.mock.calls).toEqual([[1], [3]]);
   });
 
   it('a comment with no bot star makes no delete call', async () => {
-    const backlogApi = api({
-      comments: [
-        {
-          id: 1,
-          issueId: ISSUE_ID,
-          content: 'Any progress?',
-          changeLog: [],
-          createdUser: ALICE,
-          created: new Date('2026-01-01T00:00:00Z'),
-          updated: new Date('2026-01-01T00:00:00Z'),
-          stars: [
-            {
-              id: 2,
-              comment: null,
-              url: '',
-              title: '',
-              presenter: BOB,
-              created: new Date('2026-01-01T00:00:00Z'),
-            },
-          ],
-        },
-      ],
-    });
-
+    const removeStar = vi.fn();
     await removeReaction({
-      api: backlogApi,
-      subject: subjectOf(backlogApi, ISSUE),
+      client: stubClient({ removeStar }),
+      subject: subjectStub(ISSUE, {
+        getComment: vi.fn().mockResolvedValue(comment({ stars: [star(BOB)] })),
+      }),
       commentId: 1,
-      botUserId: BOT_USER_ID,
+      botUserId: BOT.id,
     });
 
-    expect(
-      backlogApi.state.recordedInputs.filter(
-        (input) => input.method === 'deleteStar'
-      )
-    ).toHaveLength(0);
-  });
-
-  it('deletes only the bot star when another user has also starred the comment', async () => {
-    const backlogApi = api({
-      comments: [
-        {
-          id: 1,
-          issueId: ISSUE_ID,
-          content: 'Any progress?',
-          changeLog: [],
-          createdUser: ALICE,
-          created: new Date('2026-01-01T00:00:00Z'),
-          updated: new Date('2026-01-01T00:00:00Z'),
-          stars: [
-            {
-              id: 1,
-              comment: null,
-              url: '',
-              title: '',
-              presenter: BOB,
-              created: new Date('2026-01-01T00:00:00Z'),
-            },
-            {
-              id: 2,
-              comment: null,
-              url: '',
-              title: '',
-              presenter: CHATBOT,
-              created: new Date('2026-01-01T00:00:00Z'),
-            },
-          ],
-        },
-      ],
-    });
-
-    await removeReaction({
-      api: backlogApi,
-      subject: subjectOf(backlogApi, ISSUE),
-      commentId: 1,
-      botUserId: BOT_USER_ID,
-    });
-
-    expect(backlogApi.state.recordedInputs).toContainEqual({
-      method: 'deleteStar',
-      starId: 2,
-    });
-    expect(backlogApi.state.recordedInputs).not.toContainEqual({
-      method: 'deleteStar',
-      starId: 1,
-    });
-    const remaining = backlogApi.state.comments.find((c) => c.id === 1)?.stars;
-    expect(remaining?.map((star) => star.presenter.id)).toEqual([BOB.id]);
+    expect(removeStar).not.toHaveBeenCalled();
   });
 });
 
@@ -701,28 +428,25 @@ describe('bufferStream', () => {
         status: 'complete' as const,
       };
     }
-    const buffered = await bufferStream(chunks());
-    expect(buffered).toBe('Hello, world');
+    expect(await bufferStream(chunks())).toBe('Hello, world');
   });
 
   it('an empty stream buffers to an empty string', async () => {
-    async function* chunks(): AsyncIterable<string> {
-      // no chunks
-    }
-    const buffered = await bufferStream(chunks());
-    expect(buffered).toBe('');
+    async function* chunks(): AsyncIterable<string> {}
+    expect(await bufferStream(chunks())).toBe('');
   });
 });
 
 describe('uploadFiles', () => {
-  it('abandons no upload but stops issuing new ones after a failure', async () => {
-    const backlogApi = api();
+  it('stops issuing uploads after a failure', async () => {
+    const postSpaceAttachment = vi.fn().mockResolvedValue({ id: 77 });
     await expect(
       uploadFiles(
-        backlogApi,
+        stubClient({ postSpaceAttachment }),
         [
           { filename: 'a.txt', data: Buffer.from('a') },
           { filename: 'b.txt', data: Buffer.from('b') },
+          { filename: 'c.txt', data: Buffer.from('c') },
         ],
         (file) =>
           file.filename === 'b.txt'
@@ -730,6 +454,6 @@ describe('uploadFiles', () => {
             : Promise.resolve(Buffer.from('a'))
       )
     ).rejects.toThrow('cannot read b');
-    expect(backlogApi.state.uploads).toHaveLength(1);
+    expect(postSpaceAttachment).toHaveBeenCalledOnce();
   });
 });

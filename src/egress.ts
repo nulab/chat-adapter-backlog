@@ -7,12 +7,16 @@ import {
   encodeMessageId,
   encodeThreadId,
 } from './ids';
+import { readUploadedFile, send } from './client/responses';
 import { addressesSameSubject } from './reads';
-import { toRawComment } from './subject/raw';
 
-import type { SubjectClient } from './subject/client';
-import type { AddCommentInput, BacklogApi } from './client/port';
-import type { BacklogRawMessage, BacklogSubjectRef } from './types';
+import type { AddCommentInput, SubjectClient } from './subject/client';
+import type {
+  BacklogRawComment,
+  BacklogRawMessage,
+  BacklogSubjectRef,
+} from './types';
+import type { Backlog } from 'backlog-js';
 import type {
   AdapterPostableMessage,
   BaseFormatConverter,
@@ -22,28 +26,16 @@ import type {
 } from 'chat';
 
 /**
- * The comment `messageId` names inside `threadId`, for any operation that maps
- * to a Backlog comment endpoint (docs/specs/adapter.md §6). Two ids in, one
- * set of coordinates out:
+ * A message id naming another host or subject is reported rather than
+ * resolved: the two ids are independent inputs, and nothing outside the
+ * caller guarantees they agree. The body and a fieldchange update are refused
+ * too (D12): "edit what the bot posted" must never rewrite a human's issue.
  *
- * - A message id naming another host or another subject is a
- *   `ValidationError`. The two ids are independent inputs from the caller and
- *   nothing outside the caller guarantees they agree, so the disagreement is
- *   reported rather than resolved — `fetchMessage` answers the same question
- *   with `null` (§7.2) through the same predicate.
- * - `:r` (the issue or pull-request body) and `:u:` (a fieldchange update with
- *   no comment) are rejected (§6 "Non-comment message ids", D12). Backlog
- *   *can* edit an issue body through a different endpoint, but "edit what the
- *   bot posted" must never silently rewrite a human's issue.
- *
- * The subject travels out from the **thread**, never from the message id, even
- * though the two are now known to agree: §6's preamble picks the subject
- * client the thread id's `subject` selects, and taking it from the message id
+ * The subject travels out from the **thread**, never from the message id,
+ * even though the two are now known to agree: taking it from the message id
  * is what let `deleteMessage` on a pull-request thread reach the issue
- * endpoints and slip past the D-PR3 guard that lives inside the pull-request
- * subject client. It travels whole rather than as the coordinates of one kind,
- * so the caller reaches its `SubjectClient` without re-deriving what it is
- * holding (D-PR2).
+ * endpoints and slip past the D-PR3 guard inside the pull-request subject
+ * client.
  */
 export function requireCommentInThread(
   threadId: string,
@@ -114,25 +106,30 @@ export function extractNotifiedUserId(
 }
 
 /**
- * Uploads every `extractFiles(message)` entry (docs/specs/adapter.md §6.1
- * step 1). Each upload is awaited in sequence rather than in parallel: a
- * partial failure must abandon only the uploads that already succeeded
- * (Backlog deletes an unattached upload after an hour) without racing a
- * later one that would otherwise still be in flight.
+ * Awaited in sequence rather than in parallel: a partial failure must
+ * abandon only the uploads that already succeeded (Backlog deletes an
+ * unattached upload after an hour) without racing a later one that would
+ * otherwise still be in flight.
  */
 export async function uploadFiles(
-  api: BacklogApi,
+  client: Backlog,
   files: FileUpload[],
   toBuffer: (file: FileUpload) => Promise<Buffer>
 ): Promise<number[]> {
   const attachmentIds: number[] = [];
   for (const file of files) {
-    const data = await toBuffer(file);
-    const uploaded = await api.uploadAttachment(
-      file.filename,
-      data,
-      file.mimeType
+    const form = new FormData();
+    // A `Buffer` may sit on a `SharedArrayBuffer`, which `BlobPart` refuses.
+    const bytes = Uint8Array.from(await toBuffer(file));
+    form.set(
+      'file',
+      new Blob(
+        [bytes],
+        file.mimeType === undefined ? {} : { type: file.mimeType }
+      ),
+      file.filename
     );
+    const uploaded = await readUploadedFile(client.postSpaceAttachment(form));
     attachmentIds.push(uploaded.id);
   }
   return attachmentIds;
@@ -142,34 +139,27 @@ export interface PostCommentInput {
   host: string;
   projectId: number;
   subject: SubjectClient;
-  /**
-   * Only `POST /space/attachment` is reached through the port here: uploading
-   * is space-level and has no per-subject endpoint, while the comment itself
-   * goes through `subject` so this function has one code path for both kinds.
-   */
-  api: BacklogApi;
+  /** For `POST /space/attachment`, which is space-level rather than per subject. */
+  client: Backlog;
   converter: BaseFormatConverter;
   message: AdapterPostableMessage;
   toBuffer: (file: FileUpload) => Promise<Buffer>;
 }
 
 /**
- * `postMessage` (docs/specs/adapter.md §6.1): upload, render, comment, in
- * that order, so a render failure never spends the update-bucket call and a
- * comment failure never fabricates a return value. The caller's message
- * object is read, never mutated — `content`/`notifiedUserId`/`attachmentId`
- * are assembled into a fresh `AddCommentInput` rather than written back onto
- * `message`.
+ * Upload, render, comment, in that order, so a render failure never spends
+ * the update-bucket call.
  */
 export async function postComment(
   input: PostCommentInput
 ): Promise<RawMessage<BacklogRawMessage>> {
-  const { host, projectId, subject, api, converter, message, toBuffer } = input;
+  const { host, projectId, subject, client, converter, message, toBuffer } =
+    input;
 
   const notifiedUserId = extractNotifiedUserId(message);
   const files = extractFiles(message);
   const attachmentId =
-    files.length > 0 ? await uploadFiles(api, files, toBuffer) : undefined;
+    files.length > 0 ? await uploadFiles(client, files, toBuffer) : undefined;
 
   const content = converter.renderPostable(message);
 
@@ -181,8 +171,20 @@ export async function postComment(
     commentInput.attachmentId = attachmentId;
   }
 
-  const comment = await subject.addComment(commentInput);
+  return sentComment(
+    host,
+    projectId,
+    subject,
+    await subject.addComment(commentInput)
+  );
+}
 
+function sentComment(
+  host: string,
+  projectId: number,
+  subject: SubjectClient,
+  comment: BacklogRawComment
+): RawMessage<BacklogRawMessage> {
   return {
     id: encodeMessageId({
       host,
@@ -196,7 +198,7 @@ export async function postComment(
       host,
       projectId,
       subject: subject.ref,
-      comment: toRawComment(comment),
+      comment,
       changes: [],
     },
   };
@@ -212,10 +214,8 @@ export interface EditCommentInput {
 }
 
 /**
- * `editMessage` (docs/specs/adapter.md §6.2): Backlog's Update Comment takes
- * `content` only, so files or extras on the edit are a `ValidationError`
- * rather than a silent drop — an edit that appears to accept a file but never
- * attaches it would be a worse surprise than a loud rejection.
+ * Update Comment takes `content` only, so files or extras on the edit are a
+ * `ValidationError` rather than a silent drop.
  */
 export async function editComment(
   input: EditCommentInput
@@ -236,42 +236,27 @@ export async function editComment(
   }
 
   const content = converter.renderPostable(message);
-  const comment = await subject.updateComment(commentId, content);
-
-  return {
-    id: encodeMessageId({
-      host,
-      subject: subject.ref,
-      part: 'comment',
-      commentId: comment.id,
-    }),
-    threadId: encodeThreadId({ host, projectId, subject: subject.ref }),
-    raw: {
-      kind: 'comment',
-      host,
-      projectId,
-      subject: subject.ref,
-      comment: toRawComment(comment),
-      changes: [],
-    },
-  };
+  return sentComment(
+    host,
+    projectId,
+    subject,
+    await subject.updateComment(commentId, content)
+  );
 }
 
 export interface AddReactionInput {
-  api: BacklogApi;
+  client: Backlog;
   subject: SubjectClient;
   commentId: number;
   botUserId: number;
 }
 
 /**
- * `addReaction` (docs/specs/adapter.md §6.5): the emoji is ignored (Backlog
- * has one star kind). Reads the comment before starring so a second call is
- * a no-op — Backlog allows unlimited stars per user, so without this read
- * every retry or duplicate reaction would add another star.
+ * Reads the comment before starring: `POST /stars` is not idempotent
+ * (measured), so without the read every retry would add another star.
  */
 export async function addReaction(input: AddReactionInput): Promise<void> {
-  const { api, subject, commentId, botUserId } = input;
+  const { client, subject, commentId, botUserId } = input;
   const comment = await subject.getComment(commentId);
   const alreadyStarred = comment.stars.some(
     (star) => star.presenter.id === botUserId
@@ -279,32 +264,30 @@ export async function addReaction(input: AddReactionInput): Promise<void> {
   if (alreadyStarred) {
     return;
   }
-  await api.addStar(subject.starTarget(commentId));
+  await send(client.postStar(subject.starTarget(commentId)));
 }
 
 export interface RemoveReactionInput {
-  api: BacklogApi;
+  client: Backlog;
   subject: SubjectClient;
   commentId: number;
   botUserId: number;
 }
 
 /**
- * `removeReaction` (docs/specs/adapter.md §6.5): deletes every star the bot
- * itself presented on the comment, never another user's — the comment is
- * re-read for its current stars rather than trusting a prior snapshot, since
- * `deleteStar` addresses stars individually by id.
+ * Re-reads the comment rather than trusting a prior snapshot, because a star
+ * is removed by its own id.
  */
 export async function removeReaction(
   input: RemoveReactionInput
 ): Promise<void> {
-  const { api, subject, commentId, botUserId } = input;
+  const { client, subject, commentId, botUserId } = input;
   const comment = await subject.getComment(commentId);
   const ownStars = comment.stars.filter(
     (star) => star.presenter.id === botUserId
   );
   for (const star of ownStars) {
-    await api.deleteStar(star.id);
+    await send(client.removeStar(star.id));
   }
 }
 
