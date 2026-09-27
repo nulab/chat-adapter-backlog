@@ -55,28 +55,4 @@ describe('package entry point', () => {
       'decodeUserId',
     ]);
   });
-
-  it('keeps the internals off the public surface', () => {
-    // §3.1: the port and its in-memory double, the id encoders, the
-    // converters, the mention helpers, the backlog-js wrapper, the zod schemas
-    // and the subject layer are not part of the contract, so a consumer
-    // cannot come to depend on them.
-    for (const name of [
-      'createInMemoryBacklogApi',
-      'encodeThreadId',
-      'decodeThreadId',
-      'channelIdFromThreadId',
-      'encodeMessageId',
-      'BacklogMarkdownConverter',
-      'BacklogNotationConverter',
-      'mentionUser',
-      'mentionPattern',
-      'createBacklogJsApi',
-      'createBacklogJsTransport',
-      'userSchema',
-      'subjectClientFor',
-    ]) {
-      expect(entry).not.toHaveProperty(name);
-    }
-  });
 });

@@ -12,20 +12,24 @@ import {
   encodeMessageId,
   encodeThreadId,
 } from './ids';
-import { toRawChanges, toRawComment, toRawIssue } from './subject/raw';
+import { readIssues, readProject, readUser } from './client/responses';
 import { parseAttachmentPath } from './subject/url';
 
-import type { BacklogApi, BacklogComment, BacklogIssue } from './client/port';
 import type {
   SubjectClient,
   SubjectNames,
   SubjectRoot,
 } from './subject/client';
 import type {
+  BacklogChange,
+  BacklogRawComment,
+  BacklogRawIssue,
   BacklogRawMessage,
   BacklogSubjectRef,
   BacklogThreadId,
+  BacklogUser,
 } from './types';
+import type { Backlog } from 'backlog-js';
 import type {
   Attachment,
   Author,
@@ -48,13 +52,9 @@ const MIN_LIMIT = 1;
 const MAX_LIMIT = 100;
 
 /**
- * `limit` is clamped into `[1, 100]` but a non-integer is **rejected** rather
- * than rounded (docs/specs/adapter.md §7.1): it reaches Backlog as the `count`
- * parameter, which answers 400 for `2.5`, and `NaN` survives
- * `Math.min`/`Math.max` untouched — so both used to leave this function and
- * fail at the API with Backlog's message instead of the adapter's. Rounding
- * would be the other option; a caller asking for 2.5 messages has a bug, and
- * silently answering with 2 or 3 hides it.
+ * A non-integer is rejected rather than rounded: a caller asking for 2.5
+ * messages has a bug, and `NaN` would survive `Math.min`/`Math.max` to fail
+ * at Backlog with Backlog's message instead of the adapter's.
  */
 function clampLimit(limit: number | undefined): number {
   if (limit === undefined) {
@@ -77,15 +77,13 @@ function parseCursor(cursor: string | undefined): number | undefined {
 }
 
 /**
- * Author for a REST-derived message (a comment or a thread's root). Mirrors
- * the webhook path's `<host>:<id>` shape (`src/webhook/inbound.ts`
- * `authorOf`) using `BacklogUserRef.id`, the same numeric identity §2
- * specifies for every user id in this adapter.
+ * Keyed on the numeric `id`, never on `userId`: that is a login handle, and
+ * `null` for a user signed in with a Nulab account.
  */
 export function buildRestAuthor(
   host: string,
   botUserId: number,
-  createdUser: { id: number; userId: string | null; name: string }
+  createdUser: BacklogUser
 ): Author {
   const isMe = createdUser.id === botUserId;
   return {
@@ -115,11 +113,8 @@ export interface MessageBuilders {
 }
 
 /**
- * A thread's root — the issue body or the pull-request body — as a `Message`
- * (docs/specs/adapter.md §7.1). `edited` is always `false`: a root's `updated`
- * moves on any field change (status, assignee, a comment being added) and says
- * nothing about whether the *body* itself was edited, so treating it as an
- * edit signal would report a false positive on every unrelated update.
+ * `edited` is always `false`: a root's `updated` moves on any field change
+ * and says nothing about whether the body itself was edited.
  */
 export function buildRootMessage(
   builders: MessageBuilders,
@@ -134,36 +129,30 @@ export function buildRootMessage(
     formatted: format(text),
     raw: subject.rootRaw(root),
     author: buildRestAuthor(host, botUserId, root.createdUser),
-    metadata: { dateSent: root.created, edited: false },
-    // A root message carries no attachments, by decision rather than
-    // omission (§6.6): neither `getIssue` nor `getPullRequest` surfaces
-    // `attachments[]` through the port, and listing them would cost a read per
-    // root message for a source that only matters when a body has files. The
-    // webhook path (`src/webhook/inbound.ts`) is the one that can, because the
-    // payload already carries them.
+    metadata: { dateSent: new Date(root.created), edited: false },
+    // Empty by decision (D11): the webhook path carries a body's files
+    // because the payload names them, and reading them here would cost a
+    // call per root message.
     attachments: [],
     isMention: false,
   });
 }
 
 /**
- * A comment as a `Message` (docs/specs/adapter.md §7.1). `edited` is derived
- * from `updated !== created`, unlike the always-`false` root — a comment
- * genuinely reports its own edit history, and Backlog fires no webhook for a
- * comment edit of either kind (`.claude/rules/backlog-webhook-facts.md`,
- * `.claude/rules/backlog-pull-request-facts.md`), so this REST path is the
- * only way a consumer learns of one at all.
+ * Unlike a root, a comment's `updated` is its own edit history, and the only
+ * one a consumer gets: a comment edit fires no webhook (measured).
  */
 export function buildCommentMessage(
   builders: MessageBuilders,
-  comment: BacklogComment
+  comment: BacklogRawComment
 ): Message<BacklogRawMessage> {
   const { host, projectId, subject, botUserId, format, MessageCtor } = builders;
   const text = comment.content ?? '';
-  const edited = comment.updated.getTime() !== comment.created.getTime();
-  const metadata: MessageData['metadata'] = edited
-    ? { dateSent: comment.created, edited, editedAt: comment.updated }
-    : { dateSent: comment.created, edited };
+  const dateSent = new Date(comment.created);
+  const metadata: MessageData['metadata'] =
+    comment.updated === comment.created
+      ? { dateSent, edited: false }
+      : { dateSent, edited: true, editedAt: new Date(comment.updated) };
   return new MessageCtor({
     id: encodeMessageId({
       host,
@@ -179,8 +168,12 @@ export function buildCommentMessage(
       host,
       projectId,
       subject: subject.ref,
-      comment: toRawComment(comment),
-      changes: toRawChanges(comment.changeLog),
+      comment,
+      changes: comment.changeLog.map((change): BacklogChange => ({
+        field: change.field,
+        newValue: change.newValue,
+        oldValue: change.originalValue,
+      })),
     },
     author: buildRestAuthor(host, botUserId, comment.createdUser),
     metadata,
@@ -197,28 +190,14 @@ export interface FetchMessagesInput {
 }
 
 /**
- * `fetchMessages` (docs/specs/adapter.md §7.1). One algorithm for both kinds:
- * pull-request comments page through the same `minId`/`maxId`/`count`/`order`
- * parameters with the same exclusive bounds and the same head-cut `count`
- * (measured 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`
- * "Paging"). The algorithm is specified exactly, including its off-by-one
- * behaviour:
+ * One algorithm for both kinds: pull-request comments page with the same
+ * exclusive `minId`/`maxId` and head-cut `count` as issue comments
+ * (measured), so the previous page's edge id is the cursor with no `±1`.
  *
- * - `minId`/`maxId` are exclusive and `count` cuts from the head of `order`,
- *   so the previous page's edge id is passed straight through as the cursor
- *   with no `±1` correction.
- * - `commentLimit` reserves one slot for the root message only on the very
- *   first forward page (`startsWithRoot`); every other page's `commentLimit`
- *   equals `limit`.
- * - `hasMore = comments.length >= count`: `count` has no "one more than I
- *   need" form, so the page's own length is the signal, and a full final page
- *   reads as "more" until the next page comes back empty — the documented
- *   root-only final page. A comment *count* endpoint does exist for both
- *   kinds (`getIssueCommentsCount`, `getPullRequestCommentsCount`, `read`
- *   bucket), so the alternative is a second call of the same cost answering a
- *   different question: the total, not whether anything lies past this
- *   cursor. Only the very first forward page could use it — see
- *   `startsWithRoot` below.
+ * `hasMore` is the page's own length reaching `count`, so a full final page
+ * reads as "more" until the next one comes back empty. The comment-count
+ * endpoints would answer a different question — the total, not whether
+ * anything lies past this cursor — for a call of the same cost.
  */
 export async function fetchMessages(
   input: FetchMessagesInput
@@ -236,7 +215,7 @@ export async function fetchMessages(
   // fetched here is what separates "there are comments, come back with cursor
   // 0" from "this thread has none, you are done". Skipping it would leave
   // `nextCursor` always defined on that page and move the same request into
-  // the caller's next round trip (confirmed 2026-09-08, §7.1).
+  // the caller's next round trip.
   const count = Math.max(commentLimit, 1);
 
   const comments =
@@ -310,24 +289,16 @@ export interface FetchMessageInput {
   messageId: string;
   subject: SubjectClient;
   /**
-   * Deferred rather than passed as a value, because completing it resolves
-   * the project's §9.1 converter and that costs a cached Get Project. §7.2
-   * answers `null` without an API call for an id that cannot name a message
-   * in this thread; taking the builders up front would spend a call on
-   * exactly the ids that guarantee exists to keep free.
+   * Deferred rather than passed as a value: building it can cost a Get
+   * Project, and an id that cannot name a message in this thread is answered
+   * `null` without any call.
    */
   builders: () => Promise<Omit<MessageBuilders, 'projectId' | 'subject'>>;
 }
 
 /**
- * `fetchMessage` (docs/specs/adapter.md §7.2). Returns `null` without an API
- * call for a message id that cannot possibly belong to `threadId` (a
- * different host or a different subject) and for `u:` ids — Backlog has no
- * single-fetch endpoint for a fieldchange update with no comment (D12) —
- * rather than spending a call that could only ever come back empty-handed.
- * `subject.getComment` is one endpoint for an issue and a one-element list
- * window for a pull request (`src/subject/pull-request.ts`); both raise
- * `ResourceNotFoundError`, which is `null` here.
+ * `null` without a call for an id of another host or subject, and for an
+ * update id, which no endpoint fetches (D12).
  */
 export async function fetchMessage(
   input: FetchMessageInput
@@ -372,15 +343,6 @@ export interface FetchThreadInput {
   names: SubjectNames;
 }
 
-/**
- * `fetchThread` (docs/specs/adapter.md §7.3): one Get Issue or one Get Pull
- * Request, then `channelName` and `metadata` off the subject client — an
- * issue derives both from the object it just read, a pull request needs the
- * project key and repository name its object does not carry, which is what
- * `names` supplies. `url` lives inside `metadata` and is omitted there when a
- * name could not be resolved, so an unresolvable URL costs the thread its
- * link rather than the read.
- */
 export async function fetchThread(
   input: FetchThreadInput
 ): Promise<ThreadInfo> {
@@ -409,15 +371,8 @@ export interface FetchSubjectInput {
 }
 
 /**
- * `fetchSubject` (docs/specs/adapter.md §7.4). Called lazily from
- * `message.subject` and its errors are turned into `null` by the core
- * (`.claude/rules/chat-sdk-core-facts.md` "`fetchSubject` is called lazily by
- * the `Message.subject` getter, errors -> `null`"), so every access — not
- * just the first — spends a read unless the raw already carries the object;
- * document this cost to a caller that reads `message.subject` in a loop.
  * `url` is omitted rather than set to `undefined` when a pull request's names
- * are unresolved: `MessageSubject.url` is optional, and a present-but-empty
- * key reads as "this subject has no page".
+ * are unresolved: a present-but-empty key reads as "this subject has no page".
  */
 export async function fetchSubject(
   input: FetchSubjectInput
@@ -454,15 +409,15 @@ export async function fetchSubject(
 
 export interface FetchChannelInfoInput {
   channelId: string;
-  api: BacklogApi;
+  client: Backlog;
 }
 
 export async function fetchChannelInfo(
   input: FetchChannelInfoInput
 ): Promise<ChannelInfo> {
-  const { channelId, api } = input;
+  const { channelId, client } = input;
   const { host, projectId } = decodeChannelId(channelId);
-  const project = await api.getProject(projectId);
+  const project = await readProject(client.getProject(projectId));
   return {
     id: channelId,
     name: project.name,
@@ -479,29 +434,21 @@ export async function fetchChannelInfo(
 export interface ListThreadsInput {
   channelId: string;
   options: ListThreadsOptions | undefined;
-  api: BacklogApi;
+  client: Backlog;
   builders: Omit<MessageBuilders, 'projectId' | 'subject'>;
   subjectFor: (issueId: number) => SubjectClient;
 }
 
 /**
- * The `SubjectRoot` for an issue `listThreads` already holds. Get Issue List
- * returns whole issues, so asking each row's client to `fetchRoot()` would
- * spend one Get Issue per thread for data the page already carries; the root
- * is shaped by the subject client rather than here so `fetchRoot` and this
- * path cannot disagree about what a root is (§3.4).
+ * Get Issue List returns whole issues, so each row's `fetchRoot()` would spend
+ * a Get Issue on data the page already carries.
  */
 function listedIssueRoot(
   host: string,
   subject: SubjectClient,
-  issue: BacklogIssue
+  issue: BacklogRawIssue
 ): SubjectRoot {
-  const root = subject.rootFrom({
-    kind: 'issue',
-    host,
-    issue: toRawIssue(issue),
-    changes: [],
-  });
+  const root = subject.rootFrom({ kind: 'issue', host, issue, changes: [] });
   if (root === undefined) {
     // Unreachable: `subjectFor` builds an issue client keyed by this very
     // issue, and an issue client reads an `{ kind: "issue" }` raw. Throwing
@@ -518,31 +465,23 @@ function listedIssueRoot(
 }
 
 /**
- * `listThreads` (docs/specs/adapter.md §7.6). Lists the project's **issues**
- * and deliberately not its pull requests (D-PR7): a pull-request list is per
- * repository, a coordinate a channel id does not carry, and
- * `client().getPullRequests(projectId, repositoryId, …)` is the route to
- * one — a `read`-bucket call, not a `search` one (measured 2026-09-06,
- * `.claude/rules/backlog-pull-request-facts.md` "Rate limit"), so merging the
- * two lists here would also mix two budgets behind one cursor.
- *
- * Deliberately does not sort or filter the port's response either: Get Issue
- * List draws on the **search** bucket (a documented example 150/min, far
- * lower than `read`'s 600), so silently re-sorting or dropping closed issues
- * here would hide that cost from a caller who asked for one page and would
- * also disagree with what Backlog's own UI shows for the same call.
- * `nextCursor` is only set on a full page — a short final page and a
- * documented trailing empty page are both possible, per §7.6.
+ * Issues only, not pull requests (D-PR7): a pull-request list is per
+ * repository, a coordinate a channel id does not carry, and it draws on a
+ * different rate-limit bucket, which one cursor would hide. The page is not
+ * sorted or filtered either: Get Issue List spends the search bucket, and a
+ * caller who asked for one page must get that page.
  */
 export async function listThreads(
   input: ListThreadsInput
 ): Promise<ListThreadsResult<BacklogRawMessage>> {
-  const { channelId, options, api, builders, subjectFor } = input;
+  const { channelId, options, client, builders, subjectFor } = input;
   const { host, projectId } = decodeChannelId(channelId);
   const limit = clampLimit(options?.limit);
   const offset = parseOffset(options?.cursor);
 
-  const issues = await api.listIssues(projectId, { count: limit, offset });
+  const issues = await readIssues(
+    client.getIssues({ projectId: [projectId], count: limit, offset })
+  );
 
   const threads = issues.map((issue) => {
     const subject = subjectFor(issue.id);
@@ -557,7 +496,7 @@ export async function listThreads(
         messageBuilders,
         listedIssueRoot(host, subject, issue)
       ),
-      lastReplyAt: issue.updated,
+      lastReplyAt: new Date(issue.updated),
     };
   });
 
@@ -580,22 +519,15 @@ function parseOffset(cursor: string | undefined): number {
 
 export interface GetUserInput {
   userId: string;
-  api: BacklogApi;
+  client: Backlog;
   botUserId: number;
 }
 
-/**
- * `getUser` (docs/specs/adapter.md §7.7). `chat.getUser()` cannot route here
- * — the core infers an adapter from id shape and does not recognise
- * `<host>:<id>` (`.claude/rules/chat-sdk-core-facts.md` "`openDM`/`getUser`
- * absent -> `chat.openDM`/`chat.getUser` throw") — so this is reached only by
- * calling `adapter.getUser()` directly; README documents that.
- */
 export async function getUser(input: GetUserInput): Promise<UserInfo | null> {
-  const { userId, api, botUserId } = input;
+  const { userId, client, botUserId } = input;
   const { host, userId: id } = decodeUserId(userId);
   try {
-    const user = await api.getUser(id);
+    const user = await readUser(client.getUser(id));
     const info: UserInfo = {
       userId: `${host}:${user.id}`,
       userName: user.userId ?? user.name,
@@ -617,23 +549,18 @@ export async function getUser(input: GetUserInput): Promise<UserInfo | null> {
 export interface RehydrateAttachmentInput {
   attachment: Attachment;
   host: string;
-  api: () => BacklogApi;
+  client: () => Backlog;
 }
 
 /**
- * `rehydrateAttachment` (docs/specs/adapter.md §6.6): synchronous, and a
- * security boundary — it accepts only a URL whose host is the adapter's
- * **configured** space and whose path is one this adapter
- * builds (`src/subject/url.ts`, which owns both directions of the grammar);
- * anything else (a foreign host, a malformed path, no URL at all) is returned
- * unchanged, without `fetchData`, which is what keeps a rehydrated attachment
- * from ever downloading through a host this adapter was not configured for
- * (§11).
+ * A security boundary: only a URL on the configured host with a path this
+ * adapter builds regains `fetchData`, so a rehydrated attachment never
+ * downloads through a host the adapter was not configured for.
  */
 export function rehydrateAttachment(
   input: RehydrateAttachmentInput
 ): Attachment {
-  const { attachment, host, api } = input;
+  const { attachment, host, client } = input;
   if (attachment.url === undefined) {
     return attachment;
   }
@@ -652,5 +579,5 @@ export function rehydrateAttachment(
   if (download === null) {
     return attachment;
   }
-  return { ...attachment, fetchData: () => download(api()) };
+  return { ...attachment, fetchData: () => download(client()) };
 }

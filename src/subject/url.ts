@@ -1,17 +1,12 @@
 /**
- * Attachment URLs, both directions (docs/specs/adapter.md §6.6). An inbound
- * `Attachment` carries an authenticated API URL as its only serialisable
- * handle, and `rehydrateAttachment` has to read that URL back after a queue
- * round trip, so a builder and the pattern that parses it are declared side by
- * side here: they are one grammar, and a builder that drifted from its pattern
- * would silently cost every rehydrated attachment its `fetchData`.
- *
- * Both pairs live in this file rather than one in each subject module because
- * `parseAttachmentPath` must try them in order and knows no kind — a third
- * kind is one more entry in `ATTACHMENT_PATHS`, not a new branch.
+ * A builder and the pattern that parses its URL back sit side by side
+ * because they are one grammar: a builder that drifted from its pattern would
+ * silently cost every rehydrated attachment its `fetchData`.
  */
 
-import type { BacklogApi } from '../client/port';
+import { download } from '../client/responses';
+
+import type { Backlog } from 'backlog-js';
 
 export function issueAttachmentUrl(
   host: string,
@@ -36,7 +31,7 @@ export function pullRequestAttachmentUrl(
  * subject afterwards, so rehydration reaches the right endpoint without a
  * second place in `src/` asking what kind a subject is.
  */
-export type AttachmentDownload = (api: BacklogApi) => Promise<Buffer>;
+export type AttachmentDownload = (client: Backlog) => Promise<Buffer>;
 
 interface AttachmentPath {
   pattern: RegExp;
@@ -47,10 +42,8 @@ interface AttachmentPath {
 const ATTACHMENT_PATHS: readonly AttachmentPath[] = [
   {
     pattern: /^\/api\/v2\/issues\/([1-9]\d*)\/attachments\/([1-9]\d*)$/,
-    build: (issueId: number, attachmentId: number) => async (api) => {
-      const file = await api.downloadAttachment(issueId, attachmentId);
-      return file.data;
-    },
+    build: (issueId: number, attachmentId: number) => (client) =>
+      download(client.getIssueAttachment(issueId, attachmentId)),
   },
   {
     pattern:
@@ -62,13 +55,15 @@ const ATTACHMENT_PATHS: readonly AttachmentPath[] = [
         number: number,
         attachmentId: number
       ) =>
-      async (api) => {
-        const file = await api.downloadPullRequestAttachment(
-          { projectId, repositoryId, number },
-          attachmentId
-        );
-        return file.data;
-      },
+      (client) =>
+        download(
+          client.getPullRequestAttachment(
+            projectId,
+            String(repositoryId),
+            number,
+            attachmentId
+          )
+        ),
   },
 ];
 

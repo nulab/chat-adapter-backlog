@@ -187,59 +187,92 @@ export type BacklogWebhookPayload = Omit<
   );
 
 /**
- * A comment as `message.raw` carries it. The parent is **not** a field here:
- * a pull-request comment has no parent reference of its own (measured
- * 2026-09-06, `.claude/rules/backlog-pull-request-facts.md`), so the
- * enclosing raw variant names the `subject` instead and one shape serves both
- * kinds.
+ * A user as a REST response carries it: `userId` is `null` for a user who
+ * signs in with a Nulab account (measured).
  */
-export interface BacklogRawComment {
-  id: number;
+export type BacklogUser = Omit<Entity.User.User, 'userId'> & {
+  userId: string | null;
+};
+
+/** `comment` arrives as `null`, not absent (measured). */
+export type BacklogStar = Omit<Entity.Star.Star, 'comment' | 'presenter'> & {
+  comment: string | null;
+  presenter: BacklogUser;
+};
+
+/**
+ * A REST `changeLog[]` entry, under `backlog-js`'s own `originalValue` name;
+ * `raw.changes` is where it reads `oldValue`, like a webhook change.
+ * `attachmentInfo` is `null` on a pull-request comment, which names a file by
+ * name alone (measured).
+ */
+export type BacklogChangeLog = Omit<
+  Entity.ChangeLog.ChangeLog,
+  'newValue' | 'originalValue'
+> & {
+  newValue: string | null;
+  originalValue: string | null;
+  attachmentInfo: { id: number } | null;
+};
+
+/**
+ * A comment of either kind. The parent is not a field of its own: a
+ * pull-request comment carries no parent reference (measured), so the
+ * enclosing raw variant names the `subject`.
+ */
+export type BacklogRawComment = Omit<
+  Entity.PullRequest.Comment,
+  'content' | 'changeLog' | 'createdUser' | 'stars'
+> & {
+  /** `null` for a system comment, such as an assignee change. */
   content: string | null;
-  createdUser: { id: number; name: string; userId?: string | null };
-  created: string;
-  updated: string;
-  changeLog: BacklogChange[];
-  stars: { id: number; presenter: { id: number } }[];
-}
+  changeLog: BacklogChangeLog[];
+  createdUser: BacklogUser;
+  stars: BacklogStar[];
+};
 
-export interface BacklogRawIssue {
-  id: number;
-  issueKey: string;
-  projectId: number;
-  summary: string;
+export type BacklogRawIssue = Omit<
+  Entity.Issue.Issue,
+  'description' | 'assignee' | 'createdUser' | 'updatedUser' | 'stars'
+> & {
   description: string;
-  status: { id: number; name: string };
-  issueType: { id: number; name: string };
-  priority: { id: number; name: string };
-  assignee: { id: number; name: string } | null;
-  createdUser: { id: number; name: string; userId?: string | null };
-  created: string;
-  updated: string;
-}
+  assignee: BacklogUser | null;
+  createdUser: BacklogUser;
+  updatedUser: BacklogUser;
+  stars: BacklogStar[];
+};
 
-/** Mirrors the port's `BacklogPullRequest` with ISO strings; see `src/index.ts`. */
-export interface BacklogRawPullRequest {
-  id: number;
-  projectId: number;
-  repositoryId: number;
-  number: number;
-  summary: string;
+/**
+ * `issue` is a full issue object on every endpoint, the list included
+ * (measured); the commits and dates are `null` until the pull request is
+ * merged or closed.
+ */
+export type BacklogRawPullRequest = Omit<
+  Entity.PullRequest.PullRequest,
+  | 'description'
+  | 'assignee'
+  | 'issue'
+  | 'baseCommit'
+  | 'branchCommit'
+  | 'mergeCommit'
+  | 'closeAt'
+  | 'mergeAt'
+  | 'createdUser'
+  | 'updatedUser'
+  | 'stars'
+> & {
   description: string;
-  base: string;
-  branch: string;
-  status: { id: number; name: string };
-  assignee: { id: number; name: string } | null;
-  issue: { id: number; issueKey: string | null } | null;
+  assignee: BacklogUser | null;
+  issue: Entity.Issue.Issue | null;
   baseCommit: string | null;
   branchCommit: string | null;
   mergeCommit: string | null;
   closeAt: string | null;
   mergeAt: string | null;
-  createdUser: { id: number; name: string; userId?: string | null };
-  created: string;
-  updated: string;
-}
+  createdUser: BacklogUser;
+  updatedUser: BacklogUser;
+  stars: BacklogStar[];
+};
 
 /**
  * `changes` is normalised, but its value systems are not unified: a webhook
@@ -295,14 +328,6 @@ export type BacklogWebhookVerifier = (
   request: Request,
   rawBody: string
 ) => unknown | Promise<unknown>;
-
-/**
- * Backlog's per-project text formatting setting
- * ([Get Project](https://developer.nulab.com/docs/backlog/api/2/get-project/)).
- * `"backlog"` notation is a different syntax from `"markdown"`, not a
- * superset (docs/specs/adapter.md §9.1).
- */
-export type TextFormattingRule = 'markdown' | 'backlog';
 
 /**
  * A credential given as a string or as a function the adapter calls before

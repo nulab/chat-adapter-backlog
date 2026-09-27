@@ -2,15 +2,16 @@ import { AdapterError } from '@chat-adapter/shared';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createBacklogAdapter } from '../index';
-import { encodeMessageId, encodeThreadId } from '../ids';
+import { encodeChannelId, encodeMessageId, encodeThreadId } from '../ids';
 
-import type { BacklogAdapter } from '../adapter';
-
-import type { BacklogApi, PullRequestRef } from '../client/port';
-import type { BacklogSubjectRef } from '../types';
+import type {
+  BacklogRawComment,
+  BacklogRawMessage,
+  BacklogSubjectRef,
+} from '../types';
 
 /**
- * Opt-in suite against a real Backlog space (docs/specs/adapter.md §12.3).
+ * Opt-in suite against a real Backlog space.
  *
  * `pnpm test` must pass with no credentials and no network, so each section
  * skips itself unless its variables are set. It is not part of CI.
@@ -36,20 +37,11 @@ import type { BacklogSubjectRef } from '../types';
  * (`.claude/rules/backlog-pull-request-facts.md`). `BACKLOG_LIVE_PULL_REQUEST`
  * must therefore name a scratch pull request — its comments are permanent.
  *
- * That measurement — `DELETE …/pullRequests/:number/comments/:commentId`
- * answering 400 with error code 6 `Undefined resource` — is asserted nowhere
- * below. Reaching the route means issuing a request the port deliberately has
- * no method for, and adding one to prove an endpoint's absence would put a
- * dead method in the adapter's own API forever. What the suite pins instead is
- * the behaviour a caller can observe: `deleteMessage` on a pull-request thread
- * refuses before any request leaves the process.
- *
  * `BACKLOG_LIVE_PULL_REQUEST` carries `<repositoryId>:<number>`, the two
  * coordinates the thread-id grammar writes as `pr:<repositoryId>:<number>`.
- * Every pull-request endpoint is keyed by a third one, the project, which the
- * variable does not carry and no endpoint derives — so it comes from
- * `BACKLOG_LIVE_ISSUE_ID`'s issue, and the scratch pull request has to live in
- * that issue's project.
+ * A thread id also needs the project, which the variable does not carry and
+ * no endpoint derives — so it comes from `BACKLOG_LIVE_ISSUE_ID`'s issue, and
+ * the scratch pull request has to live in that issue's project.
  */
 
 const host = process.env['BACKLOG_HOST'];
@@ -77,97 +69,108 @@ const pullRequestConfigured = configured && pullRequestCoordinates !== null;
 const spaceHost = host as string;
 const issueId = Number(liveIssueId);
 
+/** No bot identity is configured, so reactions compare stars against the key's own user from `GET /users/myself`. */
 function createLiveAdapter() {
   return createBacklogAdapter({
     host: spaceHost,
     apiKey: apiKey as string,
-    // The live suite exercises the port rather than dispatch, so the bot
-    // identity only has to be well-formed: nothing here reads it back.
-    botUserId: 1,
-    botUserName: 'Chatbot',
     webhookSecret: 'unused-by-this-suite',
   });
 }
 
-/**
- * The port is private to the adapter; element access is the one form
- * TypeScript leaves open to a private member, kept to this one place.
- */
-function portOf(adapter: BacklogAdapter): BacklogApi {
-  return adapter['api'](spaceHost);
+async function projectIdOfLiveIssue(): Promise<number> {
+  const issue = await createLiveAdapter().client().getIssue(issueId);
+  return issue.projectId;
 }
 
-function connect(): BacklogApi {
-  return portOf(createLiveAdapter());
+function commentOf(raw: BacklogRawMessage): BacklogRawComment {
+  if (raw.kind !== 'comment') {
+    throw new Error(`expected a comment raw message, got ${raw.kind}`);
+  }
+  return raw.comment;
 }
 
 describe.skipIf(!configured).sequential('a real Backlog space', () => {
-  it('reads the issue named by BACKLOG_LIVE_ISSUE_ID', async () => {
-    const issue = await connect().getIssue(issueId);
+  const subject: BacklogSubjectRef = { kind: 'issue', issueId };
+  let adapter: ReturnType<typeof createLiveAdapter>;
+  let threadId: string;
+  let channelId: string;
 
-    expect(issue.id).toBe(issueId);
-    expect(issue.issueKey).toMatch(/^[A-Z0-9_]+-\d+$/);
-    expect(typeof issue.summary).toBe('string');
+  beforeAll(async () => {
+    adapter = createLiveAdapter();
+    const projectId = await projectIdOfLiveIssue();
+    threadId = encodeThreadId({ host: spaceHost, projectId, subject });
+    channelId = encodeChannelId({ host: spaceHost, projectId });
   });
 
-  it('reads the project and reports its text formatting rule', async () => {
-    const api = connect();
-    const issue = await api.getIssue(issueId);
-    const project = await api.getProject(issue.projectId);
+  it('describes the issue named by BACKLOG_LIVE_ISSUE_ID as a thread', async () => {
+    const thread = await adapter.fetchThread(threadId);
 
-    expect(project.id).toBe(issue.projectId);
-    // The rule decides which converter every egress path uses, so a value
-    // outside this pair would silently fall back to Markdown.
-    expect(['markdown', 'backlog']).toContain(project.textFormattingRule);
+    expect(thread.metadata).toMatchObject({ kind: 'issue', issueId });
+    expect(thread.metadata['issueKey']).toMatch(/^[A-Z0-9_]+-\d+$/);
   });
 
-  it('adds, edits, stars, unstars and deletes one comment', async () => {
-    const api = connect();
+  it("reports the project's text formatting rule as one of the two the converters cover", async () => {
+    const channel = await adapter.fetchChannelInfo(channelId);
 
-    const added = await api.addComment(issueId, {
-      content:
+    expect(['markdown', 'backlog']).toContain(
+      channel.metadata['textFormattingRule']
+    );
+  });
+
+  it('posts, reads, edits, stars, unstars and deletes one comment', async () => {
+    const posted = await adapter.postMessage(threadId, {
+      markdown:
         'chat-adapter-backlog live suite: this comment is deleted below.',
     });
-    expect(added.id).toBeGreaterThan(0);
+    const commentId = commentOf(posted.raw).id;
 
-    const edited = await api.updateComment(
-      issueId,
-      added.id,
-      'chat-adapter-backlog live suite: edited, and deleted below.'
+    const page = await adapter.fetchMessages(threadId, { limit: 5 });
+    expect(page.messages.map((message) => message.id)).toContain(posted.id);
+
+    const edited = await adapter.editMessage(threadId, posted.id, {
+      markdown: 'chat-adapter-backlog live suite: edited, and deleted below.',
+    });
+    const editedComment = commentOf(edited.raw);
+    expect(editedComment.content).toContain('edited');
+    expect(Date.parse(editedComment.updated)).toBeGreaterThan(
+      Date.parse(editedComment.created)
     );
-    expect(edited.content).toContain('edited');
-    // Backlog moves `updated` past `created` on an edit, which is what a
-    // REST-derived message reports as `edited` (docs/specs/adapter.md §7.1).
-    expect(edited.updated.getTime()).toBeGreaterThan(edited.created.getTime());
 
-    await api.addStar({ commentId: added.id });
-    const starred = await api.getComment(issueId, added.id);
+    const client = adapter.client();
+    await adapter.addReaction(threadId, posted.id, 'star');
+    const starred = await client.getIssueComment(issueId, commentId);
     expect(starred.stars.length).toBeGreaterThan(0);
 
-    const star = starred.stars.at(-1);
-    expect(star).toBeDefined();
-    await api.deleteStar((star as NonNullable<typeof star>).id);
+    await adapter.removeReaction(threadId, posted.id, 'star');
+    const unstarred = await client.getIssueComment(issueId, commentId);
+    expect(unstarred.stars).toHaveLength(0);
 
-    await api.deleteComment(issueId, added.id);
+    await adapter.deleteMessage(threadId, posted.id);
   });
 
-  it('uploads an attachment and attaches it to a comment', async () => {
-    const api = connect();
-
-    const uploaded = await api.uploadAttachment(
-      'live-suite.txt',
-      Buffer.from('chat-adapter-backlog live suite\n'),
-      'text/plain'
-    );
-    expect(uploaded.id).toBeGreaterThan(0);
-    expect(uploaded.name).toBe('live-suite.txt');
-
-    const comment = await api.addComment(issueId, {
-      content: 'chat-adapter-backlog live suite: attachment, deleted below.',
-      attachmentId: [uploaded.id],
+  it('posts a file with a comment and reads it back as that comment’s attachment', async () => {
+    const posted = await adapter.postMessage(threadId, {
+      markdown: 'chat-adapter-backlog live suite: attachment, deleted below.',
+      files: [
+        {
+          filename: 'live-suite.txt',
+          data: Buffer.from('chat-adapter-backlog live suite\n'),
+          mimeType: 'text/plain',
+        },
+      ],
     });
 
-    await api.deleteComment(issueId, comment.id);
+    const message = await adapter.fetchMessage(threadId, posted.id);
+    const attachment = message?.attachments.find(
+      (candidate) => candidate.name === 'live-suite.txt'
+    );
+    expect(attachment).toBeDefined();
+    expect(String(await attachment?.fetchData?.())).toBe(
+      'chat-adapter-backlog live suite\n'
+    );
+
+    await adapter.deleteMessage(threadId, posted.id);
   });
 });
 
@@ -183,102 +186,101 @@ describe
       kind: 'pullRequest',
       ...coordinates,
     };
-
-    let ref: PullRequestRef;
+    let adapter: ReturnType<typeof createLiveAdapter>;
+    let projectId: number;
+    let threadId: string;
 
     beforeAll(async () => {
-      const issue = await connect().getIssue(issueId);
-      ref = { projectId: issue.projectId, ...coordinates };
+      adapter = createLiveAdapter();
+      projectId = await projectIdOfLiveIssue();
+      threadId = encodeThreadId({ host: spaceHost, projectId, subject });
     });
 
-    it('reads the repository and the pull request named by BACKLOG_LIVE_PULL_REQUEST', async () => {
-      const api = connect();
+    it('describes the pull request named by BACKLOG_LIVE_PULL_REQUEST with its web url', async () => {
+      const thread = await adapter.fetchThread(threadId);
 
-      const repository = await api.getGitRepository(
-        ref.projectId,
-        ref.repositoryId
+      expect(thread.metadata).toMatchObject({
+        kind: 'pullRequest',
+        projectId,
+        ...coordinates,
+      });
+      expect([1, 2, 3]).toContain(
+        (thread.metadata['status'] as { id: number }).id
       );
-      expect(repository.id).toBe(ref.repositoryId);
-      expect(repository.projectId).toBe(ref.projectId);
-      expect(typeof repository.name).toBe('string');
-
-      const pullRequest = await api.getPullRequest(ref);
-      expect(pullRequest.number).toBe(ref.number);
-      expect(pullRequest.repositoryId).toBe(ref.repositoryId);
-      expect(pullRequest.projectId).toBe(ref.projectId);
-      expect([1, 2, 3]).toContain(pullRequest.status.id);
+      expect(thread.metadata['url']).toMatch(
+        new RegExp(`/pullRequests/${coordinates.number}$`)
+      );
     });
 
-    it('adds, edits, stars and unstars one comment, which then stays on the pull request', async () => {
-      const api = connect();
-
-      const added = await api.addPullRequestComment(ref, {
-        content:
+    it('posts, edits, stars and unstars one comment, which then stays on the pull request', async () => {
+      const posted = await adapter.postMessage(threadId, {
+        markdown:
           'chat-adapter-backlog live suite: this comment cannot be deleted.',
       });
-      expect(added.id).toBeGreaterThan(0);
+      const commentId = commentOf(posted.raw).id;
 
-      const edited = await api.updatePullRequestComment(
-        ref,
-        added.id,
-        'chat-adapter-backlog live suite: edited, and left behind.'
-      );
-      expect(edited.content).toContain('edited');
-      expect(edited.updated.getTime()).toBeGreaterThan(
-        edited.created.getTime()
+      const edited = await adapter.editMessage(threadId, posted.id, {
+        markdown: 'chat-adapter-backlog live suite: edited, and left behind.',
+      });
+      const editedComment = commentOf(edited.raw);
+      expect(editedComment.content).toContain('edited');
+      expect(Date.parse(editedComment.updated)).toBeGreaterThan(
+        Date.parse(editedComment.created)
       );
 
-      await api.addStar({ pullRequestCommentId: added.id });
-      // A one-element exclusive window, rather than a get: there is no Get
-      // Pull Request Comment endpoint, and `minId`/`maxId` exclude their own
-      // ids (`.claude/rules/backlog-pull-request-facts.md`).
-      const [read] = await api.listPullRequestComments(ref, {
+      const client = adapter.client();
+      const window = {
         count: 1,
         order: 'desc',
-        minId: added.id - 1,
-        maxId: added.id + 1,
-      });
-      expect(read).toBeDefined();
-      const starred = read as NonNullable<typeof read>;
-      expect(starred.id).toBe(added.id);
-      expect(starred.stars.length).toBeGreaterThan(0);
+        minId: commentId - 1,
+        maxId: commentId + 1,
+      } as const;
+      const repositoryId = String(coordinates.repositoryId);
 
-      const star = starred.stars.at(-1);
-      expect(star).toBeDefined();
-      await api.deleteStar((star as NonNullable<typeof star>).id);
+      await adapter.addReaction(threadId, posted.id, 'star');
+      const [starred] = await client.getPullRequestComments(
+        projectId,
+        repositoryId,
+        coordinates.number,
+        window
+      );
+      expect(starred?.id).toBe(commentId);
+      expect(starred?.stars.length).toBeGreaterThan(0);
+
+      await adapter.removeReaction(threadId, posted.id, 'star');
+      const [unstarred] = await client.getPullRequestComments(
+        projectId,
+        repositoryId,
+        coordinates.number,
+        window
+      );
+      expect(unstarred?.stars).toHaveLength(0);
     });
 
-    it('uploads an attachment, attaches it to a comment and lists it on the pull request', async () => {
-      const api = connect();
-
-      const uploaded = await api.uploadAttachment(
-        'live-suite-pull-request.txt',
-        Buffer.from('chat-adapter-backlog live suite\n'),
-        'text/plain'
-      );
-      expect(uploaded.id).toBeGreaterThan(0);
-      expect(uploaded.name).toBe('live-suite-pull-request.txt');
-
-      const comment = await api.addPullRequestComment(ref, {
-        content:
+    it('posts a file with a comment and reads it back as that comment’s attachment', async () => {
+      const posted = await adapter.postMessage(threadId, {
+        markdown:
           'chat-adapter-backlog live suite: attachment, left behind below.',
-        attachmentId: [uploaded.id],
+        files: [
+          {
+            filename: 'live-suite-pull-request.txt',
+            data: Buffer.from('chat-adapter-backlog live suite\n'),
+            mimeType: 'text/plain',
+          },
+        ],
       });
-      expect(comment.id).toBeGreaterThan(0);
 
-      const attachments = await api.listPullRequestAttachments(ref);
-      expect(attachments.map((attachment) => attachment.name)).toContain(
-        'live-suite-pull-request.txt'
+      const message = await adapter.fetchMessage(threadId, posted.id);
+      const attachment = message?.attachments.find(
+        (candidate) => candidate.name === 'live-suite-pull-request.txt'
+      );
+      expect(attachment).toBeDefined();
+      expect(String(await attachment?.fetchData?.())).toBe(
+        'chat-adapter-backlog live suite\n'
       );
     });
 
     it('refuses to delete a pull request comment without reaching Backlog', async () => {
-      const adapter = createLiveAdapter();
-      const threadId = encodeThreadId({
-        host: spaceHost,
-        projectId: ref.projectId,
-        subject,
-      });
       // The comment id is arbitrary because no request carries it: the refusal
       // is a fact about Backlog's endpoint set, not about this comment.
       const messageId = encodeMessageId({

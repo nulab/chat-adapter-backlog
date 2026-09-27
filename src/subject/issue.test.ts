@@ -1,254 +1,93 @@
+import { AdapterError, ResourceNotFoundError } from '@chat-adapter/shared';
 import { describe, expect, it, vi } from 'vitest';
 
+import {
+  ALICE,
+  BOB,
+  REST,
+  comment,
+  fileData,
+  issue,
+  issueComment,
+  pullRequest,
+  stubClient,
+} from '../test/fixtures/rest';
 import { createIssueSubjectClient } from './issue';
 
 import type {
-  BacklogApi,
-  BacklogComment,
-  BacklogIssue,
-  BacklogUserRef,
-} from '../client/port';
-import type { BacklogRawMessage, BacklogSubjectRef } from '../types';
-import type { SubjectClient, SubjectNames, SubjectRoot } from './client';
+  BacklogRawIssue,
+  BacklogRawMessage,
+  BacklogSubjectRef,
+} from '../types';
+import type { SubjectClient, SubjectRoot } from './client';
+import type { Backlog } from 'backlog-js';
 
-const HOST = 'example.backlog.com';
-const PROJECT_ID = 500;
-const ISSUE_ID = 8001;
 const COMMENT_ID = 3;
 const ATTACHMENT_ID = 4242;
 
-const ALICE: BacklogUserRef = {
-  id: 100,
-  userId: 'alice',
-  name: 'Alice',
-  mailAddress: null,
-};
-const BOB: BacklogUserRef = {
-  id: 101,
-  userId: 'bob',
-  name: 'Bob',
-  mailAddress: null,
-};
-
 const REF: Extract<BacklogSubjectRef, { kind: 'issue' }> = {
   kind: 'issue',
-  issueId: ISSUE_ID,
+  issueId: REST.issueId,
 };
 
-const ISSUE: BacklogIssue = {
-  id: ISSUE_ID,
-  projectId: PROJECT_ID,
-  issueKey: 'PROJECT-42',
-  summary: 'Login fails on retry',
-  description: 'Steps to reproduce',
-  issueType: { id: 1, name: 'Bug' },
-  priority: { id: 3, name: 'Normal' },
-  status: { id: 1, name: 'Open' },
-  assignee: ALICE,
-  createdUser: BOB,
-  created: new Date('2026-09-01T10:00:00.000Z'),
-  updated: new Date('2026-09-02T11:30:00.000Z'),
-};
-
-function comment(changeLog: BacklogComment['changeLog']): BacklogComment {
-  return {
-    id: COMMENT_ID,
-    content: 'a file for you',
-    changeLog,
-    createdUser: BOB,
-    created: new Date('2026-09-02T11:30:00.000Z'),
-    updated: new Date('2026-09-02T11:30:00.000Z'),
-    stars: [],
-  };
-}
-
-/**
- * A port double whose every method is recorded, and whose unstubbed methods
- * fail loudly: a test that asserts "no request was made" must be able to tell
- * "nothing was called" apart from "something was called and happened to
- * resolve".
- */
-function stubApi(overrides: Partial<BacklogApi> = {}): {
-  api: BacklogApi;
-  calls: string[];
-} {
-  const calls: string[] = [];
-  const api = new Proxy(overrides as BacklogApi, {
-    get(target, property, receiver): unknown {
-      const member: unknown = Reflect.get(target, property, receiver);
-      return (...args: unknown[]): unknown => {
-        calls.push(String(property));
-        if (typeof member !== 'function') {
-          throw new Error(
-            `the subject client called an unstubbed port method: ${String(property)}`
-          );
-        }
-        return (member as (...called: unknown[]) => unknown)(...args);
-      };
-    },
+function subjectOn(client: Backlog = stubClient({})): SubjectClient {
+  return createIssueSubjectClient(client, REF, {
+    host: REST.host,
+    projectId: REST.projectId,
   });
-  return { api, calls };
 }
 
-function clientWith(overrides: Partial<BacklogApi> = {}): {
-  subject: SubjectClient;
-  calls: string[];
-} {
-  const { api, calls } = stubApi(overrides);
-  return {
-    subject: createIssueSubjectClient(api, REF, {
-      host: HOST,
-      projectId: PROJECT_ID,
-    }),
-    calls,
-  };
+function issueRaw(fixture: BacklogRawIssue = issue()): BacklogRawMessage {
+  return { kind: 'issue', host: REST.host, issue: fixture, changes: [] };
 }
 
-function rootOf(issue: BacklogIssue = ISSUE): SubjectRoot {
-  return {
-    ref: REF,
-    title: issue.summary,
-    body: issue.description,
-    status: issue.status,
-    assignee: issue.assignee,
-    createdUser: issue.createdUser,
-    created: issue.created,
-    updated: issue.updated,
-    source: { kind: 'issue', issue },
-  };
-}
-
-/**
- * Everything §7.4 and §7.3 show of a root, so a test can compare two roots by
- * what a consumer sees rather than by fields no member reads.
- */
-function subjectView(
+function rootOf(
   subject: SubjectClient,
-  root: SubjectRoot,
-  names: SubjectNames
-): Record<string, unknown> {
-  return {
-    title: root.title,
-    description: root.body,
-    status: root.status.name,
-    author: { id: root.createdUser.id, name: root.createdUser.name },
-    assignee:
-      root.assignee === null
-        ? null
-        : { id: root.assignee.id, name: root.assignee.name },
-    labels: subject.subjectLabels(root),
-    url: subject.webUrl(root, names),
-    channelName: subject.channelName(root, names),
-    metadata: subject.threadMetadata(root, names),
-  };
-}
-
-function rootFrom(subject: SubjectClient, raw: BacklogRawMessage): SubjectRoot {
-  const root = subject.rootFrom(raw);
+  fixture: BacklogRawIssue = issue()
+): SubjectRoot {
+  const root = subject.rootFrom(issueRaw(fixture));
   if (root === undefined) {
-    throw new Error('the raw did not describe this subject root');
+    throw new Error('an issue raw did not yield an issue root');
   }
   return root;
 }
 
-/**
- * A pull request's root and a comment, as `message.raw` carries them: neither
- * describes an issue's root, however much of the same thread they are about.
- */
-const PULL_REQUEST_RAW: BacklogRawMessage = {
-  kind: 'pullRequest',
-  host: HOST,
-  changes: [],
-  pullRequest: {
-    id: 90001,
-    projectId: PROJECT_ID,
-    repositoryId: 700,
-    number: 12,
-    summary: 'Retry the login request once',
-    description: 'Retries a failed login once before giving up',
-    base: 'main',
-    branch: 'feature/login-retry',
-    status: { id: 1, name: 'Open' },
-    assignee: { id: ALICE.id, name: ALICE.name },
-    issue: { id: ISSUE_ID, issueKey: 'PROJECT-42' },
-    baseCommit: 'aaa',
-    branchCommit: 'bbb',
-    mergeCommit: null,
-    closeAt: null,
-    mergeAt: null,
-    createdUser: { id: BOB.id, name: BOB.name, userId: BOB.userId },
-    created: '2026-09-01T10:00:00.000Z',
-    updated: '2026-09-02T11:30:00.000Z',
-  },
-};
-
-const COMMENT_RAW: BacklogRawMessage = {
-  kind: 'comment',
-  host: HOST,
-  projectId: PROJECT_ID,
-  subject: REF,
-  changes: [],
-  comment: {
-    id: COMMENT_ID,
-    content: 'a file for you',
-    createdUser: { id: BOB.id, name: BOB.name, userId: BOB.userId },
-    created: '2026-09-02T11:30:00.000Z',
-    updated: '2026-09-02T11:30:00.000Z',
-    changeLog: [],
-    stars: [],
-  },
-};
-
 describe('the issue subject client', () => {
-  it('reads a thread root as the issue summary and description', async () => {
-    const { subject } = clientWith({
-      getIssue: vi.fn().mockResolvedValue(ISSUE),
-    });
+  it('reads a thread root from the issue its id names', async () => {
+    const fixture = issue({ assignee: ALICE });
+    const getIssue = vi.fn().mockResolvedValue(fixture);
+    const subject = subjectOn(stubClient({ getIssue }));
 
     const root = await subject.fetchRoot();
 
-    expect(root).toMatchObject({
+    expect(getIssue).toHaveBeenCalledWith(REST.issueId);
+    expect(root).toEqual({
       ref: REF,
       title: 'Login fails on retry',
       body: 'Steps to reproduce',
-      status: { id: 1, name: 'Open' },
+      status: fixture.status,
       assignee: ALICE,
       createdUser: BOB,
-      source: { kind: 'issue', issue: ISSUE },
+      created: '2026-09-01T10:00:00Z',
+      source: { kind: 'issue', issue: fixture },
     });
-  });
-
-  it('normalises a root into the fields the adapter reads and no others', async () => {
-    const { subject } = clientWith({
-      getIssue: vi.fn().mockResolvedValue(ISSUE),
-    });
-
-    const root = await subject.fetchRoot();
-
-    expect(Object.keys(root).sort()).toEqual([
-      'assignee',
-      'body',
-      'created',
-      'createdUser',
-      'ref',
-      'source',
-      'status',
-      'title',
-      'updated',
-    ]);
   });
 
   it('addresses every comment operation by the issue id', async () => {
-    const listComments = vi.fn().mockResolvedValue([]);
-    const getComment = vi.fn().mockResolvedValue(comment([]));
-    const addComment = vi.fn().mockResolvedValue(comment([]));
-    const updateComment = vi.fn().mockResolvedValue(comment([]));
-    const { subject } = clientWith({
-      listComments,
-      getComment,
-      addComment,
-      updateComment,
-    });
+    const getIssueComments = vi.fn().mockResolvedValue([]);
+    const getIssueComment = vi
+      .fn()
+      .mockResolvedValue(issueComment({ id: COMMENT_ID }));
+    const postIssueComments = vi.fn().mockResolvedValue(issueComment());
+    const patchIssueComment = vi.fn().mockResolvedValue(issueComment());
+    const subject = subjectOn(
+      stubClient({
+        getIssueComments,
+        getIssueComment,
+        postIssueComments,
+        patchIssueComment,
+      })
+    );
 
     await subject.listComments({ count: 20, order: 'desc' });
     await subject.getComment(COMMENT_ID);
@@ -258,153 +97,173 @@ describe('the issue subject client', () => {
     });
     await subject.updateComment(COMMENT_ID, 'edited');
 
-    expect(listComments).toHaveBeenCalledWith(ISSUE_ID, {
+    expect(getIssueComments).toHaveBeenCalledWith(REST.issueId, {
       count: 20,
       order: 'desc',
     });
-    expect(getComment).toHaveBeenCalledWith(ISSUE_ID, COMMENT_ID);
-    expect(addComment).toHaveBeenCalledWith(ISSUE_ID, {
+    expect(getIssueComment).toHaveBeenCalledWith(REST.issueId, COMMENT_ID);
+    expect(postIssueComments).toHaveBeenCalledWith(REST.issueId, {
       content: 'hello',
       attachmentId: [ATTACHMENT_ID],
     });
-    expect(updateComment).toHaveBeenCalledWith(ISSUE_ID, COMMENT_ID, 'edited');
-  });
-
-  it('deletes an issue comment, which Backlog supports', async () => {
-    const deleteComment = vi.fn().mockResolvedValue(comment([]));
-    const { subject } = clientWith({ deleteComment });
-
-    await expect(subject.deleteComment(COMMENT_ID)).resolves.toBeUndefined();
-
-    expect(deleteComment).toHaveBeenCalledWith(ISSUE_ID, COMMENT_ID);
-  });
-
-  it('stars an issue comment as an issue comment', () => {
-    const { subject } = clientWith();
-
-    expect(subject.starTarget(COMMENT_ID)).toEqual({ commentId: COMMENT_ID });
-  });
-
-  it('carries the root into raw data with timestamps a queue can serialise', () => {
-    const { subject } = clientWith();
-
-    expect(subject.rootRaw(rootOf())).toEqual({
-      kind: 'issue',
-      host: HOST,
-      changes: [],
-      issue: {
-        id: ISSUE_ID,
-        issueKey: 'PROJECT-42',
-        projectId: PROJECT_ID,
-        summary: 'Login fails on retry',
-        description: 'Steps to reproduce',
-        status: { id: 1, name: 'Open' },
-        issueType: { id: 1, name: 'Bug' },
-        priority: { id: 3, name: 'Normal' },
-        assignee: { id: ALICE.id, name: ALICE.name },
-        createdUser: { id: BOB.id, name: BOB.name, userId: BOB.userId },
-        created: '2026-09-01T10:00:00.000Z',
-        updated: '2026-09-02T11:30:00.000Z',
-      },
+    expect(patchIssueComment).toHaveBeenCalledWith(REST.issueId, COMMENT_ID, {
+      content: 'edited',
     });
   });
 
-  it('the subject of a serialised issue root is read without a call', () => {
-    const { subject, calls } = clientWith();
+  it('a comment id that belongs to another issue is not found on this one', async () => {
+    const subject = subjectOn(
+      stubClient({
+        getIssueComment: vi
+          .fn()
+          .mockResolvedValue({ ...comment({ id: COMMENT_ID }), issueId: 9999 }),
+      })
+    );
 
-    const root = rootFrom(subject, subject.rootRaw(rootOf()));
-
-    expect(calls).toEqual([]);
-    expect(subject.subjectRaw(root)).toEqual({
-      ...ISSUE,
-      assignee: { ...ALICE, userId: null },
-    });
-  });
-
-  it("a raw belonging to the other kind is not mistaken for this subject's root", () => {
-    const { subject, calls } = clientWith();
-
-    expect(subject.rootFrom(PULL_REQUEST_RAW)).toBeUndefined();
-    expect(subject.rootFrom(COMMENT_RAW)).toBeUndefined();
-    expect(calls).toEqual([]);
-  });
-
-  it('the round trip through a serialised root keeps every field the subject shows', () => {
-    const { subject } = clientWith();
-    const direct = rootOf();
-    const serialised = JSON.parse(
-      JSON.stringify(subject.rootRaw(direct))
-    ) as BacklogRawMessage;
-
-    const root = rootFrom(subject, serialised);
-
-    expect(subjectView(subject, root, {})).toEqual(
-      subjectView(subject, rootOf(), {})
+    await expect(subject.getComment(COMMENT_ID)).rejects.toBeInstanceOf(
+      ResourceNotFoundError
     );
   });
 
-  it('an issue comment attachment takes its id from the changelog rather than a lookup', async () => {
-    const downloadAttachment = vi.fn().mockResolvedValue({
-      filename: 'trace.log',
-      contentType: 'text/plain',
-      data: Buffer.from('trace'),
+  it('deletes an issue comment, which Backlog supports', async () => {
+    const deleteIssueComment = vi.fn().mockResolvedValue(issueComment());
+    const subject = subjectOn(stubClient({ deleteIssueComment }));
+
+    await expect(subject.deleteComment(COMMENT_ID)).resolves.toBeUndefined();
+
+    expect(deleteIssueComment).toHaveBeenCalledWith(REST.issueId, COMMENT_ID);
+  });
+
+  it('stars an issue comment as an issue comment', () => {
+    expect(subjectOn().starTarget(COMMENT_ID)).toEqual({
+      commentId: COMMENT_ID,
     });
-    const { subject, calls } = clientWith({ downloadAttachment });
+  });
+
+  it('carries the issue it read into raw data unchanged', () => {
+    const subject = subjectOn();
+    const fixture = issue();
+
+    expect(subject.rootRaw(rootOf(subject, fixture))).toEqual({
+      kind: 'issue',
+      host: REST.host,
+      issue: fixture,
+      changes: [],
+    });
+  });
+
+  it('the subject of an issue raw is the issue it carries, read without a request', () => {
+    const subject = subjectOn();
+    const fixture = issue();
+
+    expect(subject.subjectRaw(rootOf(subject, fixture))).toBe(fixture);
+  });
+
+  it('a root survives a JSON round trip through its raw', () => {
+    const subject = subjectOn();
+    const root = rootOf(subject);
+    const serialised = JSON.parse(
+      JSON.stringify(subject.rootRaw(root))
+    ) as BacklogRawMessage;
+
+    expect(subject.rootFrom(serialised)).toEqual(root);
+  });
+
+  it("a raw belonging to another kind is not mistaken for this subject's root", () => {
+    const subject = subjectOn();
+
+    expect(
+      subject.rootFrom({
+        kind: 'pullRequest',
+        host: REST.host,
+        pullRequest: pullRequest(),
+        changes: [],
+      })
+    ).toBeUndefined();
+    expect(
+      subject.rootFrom({
+        kind: 'comment',
+        host: REST.host,
+        projectId: REST.projectId,
+        subject: REF,
+        comment: comment(),
+        changes: [],
+      })
+    ).toBeUndefined();
+  });
+
+  it('a pull request root is refused rather than read as an issue', () => {
+    const subject = subjectOn();
+    const root: SubjectRoot = {
+      ...rootOf(subject),
+      source: { kind: 'pullRequest', pullRequest: pullRequest() },
+    };
+
+    expect(() => subject.subjectLabels(root)).toThrow(AdapterError);
+  });
+
+  it('an issue comment attachment takes its id from the changelog rather than a lookup', async () => {
+    const getIssueAttachment = vi.fn().mockResolvedValue(fileData('trace'));
+    const subject = subjectOn(stubClient({ getIssueAttachment }));
 
     const attachments = subject.commentAttachments(
-      comment([
-        {
-          field: 'attachment',
-          newValue: 'trace.log',
-          oldValue: null,
-          attachmentInfo: { id: ATTACHMENT_ID, name: 'trace.log', size: 12 },
-        },
-      ])
+      comment({
+        changeLog: [
+          {
+            field: 'attachment',
+            newValue: 'trace.log',
+            originalValue: null,
+            attachmentInfo: { id: ATTACHMENT_ID },
+          },
+        ],
+      })
     );
 
     expect(attachments).toHaveLength(1);
     expect(attachments[0]).toMatchObject({
       type: 'file',
       name: 'trace.log',
-      url: `https://${HOST}/api/v2/issues/${ISSUE_ID}/attachments/${ATTACHMENT_ID}`,
+      url: `https://${REST.host}/api/v2/issues/${REST.issueId}/attachments/${ATTACHMENT_ID}`,
     });
-    expect(calls).toEqual([]);
+    expect(getIssueAttachment).not.toHaveBeenCalled();
 
     const data = await attachments[0]?.fetchData?.();
 
-    expect(downloadAttachment).toHaveBeenCalledWith(ISSUE_ID, ATTACHMENT_ID);
-    expect(calls).toEqual(['downloadAttachment']);
-    expect(Buffer.from(data as Buffer).toString()).toBe('trace');
+    expect(getIssueAttachment).toHaveBeenCalledWith(
+      REST.issueId,
+      ATTACHMENT_ID
+    );
+    expect(data?.toString()).toBe('trace');
   });
 
   it('an attachment the changelog records as removed is not offered as a file', () => {
-    const { subject } = clientWith();
+    const subject = subjectOn();
 
     expect(
       subject.commentAttachments(
-        comment([
-          {
-            field: 'attachment',
-            newValue: null,
-            oldValue: 'trace.log',
-            attachmentInfo: { id: ATTACHMENT_ID, name: 'trace.log', size: 12 },
-          },
-          {
-            field: 'status',
-            newValue: 'Closed',
-            oldValue: 'Open',
-            attachmentInfo: null,
-          },
-        ])
+        comment({
+          changeLog: [
+            {
+              field: 'attachment',
+              newValue: null,
+              originalValue: 'trace.log',
+              attachmentInfo: { id: ATTACHMENT_ID },
+            },
+            {
+              field: 'status',
+              newValue: 'Closed',
+              originalValue: 'Open',
+              attachmentInfo: null,
+            },
+          ],
+        })
       )
     ).toEqual([]);
   });
 
   it('a webhook attachment on an issue keeps the size the payload carried', () => {
-    const { subject } = clientWith();
-
     expect(
-      subject.webhookAttachment({
+      subjectOn().webhookAttachment({
         id: ATTACHMENT_ID,
         name: 'trace.log',
         size: 12,
@@ -413,54 +272,53 @@ describe('the issue subject client', () => {
       type: 'file',
       name: 'trace.log',
       size: 12,
-      url: `https://${HOST}/api/v2/issues/${ISSUE_ID}/attachments/${ATTACHMENT_ID}`,
+      url: `https://${REST.host}/api/v2/issues/${REST.issueId}/attachments/${ATTACHMENT_ID}`,
     });
   });
 
   it("an issue webhook's changes carry no attachment", () => {
-    const { subject, calls } = clientWith();
-
     expect(
-      subject.webhookChangeAttachment({
+      subjectOn().webhookChangeAttachment({
         field: 'attachment',
         newValue: 'trace.log',
         oldValue: '',
       })
     ).toBeUndefined();
-    expect(calls).toEqual([]);
   });
 
   it('names the channel from the issue key rather than looking the project up', () => {
-    const { subject, calls } = clientWith();
+    const subject = subjectOn();
 
-    expect(subject.channelName(rootOf(), {})).toBe('PROJECT');
-    expect(calls).toEqual([]);
+    expect(subject.channelName(rootOf(subject), {})).toBe('PROJECT');
   });
 
   it('keeps the project key of a key that holds several dashes', () => {
-    const { subject } = clientWith();
+    const subject = subjectOn();
 
     expect(
-      subject.channelName(rootOf({ ...ISSUE, issueKey: 'MY-PROJECT-42' }), {})
+      subject.channelName(
+        rootOf(subject, issue({ issueKey: 'MY-PROJECT-42' })),
+        {}
+      )
     ).toBe('MY-PROJECT');
   });
 
   it('an issue web url needs no name the read did not already fetch', () => {
-    const { subject } = clientWith();
+    const subject = subjectOn();
 
-    expect(subject.webUrl(rootOf(), {})).toBe(
+    expect(subject.webUrl(rootOf(subject), {})).toBe(
       'https://example.backlog.com/view/PROJECT-42'
     );
   });
 
   it('an issue thread carries its ids, key, summary, status and url, under its own kind', () => {
-    const { subject } = clientWith();
+    const subject = subjectOn();
 
-    expect(subject.threadMetadata(rootOf(), {})).toEqual({
+    expect(subject.threadMetadata(rootOf(subject), {})).toEqual({
       kind: 'issue',
-      host: HOST,
-      projectId: PROJECT_ID,
-      issueId: ISSUE_ID,
+      host: REST.host,
+      projectId: REST.projectId,
+      issueId: REST.issueId,
       issueKey: 'PROJECT-42',
       summary: 'Login fails on retry',
       status: { id: 1, name: 'Open' },
@@ -469,15 +327,13 @@ describe('the issue subject client', () => {
   });
 
   it('describes an issue subject by its type and its priority', () => {
-    const { subject } = clientWith();
+    const subject = subjectOn();
 
     expect(subject.subjectType).toBe('issue');
-    expect(subject.subjectLabels(rootOf())).toEqual(['Bug', 'Normal']);
+    expect(subject.subjectLabels(rootOf(subject))).toEqual(['Bug', 'Normal']);
   });
 
   it('an issue thread needs no repository name', () => {
-    const { subject } = clientWith();
-
-    expect(subject.repositoryIdForName).toBeUndefined();
+    expect(subjectOn().repositoryIdForName).toBeUndefined();
   });
 });

@@ -1,170 +1,118 @@
-/**
- * The seam between the adapter's members and the HTTP port (D-PR2). The port
- * stays endpoint-shaped — one method per Backlog endpoint, conformance-tested
- * twice — while a `SubjectClient` presents *one* comment stream regardless of
- * whether the thread is an issue or a pull request, so `src/egress.ts` and
- * `src/reads.ts` have one code path each instead of six
- * `if (kind === "pullRequest")` branches with a different exception behind
- * every one.
- *
- * `subjectClientFor` at the bottom of this file is the only place in `src/`
- * where a subject's kind selects **behaviour**. `src/ids.ts` also reads it, to
- * write `issue:<id>` versus `pr:<repo>:<n>` — that is a codec's whole job and
- * it has no port to route through. No third module asks; that is a convention
- * a reviewer holds, not something a test enforces.
- *
- * This layer imports the port and nothing else from `src/`, which is what
- * keeps `src/reads.ts` free to import it back.
- */
-
 import { createIssueSubjectClient } from './issue';
 import { createPullRequestSubjectClient } from './pull-request';
 
 import type {
-  AddCommentInput,
-  BacklogApi,
-  BacklogComment,
-  BacklogIssue,
-  BacklogPullRequest,
-  BacklogUserRef,
-  ListCommentsOptions,
-  StarTarget,
-} from '../client/port';
-import type {
   BacklogChange,
+  BacklogRawComment,
+  BacklogRawIssue,
   BacklogRawMessage,
+  BacklogRawPullRequest,
   BacklogSubjectRef,
+  BacklogUser,
 } from '../types';
+import type { Backlog, Option } from 'backlog-js';
 import type { Attachment } from 'chat';
 
 /**
- * Display names a subject's web URL needs and its REST object does not carry
- * (docs/specs/adapter.md §7.3). Both are optional because a lookup that fails
- * yields a URL-less `ThreadInfo` rather than a failed read.
+ * Display names a subject's web URL needs and its REST object does not
+ * carry. Both are optional because a lookup that fails yields a URL-less
+ * `ThreadInfo` rather than a failed read.
  */
 export interface SubjectNames {
   projectKey?: string | undefined;
   repositoryName?: string | undefined;
 }
 
-/**
- * A thread's root message, normalised across the two kinds (§3.4). It carries
- * no space-wide `id` and no `projectId`: nothing reads them here — a star
- * takes its target from `starTarget`, `threadMetadata` takes the project from
- * `SubjectContext` and everything else from `source` — and a pull request's
- * global id addresses no endpoint at all (measured 2026-09-06,
- * `.claude/rules/backlog-pull-request-facts.md`).
- */
+/** A thread's root message, the same shape for both kinds. */
 export interface SubjectRoot {
   ref: BacklogSubjectRef;
   title: string;
   body: string;
   status: { id: number; name: string };
-  assignee: BacklogUserRef | null;
-  createdUser: BacklogUserRef;
-  created: Date;
-  updated: Date;
-  /** The port domain object this root was built from. */
+  assignee: BacklogUser | null;
+  createdUser: BacklogUser;
+  created: string;
   source:
-    | { kind: 'issue'; issue: BacklogIssue }
-    | { kind: 'pullRequest'; pullRequest: BacklogPullRequest };
+    | { kind: 'issue'; issue: BacklogRawIssue }
+    | { kind: 'pullRequest'; pullRequest: BacklogRawPullRequest };
 }
 
-/** Everything `subjectClientFor` needs beyond the ref itself. */
 export interface SubjectContext {
   host: string;
   projectId: number;
 }
+
+export type ListCommentsOptions = Option.Issue.GetIssueCommentsParams;
+export type AddCommentInput = Option.Issue.PostIssueCommentsParams;
 
 export interface SubjectClient {
   readonly ref: BacklogSubjectRef;
 
   fetchRoot(): Promise<SubjectRoot>;
   /**
-   * The root this subject's own serialised raw describes, without a call, or
-   * `undefined` when the raw is not this subject's root (§7.4).
-   *
-   * It rebuilds the **port** object `SubjectRoot.source` is typed as, rather
-   * than passing the raw one through, because the members below read fields
-   * off `source` that `SubjectRoot` itself does not have (`issueKey`,
-   * `base`/`branch`). The rebuild is lossy in the three places
-   * `src/subject/raw.ts` names, and all three are cheaper than the
-   * alternative: a Get Issue or Get Pull Request on **every**
-   * `message.subject` access, since the core calls `fetchSubject` lazily and
-   * does not cache it (`.claude/rules/chat-sdk-core-facts.md`), to recover
-   * fields §7.4 never looks at.
+   * The root a raw message already carries, or `undefined` when it carries
+   * none: the core calls `fetchSubject` on every `message.subject` access
+   * without caching it, so a root in hand spares a read each time.
    */
   rootFrom(raw: BacklogRawMessage): SubjectRoot | undefined;
-  listComments(options: ListCommentsOptions): Promise<BacklogComment[]>;
-  getComment(commentId: number): Promise<BacklogComment>;
-  addComment(input: AddCommentInput): Promise<BacklogComment>;
-  updateComment(commentId: number, content: string): Promise<BacklogComment>;
+  listComments(options: ListCommentsOptions): Promise<BacklogRawComment[]>;
+  getComment(commentId: number): Promise<BacklogRawComment>;
+  addComment(input: AddCommentInput): Promise<BacklogRawComment>;
+  updateComment(commentId: number, content: string): Promise<BacklogRawComment>;
   deleteComment(commentId: number): Promise<void>;
+  /**
+   * Issue and pull-request comment ids come from different sequences and may
+   * overlap (measured), so a star aimed at the wrong field would land on
+   * somebody else's comment.
+   */
+  starTarget(commentId: number): Option.Project.PostStarParams;
 
-  /** `POST /stars`: `commentId` or `pullRequestCommentId` (§6.5). */
-  starTarget(commentId: number): StarTarget;
-
-  /** The `BacklogRawMessage` variant for this subject's root (§3.5). */
   rootRaw(root: SubjectRoot): BacklogRawMessage;
-  /** Attachments a REST comment carries, resolved the way this kind allows (§6.6). */
-  commentAttachments(comment: BacklogComment): Attachment[];
-  /** One `content.attachments[]` entry from a webhook body (§5.3). */
+  commentAttachments(comment: BacklogRawComment): Attachment[];
   webhookAttachment(attachment: {
     id: number;
     name: string;
     size?: number | undefined;
   }): Attachment;
   /**
-   * The file a webhook `changes[]` entry names, for a kind whose payload
-   * names one there at all, or `undefined` for a kind whose payload never
-   * does (§6.6). The caller has already established that the entry is an
-   * attachment being added; what is left is per kind, because the two
-   * payloads carry different evidence — a pull request's names the file and
-   * nothing else, an issue's carries no such entry.
+   * The file a webhook `changes[]` entry the caller has already recognised as
+   * an attachment add names, or `undefined` for a kind whose payload never
+   * names one there.
    */
   webhookChangeAttachment(change: BacklogChange): Attachment | undefined;
 
-  /** `ThreadInfo.channelName` (§7.3). */
   channelName(root: SubjectRoot, names: SubjectNames): string | undefined;
-  /**
-   * The ids, the title, the status and the web URL. The whole object is not
-   * repeated here: `MessageSubject.raw` already carries it.
-   */
   threadMetadata(
     root: SubjectRoot,
     names: SubjectNames
   ): Record<string, unknown>;
-  /** `MessageSubject.type` (§7.4, D-PR8): `"issue"` or `"pull_request"`. */
+  /** `"issue"` or `"pull_request"` (D-PR8). */
   readonly subjectType: string;
-  /** The port domain object §7.4 puts on `MessageSubject.raw`: the issue, or the pull request. */
   subjectRaw(root: SubjectRoot): unknown;
-  /** `MessageSubject.labels` (§7.4). */
   subjectLabels(root: SubjectRoot): string[];
-  /** The web URL, or `undefined` when a display name could not be resolved. */
   webUrl(root: SubjectRoot, names: SubjectNames): string | undefined;
   /**
    * The repository whose display name `webUrl` needs, or `undefined` for a
-   * kind whose URL needs none. It exists so the adapter can fill
-   * `SubjectNames` without asking what kind it is holding (§7.3, §3.8).
+   * kind whose URL needs none, so the adapter can fill `SubjectNames`
+   * without asking what kind it is holding.
    */
   readonly repositoryIdForName: number | undefined;
 }
 
 /**
- * The one place a subject's kind selects behaviour (D-PR2). Every member of
- * the adapter reaches Backlog as
- * `decode -> subjectClientFor -> the same code for both kinds`, so a fix to
- * egress or reads lands once rather than twice.
+ * The one place a subject's kind selects behaviour (D-PR2): every member of
+ * the adapter reaches Backlog as `decode -> subjectClientFor -> the same code
+ * for both kinds`.
  */
 export function subjectClientFor(
-  api: BacklogApi,
+  client: Backlog,
   ref: BacklogSubjectRef,
   context: SubjectContext
 ): SubjectClient {
   switch (ref.kind) {
     case 'issue':
-      return createIssueSubjectClient(api, ref, context);
+      return createIssueSubjectClient(client, ref, context);
     case 'pullRequest':
-      return createPullRequestSubjectClient(api, ref, context);
+      return createPullRequestSubjectClient(client, ref, context);
   }
 }

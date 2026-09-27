@@ -135,24 +135,24 @@ describe('parseConfig', () => {
 
   it('ignores an access token left in the environment beside an explicit apiKey', async () => {
     setEnv({ BACKLOG_ACCESS_TOKEN: 'stale-oauth-token' });
-    const { credentials } = parseConfig(valid);
-    expect(credentials.accessToken).toBeUndefined();
-    expect(await credentials.apiKey?.()).toBe('test-api-key');
+    const { credential } = parseConfig(valid);
+    expect(credential.header).toBe('Backlog-API-Key');
+    expect(await credential.resolve()).toBe('test-api-key');
   });
 
   it('ignores an api key left in the environment beside an explicit accessToken', async () => {
     setEnv({ BACKLOG_API_KEY: 'stale-api-key' });
-    const { credentials } = parseConfig({
+    const { credential } = parseConfig({
       ...without('apiKey'),
       accessToken: 'test-access-token',
     });
-    expect(credentials.apiKey).toBeUndefined();
-    expect(await credentials.accessToken?.()).toBe('test-access-token');
+    expect(credential.header).toBe('Authorization');
+    expect(await credential.resolve()).toBe('Bearer test-access-token');
   });
 
   it('calls a credential resolver on every use and never at parse time', async () => {
     let calls = 0;
-    const { credentials } = parseConfig({
+    const { credential } = parseConfig({
       ...valid,
       apiKey: () => {
         calls += 1;
@@ -161,8 +161,8 @@ describe('parseConfig', () => {
     });
 
     expect(calls).toBe(0);
-    expect(await credentials.apiKey?.()).toBe('token-1');
-    expect(await credentials.apiKey?.()).toBe('token-2');
+    expect(await credential.resolve()).toBe('token-1');
+    expect(await credential.resolve()).toBe('token-2');
   });
 
   it('requires a webhookSecret when no webhookVerifier is set', () => {

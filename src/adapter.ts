@@ -6,11 +6,11 @@ import {
 } from '@chat-adapter/shared';
 import { ConsoleLogger, Message as MessageCtor } from 'chat';
 
-import { createBacklogJsTransport } from './client/backlog-js';
+import { createBacklogClient } from './client/backlog';
 import { parseConfig } from './config';
 import type { SpaceConfig } from './config';
-import type { Backlog } from 'backlog-js';
-import type { BacklogApi, TextFormattingRule } from './client/port';
+import { readGitRepository, readProject, readUser } from './client/responses';
+import type { Backlog, Types } from 'backlog-js';
 import {
   addReaction as addReactionToComment,
   bufferStream,
@@ -86,24 +86,13 @@ import type {
   WebhookOptions,
 } from 'chat';
 
-/**
- * What the space's traffic goes through. `client` is absent exactly when a
- * test replaced the port with one that is not `backlog-js`-backed, because
- * there is then no client to hand out and inventing one would talk to the
- * network.
- */
-interface AdapterTransport {
-  api: BacklogApi;
-  client?: Backlog;
-}
-
 /** The name is absent when only the id was configured (see `initialize`). */
 interface BotIdentity {
   id: number;
   name: string | undefined;
 }
 
-const CONVERTERS: Record<TextFormattingRule, BaseFormatConverter> = {
+const CONVERTERS: Record<Types.TextFormattingRule, BaseFormatConverter> = {
   markdown: new BacklogMarkdownConverter(),
   backlog: new BacklogNotationConverter(),
 };
@@ -196,13 +185,7 @@ export class BacklogAdapter implements Adapter<
    * asks again (D23).
    */
   private identity: BotIdentity | undefined;
-  /**
-   * Not `readonly`: `src/adapter.test.ts` replaces it after construction to
-   * run the adapter on another port. There is no config field for that,
-   * because a config field would be a published promise.
-   */
-  private createTransport: () => AdapterTransport;
-  private cachedTransport: AdapterTransport | undefined;
+  private readonly backlog: Backlog;
   /**
    * Keyed by channel id and cached for the process's lifetime (D14). The
    * project key rides along because a pull request's web URL needs it and
@@ -210,7 +193,7 @@ export class BacklogAdapter implements Adapter<
    */
   private readonly projectCache = new Map<
     string,
-    { projectKey: string; textFormattingRule: TextFormattingRule }
+    { projectKey: string; textFormattingRule: Types.TextFormattingRule }
   >();
   /** The other half of a pull request's web URL; also filled for free by every pull-request webhook. */
   private readonly repositoryNameCache = new Map<string, string>();
@@ -227,13 +210,12 @@ export class BacklogAdapter implements Adapter<
     this.logger =
       this.space.logger ?? new ConsoleLogger('info').child('backlog');
     // The logger is read per request rather than captured: `initialize`
-    // swaps in the `ChatInstance`'s after the transport may have been built.
-    this.createTransport = () =>
-      createBacklogJsTransport({
-        host: this.space.host,
-        credentials: this.space.credentials,
-        logger: () => this.logger,
-      });
+    // swaps in the `ChatInstance`'s after the client has been built.
+    this.backlog = createBacklogClient({
+      host: this.space.host,
+      credential: this.space.credential,
+      logger: () => this.logger,
+    });
   }
 
   /** `""` when the name is unknown: the core then falls back to `chat.userName`. */
@@ -270,7 +252,7 @@ export class BacklogAdapter implements Adapter<
     if (this.identity !== undefined) {
       return this.identity;
     }
-    const myself = await this.api(this.space.host).getMyself();
+    const myself = await readUser(this.backlog.getMyself());
     this.identity = {
       id: myself.id,
       name: this.space.botUserName ?? myself.name,
@@ -320,40 +302,23 @@ export class BacklogAdapter implements Adapter<
    * configured one is refused here, at the point of use, rather than by the
    * decoder.
    */
-  private api(host: string): BacklogApi {
+  private clientFor(host: string): Backlog {
     if (host !== this.space.host) {
       throw new ResourceNotFoundError('backlog', 'space', host);
     }
-    return this.transport().api;
+    return this.backlog;
   }
 
   /**
    * The `backlog-js` client this adapter's own traffic goes through, for the
-   * Backlog endpoints the port does not name — changing an assignee, reading
-   * an issue's custom fields, anything else a bot needs and the adapter does
-   * not.
-   *
-   * It is handed out rather than left to the caller to construct because a
-   * second client would have none of what this one carries: its bounded 429
-   * retry, its `@chat-adapter/shared` error mapping and its per-call
-   * credential resolution. It holds no credential of its own, so it is safe
-   * to keep past the call that asked for it.
+   * endpoints the adapter does not cover. A second client built beside it
+   * would have none of what this one carries: the bounded 429 retry, the
+   * `@chat-adapter/shared` errors and the per-call credential. It holds no
+   * credential of its own, so it is safe to keep past the call that asked for
+   * it.
    */
   client(): Backlog {
-    const { client } = this.transport();
-    if (client === undefined) {
-      throw new AdapterError(
-        'no Backlog client: this adapter runs on a port that is not `backlog-js`-backed',
-        'backlog',
-        'NO_CLIENT'
-      );
-    }
-    return client;
-  }
-
-  private transport(): AdapterTransport {
-    this.cachedTransport ??= this.createTransport();
-    return this.cachedTransport;
+    return this.backlog;
   }
 
   /**
@@ -370,7 +335,7 @@ export class BacklogAdapter implements Adapter<
   }
 
   /** A cold cache is a `warn` and Markdown, never a failure. */
-  private ruleFor(host: string, projectId: number): TextFormattingRule {
+  private ruleFor(host: string, projectId: number): Types.TextFormattingRule {
     const rule = this.projectCache.get(
       encodeChannelId({ host, projectId })
     )?.textFormattingRule;
@@ -394,7 +359,9 @@ export class BacklogAdapter implements Adapter<
       return;
     }
     try {
-      const project = await this.api(host).getProject(projectId);
+      const project = await readProject(
+        this.clientFor(host).getProject(projectId)
+      );
       this.projectCache.set(channelId, {
         projectKey: project.projectKey,
         textFormattingRule: project.textFormattingRule,
@@ -428,7 +395,7 @@ export class BacklogAdapter implements Adapter<
     projectId: number,
     subject: BacklogSubjectRef
   ): SubjectClient {
-    return subjectClientFor(this.api(host), subject, { host, projectId });
+    return subjectClientFor(this.clientFor(host), subject, { host, projectId });
   }
 
   /**
@@ -517,9 +484,8 @@ export class BacklogAdapter implements Adapter<
       return cached;
     }
     try {
-      const repository = await this.api(host).getGitRepository(
-        projectId,
-        repositoryId
+      const repository = await readGitRepository(
+        this.clientFor(host).getGitRepository(projectId, String(repositoryId))
       );
       this.repositoryNameCache.set(key, repository.name);
       return repository.name;
@@ -777,7 +743,7 @@ export class BacklogAdapter implements Adapter<
       host,
       projectId,
       subject,
-      api: this.api(host),
+      client: this.clientFor(host),
       converter,
       message,
       toBuffer: this.toFileBuffer,
@@ -855,7 +821,7 @@ export class BacklogAdapter implements Adapter<
       'starred'
     );
     await addReactionToComment({
-      api: this.api(host),
+      client: this.clientFor(host),
       subject: this.subjectClient(host, projectId, subject),
       commentId,
       botUserId: (await this.botIdentity()).id,
@@ -873,7 +839,7 @@ export class BacklogAdapter implements Adapter<
       'starred'
     );
     await removeReactionFromComment({
-      api: this.api(host),
+      client: this.clientFor(host),
       subject: this.subjectClient(host, projectId, subject),
       commentId,
       botUserId: (await this.botIdentity()).id,
@@ -924,20 +890,6 @@ export class BacklogAdapter implements Adapter<
     });
   }
 
-  /**
-   * `listThreads` (docs/specs/adapter.md §7.6): the port call and result
-   * shaping live in `src/reads.ts`; this method only decodes the channel id
-   * and supplies the host-scoped port and builders, matching every other
-   * read member above.
-   *
-   * Issues only, and no companion member lists pull requests (D-PR7): a
-   * pull-request list is keyed by repository, a coordinate no channel id
-   * carries. A caller that has the repository reaches its pull requests
-   * through `client().getPullRequests(projectIdOrKey, repoIdOrName,
-   * …)`, which spends the **read** bucket rather than the
-   * `search` bucket Get Issue List below draws on (measured 2026-09-06,
-   * `.claude/rules/backlog-pull-request-facts.md` "Rate limit").
-   */
   async listThreads(
     channelId: string,
     options?: ListThreadsOptions
@@ -947,7 +899,7 @@ export class BacklogAdapter implements Adapter<
     return listThreadsRead({
       channelId,
       options,
-      api: this.api(host),
+      client: this.clientFor(host),
       builders: this.messageBuilders(host, converter, await this.botIdentity()),
       // Every thread this lists is an issue: a pull-request list is per
       // repository, a coordinate a channel id does not carry (D-PR7), so the
@@ -967,7 +919,7 @@ export class BacklogAdapter implements Adapter<
     const { host } = decodeUserIdString(userId);
     return getUserRead({
       userId,
-      api: this.api(host),
+      client: this.clientFor(host),
       botUserId: (await this.botIdentity()).id,
     });
   }
@@ -994,7 +946,7 @@ export class BacklogAdapter implements Adapter<
 
   async fetchChannelInfo(channelId: string): Promise<ChannelInfo> {
     const { host } = decodeChannelId(channelId);
-    return fetchChannelInfoRead({ channelId, api: this.api(host) });
+    return fetchChannelInfoRead({ channelId, client: this.clientFor(host) });
   }
 
   /**
@@ -1005,7 +957,7 @@ export class BacklogAdapter implements Adapter<
     return rehydrateAttachmentRead({
       attachment,
       host: this.space.host,
-      api: () => this.api(this.space.host),
+      client: () => this.backlog,
     });
   }
 }

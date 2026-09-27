@@ -9,7 +9,17 @@ import {
 
 import { rateLimitError } from './rate-limit.js';
 
-import type { BacklogApiErrorDetail } from './port.js';
+/**
+ * The shape carried on `error.cause` for every mapped error. `url` never
+ * carries a query string.
+ */
+export interface BacklogApiErrorDetail {
+  status?: number;
+  code?: number;
+  message: string;
+  moreInfo?: string;
+  url?: string;
+}
 
 /** One entry of a Backlog error body, per https://developer.nulab.com/docs/backlog/error-response/. */
 export interface BacklogErrorBodyEntry {
@@ -26,32 +36,16 @@ export interface MapBacklogErrorInput {
   url?: string;
   /** Seconds to report on a rate-limit error that gives up without retrying. */
   retryAfterSeconds?: number;
-  /** Names the resource a 404 (code 6 or status 404) is reported against. */
-  resourceType?: string;
-  resourceId?: string;
 }
 
 /**
- * Maps a Backlog API failure to a `@chat-adapter/shared` error class.
- * Precedence is `errors[0].code`, then HTTP status, then transport
- * (docs/specs/adapter.md §8.5) — the code is more specific than the status
- * because Backlog reuses one HTTP status for several codes (e.g. 400 covers
- * both InvalidRequestError and NoResourceError).
- *
- * `error.cause` is set to a plain `BacklogApiErrorDetail` on every mapped
- * error instead of the `backlog-js` error instance, so nothing
- * `backlog-js`-shaped or secret-bearing (the request carries credentials)
- * escapes the port.
+ * `errors[0].code` wins over the HTTP status because Backlog reuses one
+ * status for several codes (400 covers both InvalidRequestError and
+ * NoResourceError). `cause` is a plain object rather than the request or a
+ * `backlog-js` error, either of which could carry the credential.
  */
 export function mapBacklogError(input: MapBacklogErrorInput): AdapterError {
-  const {
-    status,
-    bodyError,
-    url,
-    retryAfterSeconds,
-    resourceType,
-    resourceId,
-  } = input;
+  const { status, bodyError, url, retryAfterSeconds } = input;
   const message =
     bodyError?.message ??
     `Backlog API request failed${status === undefined ? '' : ` with status ${status}`}`;
@@ -68,25 +62,18 @@ export function mapBacklogError(input: MapBacklogErrorInput): AdapterError {
     bodyError?.code,
     status,
     message,
-    retryAfterSeconds,
-    resourceType,
-    resourceId
+    retryAfterSeconds
   );
   error.cause = detail;
   return withBacklogMessage(error, bodyError?.message);
 }
 
 /**
- * Appends what Backlog said to an error whose class composed its own message.
- *
- * Two of the classes take no message at all —
- * `ResourceNotFoundError(adapter, resourceType, resourceId?)` and
- * `AdapterRateLimitError(adapter, retryAfterSeconds?)` — so a code 6's "No
- * such issue" reached the caller only on `cause`, invisible to every log line
- * and test assertion that prints the error. Appending rather than replacing
- * keeps the class's own wording, which is what a caller matching on it reads,
- * and the containment check leaves the classes that were already constructed
- * with the message untouched.
+ * `ResourceNotFoundError` and `AdapterRateLimitError` take no message, so
+ * without this a code 6's "No such issue" would reach the caller only on
+ * `cause`, invisible to every log line that prints the error. Appending
+ * rather than replacing keeps the class's own wording, which is what a caller
+ * matching on it reads.
  */
 function withBacklogMessage<E extends AdapterError>(
   error: E,
@@ -103,9 +90,7 @@ function mapByCodeOrStatus(
   code: number | undefined,
   status: number | undefined,
   message: string,
-  retryAfterSeconds: number | undefined,
-  resourceType: string | undefined,
-  resourceId: string | undefined
+  retryAfterSeconds: number | undefined
 ): AdapterError {
   switch (code) {
     case 11:
@@ -114,11 +99,7 @@ function mapByCodeOrStatus(
     case 5:
       return new PermissionError('backlog', message);
     case 6:
-      return new ResourceNotFoundError(
-        'backlog',
-        resourceType ?? 'resource',
-        resourceId
-      );
+      return new ResourceNotFoundError('backlog', 'resource');
     case 7:
       return new ValidationError('backlog', message);
     case 10:
@@ -133,22 +114,14 @@ function mapByCodeOrStatus(
     case 12:
       return new AdapterError(message, 'backlog', String(code));
     default:
-      return mapByStatus(
-        status,
-        message,
-        retryAfterSeconds,
-        resourceType,
-        resourceId
-      );
+      return mapByStatus(status, message, retryAfterSeconds);
   }
 }
 
 function mapByStatus(
   status: number | undefined,
   message: string,
-  retryAfterSeconds: number | undefined,
-  resourceType: string | undefined,
-  resourceId: string | undefined
+  retryAfterSeconds: number | undefined
 ): AdapterError {
   switch (status) {
     case 401:
@@ -156,11 +129,7 @@ function mapByStatus(
     case 403:
       return new PermissionError('backlog', message);
     case 404:
-      return new ResourceNotFoundError(
-        'backlog',
-        resourceType ?? 'resource',
-        resourceId
-      );
+      return new ResourceNotFoundError('backlog', 'resource');
     case 400:
       return new ValidationError('backlog', message);
     case 429:
@@ -185,11 +154,9 @@ export function mapTransportError(cause: unknown): NetworkError {
 }
 
 /**
- * Maps a credential the resolver did not produce usably
- * (docs/specs/adapter.md §8.5): the resolver rejected, or it returned a value
- * `backlog-js` refuses at construction. Both are `AuthenticationError` rather
- * than `NetworkError`, because neither is a request that failed — no request
- * was made — and neither becomes true on a retry.
+ * A resolver that rejected, or resolved a value the header refuses (CR/LF),
+ * is an `AuthenticationError` rather than a `NetworkError`: no request was
+ * made, and a retry would not make one succeed.
  */
 export function mapCredentialResolverError(
   cause: unknown
@@ -198,20 +165,7 @@ export function mapCredentialResolverError(
   return new AuthenticationError('backlog', message);
 }
 
-/**
- * Maps a response body that failed zod validation. Never a `ZodError`
- * (docs/specs/adapter.md §8.1, §8.5): a schema mismatch names the endpoint
- * and the failing path so a caller can act on it without importing zod.
- */
-export function mapSchemaError(endpoint: string, issues: string): AdapterError {
-  return new AdapterError(
-    `Backlog response for ${endpoint} failed schema validation: ${issues}`,
-    'backlog',
-    'SCHEMA'
-  );
-}
-
-/** Strips the query string from a URL, per docs/specs/adapter.md §8.5 (never leak a secret in `apiKey=`). */
+/** A query string can carry `apiKey=`, so it never reaches an error. */
 export function stripQueryString(url: string): string {
   const queryIndex = url.indexOf('?');
   return queryIndex === -1 ? url : url.slice(0, queryIndex);

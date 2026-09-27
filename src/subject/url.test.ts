@@ -1,27 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { REST, fileData, stubClient } from '../test/fixtures/rest';
 import {
   issueAttachmentUrl,
   parseAttachmentPath,
   pullRequestAttachmentUrl,
 } from './url';
 
-import type { BacklogApi } from '../client/port';
 import type { AttachmentDownload } from './url';
 
-const HOST = 'example.backlog.com';
-const PROJECT_ID = 500;
-const ISSUE_ID = 8001;
-const REPOSITORY_ID = 700;
-const PULL_REQUEST_NUMBER = 12;
 const ATTACHMENT_ID = 4242;
 
-function pathOf(url: string): string {
-  return new URL(url).pathname;
-}
-
 function downloadOf(url: string): AttachmentDownload {
-  const download = parseAttachmentPath(pathOf(url));
+  const download = parseAttachmentPath(new URL(url).pathname);
   if (download === null) {
     throw new Error(`expected ${url} to parse as an attachment path`);
   }
@@ -30,7 +21,7 @@ function downloadOf(url: string): AttachmentDownload {
 
 describe('attachment urls', () => {
   it('addresses an issue attachment by the issue id alone', () => {
-    expect(issueAttachmentUrl(HOST, ISSUE_ID, ATTACHMENT_ID)).toBe(
+    expect(issueAttachmentUrl(REST.host, REST.issueId, ATTACHMENT_ID)).toBe(
       'https://example.backlog.com/api/v2/issues/8001/attachments/4242'
     );
   });
@@ -38,10 +29,10 @@ describe('attachment urls', () => {
   it('addresses a pull request attachment by project, repository and number', () => {
     expect(
       pullRequestAttachmentUrl(
-        HOST,
-        PROJECT_ID,
-        REPOSITORY_ID,
-        PULL_REQUEST_NUMBER,
+        REST.host,
+        REST.projectId,
+        REST.repositoryId,
+        REST.pullRequestNumber,
         ATTACHMENT_ID
       )
     ).toBe(
@@ -64,49 +55,40 @@ describe('attachment urls', () => {
   });
 
   it('an issue attachment url downloads through the issue endpoint', async () => {
-    const downloadAttachment = vi.fn().mockResolvedValue({
-      filename: 'notes.txt',
-      contentType: 'text/plain',
-      data: Buffer.from('issue'),
-    });
+    const getIssueAttachment = vi.fn().mockResolvedValue(fileData('issue'));
     const download = downloadOf(
-      issueAttachmentUrl(HOST, ISSUE_ID, ATTACHMENT_ID)
+      issueAttachmentUrl(REST.host, REST.issueId, ATTACHMENT_ID)
     );
 
-    const data = await download({
-      downloadAttachment,
-    } as unknown as BacklogApi);
+    const data = await download(stubClient({ getIssueAttachment }));
 
-    expect(downloadAttachment).toHaveBeenCalledWith(ISSUE_ID, ATTACHMENT_ID);
+    expect(getIssueAttachment).toHaveBeenCalledWith(
+      REST.issueId,
+      ATTACHMENT_ID
+    );
     expect(data.toString()).toBe('issue');
   });
 
   it('a pull request attachment url downloads through the pull request endpoint', async () => {
-    const downloadPullRequestAttachment = vi.fn().mockResolvedValue({
-      filename: 'diff.patch',
-      contentType: 'text/plain',
-      data: Buffer.from('pull request'),
-    });
+    const getPullRequestAttachment = vi
+      .fn()
+      .mockResolvedValue(fileData('pull request'));
     const download = downloadOf(
       pullRequestAttachmentUrl(
-        HOST,
-        PROJECT_ID,
-        REPOSITORY_ID,
-        PULL_REQUEST_NUMBER,
+        REST.host,
+        REST.projectId,
+        REST.repositoryId,
+        REST.pullRequestNumber,
         ATTACHMENT_ID
       )
     );
 
-    const data = await download({
-      downloadPullRequestAttachment,
-    } as unknown as BacklogApi);
+    const data = await download(stubClient({ getPullRequestAttachment }));
 
-    expect(downloadPullRequestAttachment).toHaveBeenCalledWith(
-      {
-        projectId: PROJECT_ID,
-        repositoryId: REPOSITORY_ID,
-        number: PULL_REQUEST_NUMBER,
-      },
+    expect(getPullRequestAttachment).toHaveBeenCalledWith(
+      REST.projectId,
+      String(REST.repositoryId),
+      REST.pullRequestNumber,
       ATTACHMENT_ID
     );
     expect(data.toString()).toBe('pull request');

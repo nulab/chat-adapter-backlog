@@ -7,11 +7,11 @@
  * a handler asking which part a message is, or its author's numeric id, has
  * nothing else to ask.
  *
- * `backlog-js` reaches the published types through `client()`, on
- * purpose: handing out the client the adapter speaks through keeps a
- * consumer's extra calls inside the adapter's rate-limit accounting, retry
- * and error mapping, where a second client would spend the same per-user
- * budget uncounted. The cost is that a `backlog-js` major is a major here.
+ * `backlog-js` reaches the published types through `client()` and the
+ * raw shapes, on purpose: handing out the client the adapter speaks through
+ * keeps a consumer's extra calls inside its retry and error mapping, and the
+ * raw shapes are `backlog-js`'s entities with the measured deviations laid
+ * over them. The cost is that a `backlog-js` major is a major here.
  */
 
 export { BacklogAdapter, createBacklogAdapter } from './adapter';
@@ -20,6 +20,7 @@ export { decodeMessageId, decodeUserId } from './ids';
 export type {
   BacklogAdapterConfig,
   BacklogChange,
+  BacklogChangeLog,
   BacklogMessageId,
   BacklogMessagePart,
   BacklogPostableExtras,
@@ -27,8 +28,10 @@ export type {
   BacklogRawIssue,
   BacklogRawMessage,
   BacklogRawPullRequest,
+  BacklogStar,
   BacklogSubjectRef,
   BacklogThreadId,
+  BacklogUser,
   BacklogUserId,
   BacklogWebhookPayload,
   BacklogWebhookVerifier,

@@ -1,37 +1,31 @@
-/**
- * The pull-request half of the subject layer (D-PR2). Every difference from an
- * issue is a measured Backlog fact, not a design choice: three-coordinate
- * addressing, no Get Pull Request Comment, no Delete Pull Request Comment, and
- * comment attachments that carry a name but no id
- * (`.claude/rules/backlog-pull-request-facts.md`, measured 2026-09-06).
- */
-
 import { AdapterError, ResourceNotFoundError } from '@chat-adapter/shared';
 
-import { fromRawPullRequest, toRawPullRequest } from './raw';
+import {
+  download,
+  readPullRequest,
+  readPullRequestAttachments,
+  readPullRequestComment,
+  readPullRequestComments,
+} from '../client/responses';
 import { pullRequestAttachmentUrl } from './url';
 
-import type {
-  AddCommentInput,
-  BacklogApi,
-  BacklogComment,
-  BacklogPullRequest,
-  BacklogPullRequestAttachment,
-  ListCommentsOptions,
-  PullRequestRef,
-  StarTarget,
-} from '../client/port';
+import type { PullRequestAttachment } from '../client/responses';
 import type {
   BacklogChange,
+  BacklogRawComment,
   BacklogRawMessage,
+  BacklogRawPullRequest,
   BacklogSubjectRef,
 } from '../types';
 import type {
+  AddCommentInput,
+  ListCommentsOptions,
   SubjectClient,
   SubjectContext,
   SubjectNames,
   SubjectRoot,
 } from './client';
+import type { Backlog, Option } from 'backlog-js';
 import type { Attachment } from 'chat';
 
 type PullRequestSubjectRef = Extract<
@@ -39,8 +33,8 @@ type PullRequestSubjectRef = Extract<
   { kind: 'pullRequest' }
 >;
 
-/** See `issueOf` in `./issue.ts`: the mismatched arm is unreachable through `subjectClientFor`. */
-function pullRequestOf(root: SubjectRoot): BacklogPullRequest {
+/** See `issueOf` in `./issue.ts`. */
+function pullRequestOf(root: SubjectRoot): BacklogRawPullRequest {
   if (root.source.kind !== 'pullRequest') {
     throw new AdapterError(
       'an issue root was passed to the pull request subject client',
@@ -52,26 +46,26 @@ function pullRequestOf(root: SubjectRoot): BacklogPullRequest {
 }
 
 /**
- * The attachment a `changeLog` name resolves to: the **newest** entry
- * carrying that name (D-PR10). Names are not unique on a pull request and the
- * list is the only id source, so "newest wins" is the only rule that picks the
- * file the comment being read actually added; ties fall back to the larger id,
- * which is the later upload.
+ * Names are not unique on a pull request and the list is the only id
+ * source, so the newest entry carrying the name is the one the comment being
+ * read added; a tie goes to the larger id, the later upload (D-PR10).
  */
 function newestNamed(
-  attachments: readonly BacklogPullRequestAttachment[],
+  attachments: readonly PullRequestAttachment[],
   name: string
-): BacklogPullRequestAttachment | undefined {
-  let newest: BacklogPullRequestAttachment | undefined;
+): PullRequestAttachment | undefined {
+  let newest: PullRequestAttachment | undefined;
   for (const attachment of attachments) {
     if (attachment.name !== name) {
       continue;
     }
+    const created = Date.parse(attachment.created);
+    const newestCreated =
+      newest === undefined ? -Infinity : Date.parse(newest.created);
     if (
       newest === undefined ||
-      attachment.created.getTime() > newest.created.getTime() ||
-      (attachment.created.getTime() === newest.created.getTime() &&
-        attachment.id > newest.id)
+      created > newestCreated ||
+      (created === newestCreated && attachment.id > newest.id)
     ) {
       newest = attachment;
     }
@@ -80,27 +74,29 @@ function newestNamed(
 }
 
 export function createPullRequestSubjectClient(
-  api: BacklogApi,
+  client: Backlog,
   ref: PullRequestSubjectRef,
   context: SubjectContext
 ): SubjectClient {
-  const { host } = context;
-  const pullRequestRef: PullRequestRef = {
-    projectId: context.projectId,
-    repositoryId: ref.repositoryId,
-    number: ref.number,
-  };
+  const { host, projectId } = context;
+  const repositoryId = String(ref.repositoryId);
+  const { number } = ref;
 
-  async function downloadAttachment(attachmentId: number): Promise<Buffer> {
-    const file = await api.downloadPullRequestAttachment(
-      pullRequestRef,
-      attachmentId
+  function downloadAttachment(attachmentId: number): Promise<Buffer> {
+    return download(
+      client.getPullRequestAttachment(
+        projectId,
+        repositoryId,
+        number,
+        attachmentId
+      )
     );
-    return file.data;
   }
 
   async function downloadNamed(name: string): Promise<Buffer> {
-    const attachments = await api.listPullRequestAttachments(pullRequestRef);
+    const attachments = await readPullRequestAttachments(
+      client.getPullRequestAttachments(projectId, repositoryId, number)
+    );
     const attachment = newestNamed(attachments, name);
     if (attachment === undefined) {
       throw new ResourceNotFoundError('backlog', 'pullRequestAttachment', name);
@@ -109,38 +105,26 @@ export function createPullRequestSubjectClient(
   }
 
   /**
-   * The `Attachment` a file **name** stands for, which is all a pull request
-   * ever carries: neither a comment's `changeLog` nor a type-20 activity's
-   * `changes[]` holds an id (measured 2026-09-06), so there is no `url` to
-   * build here and the list call that could find one is deferred into
-   * `fetchData` — eager resolution would spend a read per comment on every
-   * page of `fetchMessages`, and a name matching nothing is a failure only
-   * the reader of that file should see (D-PR10).
+   * Neither a comment's `changeLog` nor a type-20 delivery's `changes[]`
+   * holds an attachment id (measured), so there is no `url` to build, and
+   * the list call that could find one waits in `fetchData`: resolving it
+   * eagerly would spend a read per comment on every page of
+   * `fetchMessages` (D-PR10).
    */
   function namedAttachment(name: string): Attachment {
-    return {
-      type: 'file',
-      name,
-      fetchData: () => downloadNamed(name),
-    };
+    return { type: 'file', name, fetchData: () => downloadNamed(name) };
   }
 
-  /**
-   * `https://<host>/git/<projectKey>/<repositoryName>/pullRequests/<number>`,
-   * the form a star's `url` carries (measured 2026-09-06). Both names come
-   * from outside: the pull request object carries neither, and a lookup that
-   * failed leaves the thread without a URL rather than failing the read
-   * (docs/specs/adapter.md §7.3).
-   */
+  /** The form a star's `url` carries (measured). */
   function webUrl(names: SubjectNames): string | undefined {
     const { projectKey, repositoryName } = names;
     if (projectKey === undefined || repositoryName === undefined) {
       return undefined;
     }
-    return `https://${host}/git/${projectKey}/${repositoryName}/pullRequests/${ref.number}`;
+    return `https://${host}/git/${projectKey}/${repositoryName}/pullRequests/${number}`;
   }
 
-  function rootOf(pullRequest: BacklogPullRequest): SubjectRoot {
+  function rootOf(pullRequest: BacklogRawPullRequest): SubjectRoot {
     return {
       ref,
       title: pullRequest.summary,
@@ -149,48 +133,52 @@ export function createPullRequestSubjectClient(
       assignee: pullRequest.assignee,
       createdUser: pullRequest.createdUser,
       created: pullRequest.created,
-      updated: pullRequest.updated,
       source: { kind: 'pullRequest', pullRequest },
     };
+  }
+
+  function readComment(request: Promise<unknown>): Promise<BacklogRawComment> {
+    return readPullRequestComment(request);
+  }
+
+  function listComments(
+    options: ListCommentsOptions
+  ): Promise<BacklogRawComment[]> {
+    return readPullRequestComments(
+      client.getPullRequestComments(projectId, repositoryId, number, options)
+    );
   }
 
   return {
     ref,
 
     async fetchRoot(): Promise<SubjectRoot> {
-      return rootOf(await api.getPullRequest(pullRequestRef));
+      return rootOf(
+        await readPullRequest(
+          client.getPullRequest(projectId, repositoryId, number)
+        )
+      );
     },
 
     rootFrom(raw: BacklogRawMessage): SubjectRoot | undefined {
-      // See `rootFrom` in `./issue.ts`: every other variant is a read the
-      // caller still has to spend.
-      return raw.kind === 'pullRequest'
-        ? rootOf(fromRawPullRequest(raw.pullRequest))
-        : undefined;
+      return raw.kind === 'pullRequest' ? rootOf(raw.pullRequest) : undefined;
     },
 
-    listComments(options: ListCommentsOptions): Promise<BacklogComment[]> {
-      return api.listPullRequestComments(pullRequestRef, options);
-    },
+    listComments,
 
     /**
-     * Backlog has no Get Pull Request Comment — the route answers 400 with
-     * error code 6 `Undefined resource` — so a single comment is one list call
-     * through a window the exclusive `minId`/`maxId` bounds narrow to exactly
-     * that id (measured 2026-09-06).
+     * Backlog has no Get Pull Request Comment (the route answers 400 with
+     * code 6), so a single comment is a list window the exclusive bounds
+     * narrow to that id (measured). Anything else the window returns is
+     * somebody else's comment, not this one.
      */
-    async getComment(commentId: number): Promise<BacklogComment> {
-      const page = await api.listPullRequestComments(pullRequestRef, {
+    async getComment(commentId: number): Promise<BacklogRawComment> {
+      const [comment] = await listComments({
         minId: commentId - 1,
         maxId: commentId + 1,
         count: 1,
         order: 'desc',
       });
-      const comment = page[0];
-      // An element whose id differs is not found rather than returned: the
-      // window is meant to hold one comment, and trusting whatever came back
-      // would hand the caller somebody else's comment under the id it asked
-      // for.
       if (comment === undefined || comment.id !== commentId) {
         throw new ResourceNotFoundError(
           'backlog',
@@ -201,19 +189,35 @@ export function createPullRequestSubjectClient(
       return comment;
     },
 
-    addComment(input: AddCommentInput): Promise<BacklogComment> {
-      return api.addPullRequestComment(pullRequestRef, input);
+    addComment(input: AddCommentInput): Promise<BacklogRawComment> {
+      // `attachmentId[]` is accepted (documented and measured) although
+      // `backlog-js` leaves it out of this endpoint's parameter type, which
+      // a variable rather than a literal lets through.
+      const params: Option.PullRequest.PostPullRequestCommentsParams = input;
+      return readComment(
+        client.postPullRequestComments(projectId, repositoryId, number, params)
+      );
     },
 
-    updateComment(commentId: number, content: string): Promise<BacklogComment> {
-      return api.updatePullRequestComment(pullRequestRef, commentId, content);
+    updateComment(
+      commentId: number,
+      content: string
+    ): Promise<BacklogRawComment> {
+      return readComment(
+        client.patchPullRequestComments(
+          projectId,
+          repositoryId,
+          number,
+          commentId,
+          { content }
+        )
+      );
     },
 
     /**
-     * D-PR3: the endpoint does not exist (400/6 `Undefined resource`,
-     * measured 2026-09-06), so this fails before any request. `AdapterError`
-     * rather than `ValidationError` because the call is well-formed — the
-     * platform, not the caller, is what makes it impossible.
+     * The endpoint does not exist (400/6, measured), so this fails before any
+     * request (D-PR3). `AdapterError` rather than `ValidationError`: the call
+     * is well-formed, and the platform is what makes it impossible.
      */
     deleteComment(_commentId: number): Promise<void> {
       return Promise.reject(
@@ -225,7 +229,7 @@ export function createPullRequestSubjectClient(
       );
     },
 
-    starTarget(commentId: number): StarTarget {
+    starTarget(commentId: number): Option.Project.PostStarParams {
       return { pullRequestCommentId: commentId };
     },
 
@@ -233,20 +237,17 @@ export function createPullRequestSubjectClient(
       return {
         kind: 'pullRequest',
         host,
-        pullRequest: toRawPullRequest(pullRequestOf(root)),
+        pullRequest: pullRequestOf(root),
         changes: [],
       };
     },
 
-    commentAttachments(comment: BacklogComment): Attachment[] {
-      const attachments: Attachment[] = [];
-      for (const change of comment.changeLog) {
-        if (change.field !== 'attachment' || change.newValue === null) {
-          continue;
-        }
-        attachments.push(namedAttachment(change.newValue));
-      }
-      return attachments;
+    commentAttachments(comment: BacklogRawComment): Attachment[] {
+      return comment.changeLog.flatMap((change) =>
+        change.field === 'attachment' && change.newValue !== null
+          ? [namedAttachment(change.newValue)]
+          : []
+      );
     },
 
     webhookAttachment(attachment: {
@@ -257,15 +258,12 @@ export function createPullRequestSubjectClient(
       return {
         type: 'file',
         name: attachment.name,
-        // Spread rather than `size: attachment.size`: a payload that omits
-        // `size` (§5.2) has to leave the key unset, which is not the same as
-        // setting it to `undefined` under `exactOptionalPropertyTypes`.
         ...(attachment.size === undefined ? {} : { size: attachment.size }),
         url: pullRequestAttachmentUrl(
           host,
-          context.projectId,
+          projectId,
           ref.repositoryId,
-          ref.number,
+          number,
           attachment.id
         ),
         fetchData: () => downloadAttachment(attachment.id),
@@ -273,12 +271,10 @@ export function createPullRequestSubjectClient(
     },
 
     /**
-     * The same file the REST `changeLog` would name, through the same
-     * name-resolving builder: a comment posted with `attachmentId[]` arrives
-     * as type 20 with `changes[{ field: "attachment", new_value: "<name>" }]`
-     * and no `content.attachments` key at all (measured 2026-09-06,
-     * `.claude/rules/backlog-pull-request-facts.md`), so the webhook message
-     * and the read of the same comment carry the same attachment (§6.6).
+     * A comment posted with `attachmentId[]` arrives as type 20 with
+     * `changes[{ field: "attachment", new_value: "<name>" }]` and no
+     * `content.attachments` (measured), so it resolves through the same name
+     * lookup as the REST `changeLog` of the same comment.
      */
     webhookChangeAttachment(change: BacklogChange): Attachment | undefined {
       return change.newValue === null
@@ -298,13 +294,13 @@ export function createPullRequestSubjectClient(
       return {
         kind: 'pullRequest',
         host,
-        projectId: context.projectId,
+        projectId,
         repositoryId: ref.repositoryId,
-        number: ref.number,
+        number,
         summary: root.title,
-        status: root.status,
-        // Omitted rather than `undefined` when a name could not be resolved:
-        // a present-but-undefined key does not survive JSON.
+        status: { id: root.status.id, name: root.status.name },
+        // Omitted rather than `undefined`: a present-but-undefined key does
+        // not survive JSON.
         ...(url === undefined ? {} : { url }),
       };
     },

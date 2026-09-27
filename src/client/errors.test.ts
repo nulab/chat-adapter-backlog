@@ -12,7 +12,6 @@ import { describe, expect, it } from 'vitest';
 import {
   mapBacklogError,
   mapCredentialResolverError,
-  mapSchemaError,
   mapTransportError,
   stripQueryString,
 } from './errors.js';
@@ -63,16 +62,13 @@ describe('mapBacklogError', () => {
     expect(error).toBeInstanceOf(ResourceNotFoundError);
   });
 
-  it("keeps Backlog's own message on a code 6, whose class composes its message from the resource ids", () => {
+  it("keeps Backlog's own message on a code 6, whose class composes its own message", () => {
     const error = mapBacklogError({
       status: 404,
       bodyError: { message: 'No such issue', code: 6 },
-      resourceType: 'issue',
-      resourceId: '8001',
     });
 
     expect(error.message).toContain('No such issue');
-    expect(error.message).toContain('issue');
   });
 
   it("keeps Backlog's own message on a code 13, whose class takes only the retry delay", () => {
@@ -95,7 +91,7 @@ describe('mapBacklogError', () => {
   });
 
   it('leaves the message alone when the body carried none to keep', () => {
-    const error = mapBacklogError({ status: 404, resourceType: 'issue' });
+    const error = mapBacklogError({ status: 404 });
 
     expect(error.message).not.toContain('Backlog API request failed');
   });
@@ -175,19 +171,6 @@ describe('mapCredentialResolverError', () => {
   it('maps a rejecting resolver to AuthenticationError', () => {
     const error = mapCredentialResolverError(new Error('vault unavailable'));
     expect(error).toBeInstanceOf(AuthenticationError);
-  });
-});
-
-describe('mapSchemaError', () => {
-  it('is an AdapterError with code SCHEMA, not a ZodError', () => {
-    const error = mapSchemaError(
-      'getIssue',
-      'issue.id: expected number, received string'
-    );
-    expect(error).toBeInstanceOf(AdapterError);
-    expect(error.code).toBe('SCHEMA');
-    expect(error.constructor.name).not.toBe('ZodError');
-    expect(error.message).toContain('getIssue');
   });
 });
 
