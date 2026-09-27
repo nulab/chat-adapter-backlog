@@ -131,11 +131,9 @@ function defaultCreateTransport(
 }
 
 /**
- * What one host's traffic goes through. `client` is absent exactly when the
- * `createApi` seam replaced the port with something that is not
- * `backlog-js`-backed — an in-memory double, typically — because there is then
- * no client to hand out and inventing one would talk to the network from a
- * test.
+ * What one host's traffic goes through. `client` is absent exactly when a test
+ * replaced the port with one that is not `backlog-js`-backed, because there is
+ * then no client to hand out and inventing one would talk to the network.
  */
 interface AdapterTransport {
   api: BacklogApi;
@@ -606,7 +604,12 @@ export class BacklogAdapter implements Adapter<
    * the next caller that needs the identity asks again.
    */
   private readonly botIdentities = new Map<string, BotIdentity>();
-  private readonly createTransport: (
+  /**
+   * Not `readonly`: `src/adapter.test.ts` replaces it after construction to
+   * run the adapter on an in-memory port. There is no config field for that,
+   * because a config field would be a published promise.
+   */
+  private createTransport: (
     installation: ResolvedInstallation
   ) => AdapterTransport;
   /**
@@ -724,11 +727,7 @@ export class BacklogAdapter implements Adapter<
       webhookVerifier: config.webhookVerifier,
     };
     this.logger = config.logger ?? new ConsoleLogger('info').child('backlog');
-    const createApi = config.createApi;
-    this.createTransport =
-      createApi === undefined
-        ? defaultCreateTransport(() => this.logger)
-        : (installation) => ({ api: createApi(installation) });
+    this.createTransport = defaultCreateTransport(() => this.logger);
   }
 
   /** `""` rather than a guess until fetched: the core then falls back to `chat.userName`. */
@@ -837,7 +836,7 @@ export class BacklogAdapter implements Adapter<
     return installation;
   }
 
-  api(host: string): BacklogApi {
+  private api(host: string): BacklogApi {
     return this.transport(host).api;
   }
 
@@ -858,7 +857,7 @@ export class BacklogAdapter implements Adapter<
     const { client } = this.transport(host);
     if (client === undefined) {
       throw new AdapterError(
-        'no Backlog client: this adapter was constructed with a custom `createApi`, which replaces the `backlog-js`-backed port',
+        'no Backlog client: this adapter runs on a port that is not `backlog-js`-backed',
         'backlog',
         'NO_CLIENT'
       );
@@ -1864,8 +1863,8 @@ export class BacklogAdapter implements Adapter<
    * Issues only, and no companion member lists pull requests (D-PR7): a
    * pull-request list is keyed by repository, a coordinate no channel id
    * carries. A caller that has the repository reaches its pull requests
-   * through the public port, `api(host).listPullRequests(projectId,
-   * repositoryId, …)`, which spends the **read** bucket rather than the
+   * through `client(host).getPullRequests(projectIdOrKey, repoIdOrName,
+   * …)`, which spends the **read** bucket rather than the
    * `search` bucket Get Issue List below draws on (measured 2026-09-06,
    * `.claude/rules/backlog-pull-request-facts.md` "Rate limit").
    */

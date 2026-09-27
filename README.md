@@ -110,7 +110,6 @@ not a request to fall back.
 | `userName` | `string` | first installation's bot name | Exposed to the core as `adapter.userName`. One string for the whole adapter; per space, read `adapter.botUserName(host)`. |
 | `logger` | `Logger` | `ConsoleLogger("info")` | Replaced by `chat.getLogger("backlog")` in `initialize`. |
 | `maxWebhookBodyBytes` | `number` | `5 * 1024 * 1024` | Positive integer. Larger bodies get a 413. Description edits carry two full bodies. |
-| `createApi` | `(installation: ResolvedInstallation) => BacklogApi` | the `backlog-js`-backed port | Test seam: replaces the port every Backlog call goes through, so a consumer's suite needs no network — see **Testing**. Replacing it also takes the 429 retry and `client()` with it. |
 
 ### Bot identity
 
@@ -164,7 +163,7 @@ resolves the installation from the webhook's `?host=` and matches that space's
 name. Anything you build on the mention string — stripping the prefix off a
 command, addressing the bot in your own text — should read
 `botUserName(host)`, not `userName`. An unconfigured host throws the same
-`ResourceNotFoundError` as `api(host)`. `botUserId` stays private, because the
+`ResourceNotFoundError` as `client(host)`. `botUserId` stays private, because the
 core's `@<id>` pattern would be wrong for every space but one.
 
 ## Platform setup
@@ -340,7 +339,7 @@ Limitations worth knowing before you build on this:
   normally.
 - **`listThreads` lists issues only.** A pull-request list is per repository, a
   coordinate the channel id does not carry;
-  `api(host).listPullRequests(projectId, repositoryId, …)` is the route to one.
+  `client(host).getPullRequests(projectId, repositoryId, …)` is the route to one.
 - **A pull request cannot be closed or merged from Chat.** Backlog exposes no
   API for a status change. Merge in git or in the UI; the change then arrives
   as a type-19 activity like any other update.
@@ -461,12 +460,20 @@ only within one space. A pull request's channel is its **project**, not its
 repository.
 
 Every numeric segment is a positive integer of at most
-`Number.MAX_SAFE_INTEGER`, and the **encoders** enforce the grammar as well as
-the decoders: `encodeThreadId`, `encodeChannelId`, `encodeMessageId` and
-`encodeUserId` throw `ValidationError` for a value they could not read back —
-a host that is not lowercased or carries a scheme, path or port, a
-non-positive or non-integral id, an id past 2^53-1 (where `Number` stops
-round-tripping decimal digits), or an update id with an empty timestamp.
+`Number.MAX_SAFE_INTEGER`, and an id outside the grammar is a
+`ValidationError` wherever the adapter reads or writes one.
+
+A thread id is read back with `adapter.decodeThreadId(id)`. Message and user
+ids have no adapter member to read them, so the package exports the two
+decoders a handler needs:
+
+```ts
+import { decodeMessageId, decodeUserId } from '@nulab/chat-adapter-backlog';
+
+decodeMessageId(message.id);
+// { host, subject: { kind: 'issue', issueId: 8001 }, part: 'root' }
+decodeUserId(message.author.userId).userId; // 100 — the numeric Backlog user id
+```
 
 ## Mentions
 
@@ -517,19 +524,15 @@ mention when Backlog notified the bot about it and an ordinary message when it
 did not, which is also the right answer for a plain edit of a subject the bot
 already owns.
 
-To mention someone outbound, use the helpers — writing `<@U…>` notifies the
-user even without `notifiedUserId`:
+To mention someone outbound, write Backlog's own notation — `<@U<userId>>`,
+`<@T<teamId>>` or `<@project>`. It notifies the user even without
+`notifiedUserId`:
 
 ```ts
 import type { PostableMarkdown } from 'chat';
-import {
-  mentionUser,
-  mentionTeam,
-  MENTION_PROJECT_MEMBERS,
-  type BacklogPostableExtras,
-} from '@nulab/chat-adapter-backlog';
+import type { BacklogPostableExtras } from '@nulab/chat-adapter-backlog';
 
-await thread.post({ markdown: `${mentionUser(100)} please take a look` });
+await thread.post({ markdown: '<@U100> please take a look' });
 
 const ping: PostableMarkdown & BacklogPostableExtras = { markdown: 'ping', notifiedUserId: [100, 101] };
 await thread.post(ping);
@@ -592,34 +595,25 @@ Backlog refuses with a 429 is retried or surfaced as `AdapterRateLimitError`
 [Get Rate Limit](https://developer.nulab.com/docs/backlog/api/2/get-rate-limit/)
 through `client(host)`.
 
-```ts
-// Anything outside the Chat SDK contract — including the pull-request list
-// `listThreads` deliberately does not cover:
-const api = adapter.api('example.backlog.com');
-const issue = await api.getIssue(8001);
-const pullRequests = await api.listPullRequests(500, 700, { count: 20 }); // projectId, repositoryId
-```
-
 Issue listing and counting draw on Backlog's **search** limit, not `read` — the
 trap any polling loop falls into. Listing or counting **pull requests** draws on
 `read` instead, so the two lists have different budgets and one being exhausted
 says nothing about the other.
 
-`api(host)` names only the endpoints this adapter itself needs. For anything
-else — custom fields, project settings, attachments — `client(host)` hands back
-the very [`backlog-js`](https://github.com/nulab/backlog-js) client the port
-speaks through, so those calls share the same 429 retry and raise the same
+For anything outside the Chat SDK contract — custom fields, project settings,
+changing an assignee, the pull-request list `listThreads` deliberately does not
+cover — `client(host)` hands back the very
+[`backlog-js`](https://github.com/nulab/backlog-js) client the adapter makes
+its own calls with, so those calls share the same 429 retry and raise the same
 errors:
 
 ```ts
 const client = adapter.client('example.backlog.com');
 const fields = await client.getCustomFields(500); // projectId
+const pullRequests = await client.getPullRequests(500, '700', { count: 20 }); // projectId, repositoryId
 ```
 
-Build a Backlog client of your own instead and none of that holds. `client()` is unavailable in
-exactly one configuration — a custom `createApi` replaces the
-`backlog-js`-backed port, so there is no client to hand out and `client()`
-throws an `AdapterError` with code `NO_CLIENT`.
+Build a Backlog client of your own instead and none of that holds.
 
 ### A 429 blocks the call for up to a minute
 
@@ -652,40 +646,13 @@ entry per API call against a per-minute limit.
 
 ## Testing
 
-`createInMemoryBacklogApi` is a full in-memory port, so a consumer's tests need
-no network and no credentials:
-
-```ts
-import { createBacklogAdapter, createInMemoryBacklogApi } from '@nulab/chat-adapter-backlog';
-
-const api = createInMemoryBacklogApi({
-  projects: [
-    { id: 500, projectKey: 'EXAMPLE', name: 'Example', textFormattingRule: 'markdown' },
-  ],
-  issues: [/* BacklogIssue values — see the type for the full shape */],
-  // Needed to exercise `channel.post()`: it defaults to the project's first
-  // issue type, and a project with none is a `ValidationError`.
-  issueTypes: { 500: [{ id: 1, name: 'Task' }] },
-  repositories: [{ id: 700, projectId: 500, name: 'example-repo', description: '' }],
-  pullRequests: [/* BacklogPullRequest values */],
-  // Keyed `<repositoryId>:<number>`, because a pull-request comment carries no
-  // reference to its parent.
-  pullRequestComments: { '700:12': [/* BacklogComment values */] },
-});
-
-const adapter = createBacklogAdapter({
-  host: 'example.backlog.com',
-  apiKey: 'test',
-  botUserId: 999,
-  botUserName: 'Chatbot',
-  // 16 bytes minimum, in a test too: the check runs in the constructor.
-  webhookSecret: 'test-webhook-secret',
-  createApi: () => api,
-});
-```
-
-`api.state` exposes issues, comments, repositories, pull requests and their
-comments, stars, uploads, notifications and recorded inputs for assertions.
+A bot's own tests need no network and no credentials when they stop at the
+adapter's boundary. The handlers a bot registers receive a `Thread` and a
+`Message`, so test them with the Chat SDK's own kit —
+[`@chat-adapter/tests`](https://chat-sdk.dev/docs/testing) builds a mock
+adapter, `ChatInstance` and state — and mock `adapter.client(host)` with your
+test runner where a handler reaches Backlog directly. The adapter does not
+offer an in-memory Backlog of its own.
 
 ## Links
 

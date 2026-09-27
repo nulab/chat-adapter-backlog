@@ -339,10 +339,10 @@ function assertPositiveInteger(id: number): void {
 }
 
 /**
- * Outbound mention helpers (docs/specs/adapter.md §5.4). These are pure
- * string builders with no adapter context, so an invalid id throws the
- * built-in `RangeError` rather than the adapter's `ValidationError`
- * (docs/specs/adapter.md §3.6).
+ * Mention notation builders (docs/specs/adapter.md §5.4), used by ingress to
+ * recognise a mention and not exported (§3.1). These are pure string builders
+ * with no adapter context, so an invalid id throws the built-in `RangeError`
+ * rather than the adapter's `ValidationError`.
  */
 export function mentionUser(id: number): string {
   assertPositiveInteger(id);

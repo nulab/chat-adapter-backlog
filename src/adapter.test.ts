@@ -103,6 +103,38 @@ afterEach(() => {
   }
 });
 
+type ApiFactory = (installation: ResolvedInstallation) => BacklogApi;
+
+/**
+ * Runs `adapter` on the port `createApi` builds instead of the `backlog-js`
+ * one. Element access is the form TypeScript leaves open to a private member;
+ * the public config has no field for this (docs/specs/adapter.md §3.1).
+ */
+function onPort(
+  adapter: BacklogAdapter,
+  createApi: ApiFactory
+): BacklogAdapter {
+  adapter['createTransport'] = (installation) => ({
+    api: createApi(installation),
+  });
+  return adapter;
+}
+
+function fixturePort(): BacklogApi {
+  return createInMemoryBacklogApi({
+    projects: [conformanceFixture.baseProject()],
+  });
+}
+
+/**
+ * The port is private to the adapter. Element access is the one form
+ * TypeScript leaves open to a private member, and it is used only here so a
+ * test that has to see the port a factory built says so in one place.
+ */
+function portOf(adapter: BacklogAdapter, host: string): BacklogApi {
+  return adapter['api'](host);
+}
+
 function validConfig() {
   return {
     host: 'example.backlog.com',
@@ -275,13 +307,6 @@ describe('BacklogAdapter construction', () => {
     expect(adapter.userName).toBe('Support Bot');
   });
 
-  it('api("unknown.backlog.com") reports the installation as not found', () => {
-    const adapter = new BacklogAdapter(validConfig());
-    expect(() => adapter.api('unknown.backlog.com')).toThrow(
-      ResourceNotFoundError
-    );
-  });
-
   it("botUserName reports each installation's own display name", () => {
     const adapter = new BacklogAdapter({
       installations: [
@@ -361,9 +386,12 @@ describe('BacklogAdapter construction', () => {
     const createApi = vi.fn((_installation: ResolvedInstallation) =>
       createInMemoryBacklogApi()
     );
-    const adapter = new BacklogAdapter({ ...validConfig(), createApi });
+    const adapter = onPort(
+      createBacklogAdapter({ ...validConfig() }),
+      createApi
+    );
 
-    adapter.api('example.backlog.com');
+    portOf(adapter, 'example.backlog.com');
 
     expect(createApi.mock.calls[0]?.[0].apiKey).toBe('test-api-key');
     expect(createApi.mock.calls[0]?.[0].accessToken).toBeUndefined();
@@ -374,16 +402,18 @@ describe('BacklogAdapter construction', () => {
     const createApi = vi.fn((_installation: ResolvedInstallation) =>
       createInMemoryBacklogApi()
     );
-    const adapter = new BacklogAdapter({
-      host: 'example.backlog.com',
-      accessToken: 'test-access-token',
-      botUserId: 999,
-      botUserName: 'Chatbot',
-      webhookSecret: 'test-webhook-secret',
-      createApi,
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        host: 'example.backlog.com',
+        accessToken: 'test-access-token',
+        botUserId: 999,
+        botUserName: 'Chatbot',
+        webhookSecret: 'test-webhook-secret',
+      }),
+      createApi
+    );
 
-    adapter.api('example.backlog.com');
+    portOf(adapter, 'example.backlog.com');
 
     expect(createApi.mock.calls[0]?.[0].accessToken).toBe('test-access-token');
     expect(createApi.mock.calls[0]?.[0].apiKey).toBeUndefined();
@@ -675,19 +705,21 @@ describe('BacklogAdapter port wiring', () => {
 
   it('builds a port for a configured host without being given one', () => {
     const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-    expect(typeof adapter.api('example.backlog.com').getIssue).toBe('function');
+    expect(typeof portOf(adapter, 'example.backlog.com').getIssue).toBe(
+      'function'
+    );
   });
 
   it('reuses one port per host across calls', () => {
     const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-    expect(adapter.api('example.backlog.com')).toBe(
-      adapter.api('example.backlog.com')
+    expect(portOf(adapter, 'example.backlog.com')).toBe(
+      portOf(adapter, 'example.backlog.com')
     );
   });
 
   it('reports an unknown host as a missing installation', () => {
     const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-    expect(() => adapter.api('other.backlog.com')).toThrow(
+    expect(() => portOf(adapter, 'other.backlog.com')).toThrow(
       ResourceNotFoundError
     );
   });
@@ -730,28 +762,32 @@ describe('BacklogAdapter port wiring', () => {
     );
   });
 
-  it('has no client to hand out when a custom createApi replaced the port', () => {
-    const adapter = createBacklogAdapter({
-      ...base,
-      apiKey: 'key',
-      createApi: () => createInMemoryBacklogApi(),
-    });
+  it('has no client to hand out when a custom port replaced the backlog-js one', () => {
+    const adapter = onPort(
+      createBacklogAdapter({
+        ...base,
+        apiKey: 'key',
+      }),
+      () => createInMemoryBacklogApi()
+    );
 
     expect(() => adapter.client('example.backlog.com')).toThrow(AdapterError);
   });
 
-  it('passes the resolved installation to a supplied createApi', () => {
+  it('passes the resolved installation to a supplied port factory', () => {
     const createApi = vi.fn((_installation: ResolvedInstallation) =>
       createInMemoryBacklogApi()
     );
-    const adapter = createBacklogAdapter({
-      ...base,
-      host: 'EXAMPLE.Backlog.com',
-      apiKey: 'key',
-      createApi,
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        ...base,
+        host: 'EXAMPLE.Backlog.com',
+        apiKey: 'key',
+      }),
+      createApi
+    );
 
-    adapter.api('example.backlog.com');
+    portOf(adapter, 'example.backlog.com');
 
     expect(createApi).toHaveBeenCalledTimes(1);
     expect(createApi.mock.calls[0]?.[0]).toMatchObject({
@@ -769,16 +805,18 @@ describe('BacklogAdapter port wiring', () => {
     const createApi = vi.fn((_installation: ResolvedInstallation) =>
       createInMemoryBacklogApi()
     );
-    const adapter = createBacklogAdapter({
-      ...base,
-      apiKey: () => {
-        calls += 1;
-        return `token-${calls}`;
-      },
-      createApi,
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        ...base,
+        apiKey: () => {
+          calls += 1;
+          return `token-${calls}`;
+        },
+      }),
+      createApi
+    );
 
-    adapter.api('example.backlog.com');
+    portOf(adapter, 'example.backlog.com');
 
     const resolvable = createApi.mock.calls[0]?.[0].apiKey;
     expect(typeof resolvable).toBe('function');
@@ -790,7 +828,7 @@ describe('BacklogAdapter port wiring', () => {
   });
 });
 
-/** One installation matching `FIXTURE`, backed by an in-memory port pre-seeded with the fixture project so `ensureProject` resolves without a network call. */
+/** One installation matching `FIXTURE`; run it on `fixturePort` so `ensureProject` resolves without a network call. */
 function webhookAdapterConfig(overrides: Partial<ResolvedInstallation> = {}) {
   return {
     host: FIXTURE.host,
@@ -798,21 +836,21 @@ function webhookAdapterConfig(overrides: Partial<ResolvedInstallation> = {}) {
     botUserId: FIXTURE.bot.id,
     botUserName: FIXTURE.bot.name,
     webhookSecret: FIXTURE.webhookSecret,
-    createApi: () =>
-      createInMemoryBacklogApi({
-        projects: [conformanceFixture.baseProject()],
-      }),
     ...overrides,
   };
 }
 
 async function webhookAdapter(
-  config: Record<string, unknown> = {}
+  config: Record<string, unknown> = {},
+  createApi: ApiFactory = fixturePort
 ): Promise<{ adapter: BacklogAdapter; chat: ChatInstance }> {
-  const adapter = createBacklogAdapter({
-    ...webhookAdapterConfig(),
-    ...config,
-  });
+  const adapter = onPort(
+    createBacklogAdapter({
+      ...webhookAdapterConfig(),
+      ...config,
+    }),
+    createApi
+  );
   const chat = createMockChatInstance({ logger: createMockLogger() });
   await adapter.initialize(chat);
   return { adapter, chat };
@@ -881,7 +919,6 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
       botUserId: undefined,
       botUserName: undefined,
       webhookSecret: undefined,
-      createApi: undefined,
       installations: [
         {
           host: FIXTURE.host,
@@ -1043,14 +1080,12 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
     const getProject = vi.fn(() =>
       Promise.resolve(conformanceFixture.baseProject())
     );
-    const { adapter, chat } = await webhookAdapter({
-      createApi: () => {
-        const api = createInMemoryBacklogApi({
-          projects: [conformanceFixture.baseProject()],
-        });
-        api.getProject = getProject;
-        return api;
-      },
+    const { adapter, chat } = await webhookAdapter({}, () => {
+      const api = createInMemoryBacklogApi({
+        projects: [conformanceFixture.baseProject()],
+      });
+      api.getProject = getProject;
+      return api;
     });
 
     await adapter.handleWebhook(webhookRequest(issueMultiUpdated()));
@@ -1143,7 +1178,10 @@ describe('BacklogAdapter.handleWebhook — response ladder (§5.1)', () => {
   });
 
   it('a webhook before initialize() has run gets 503', async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const response = await adapter.handleWebhook(
       webhookRequest(issueCommented())
     );
@@ -1366,7 +1404,10 @@ describe('BacklogAdapter.handleWebhook — dispatch ordering and error handling'
         }
       }
     );
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const chat = createMockChatInstance({
       logger: createMockLogger(),
       overrides: { processMessage },
@@ -1389,7 +1430,10 @@ describe('BacklogAdapter.handleWebhook — dispatch ordering and error handling'
 
   it('a factory that throws is logged at error and does not reject handleWebhook', async () => {
     const logger = createMockLogger();
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     // `createMockChatInstance`'s default `processMessage` never calls the
     // factory it is handed, so this override reproduces what the real core
     // does (`ChatInstance.processMessage` resolves the factory itself,
@@ -1456,7 +1500,10 @@ describe('BacklogAdapter.handleWebhook — fixture-driven §5.3 mapping', () => 
 
   it('a status-only change dispatches a message the handler can read raw.changes from', async () => {
     const capturedMessages: unknown[] = [];
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const chat = createMockChatInstance({
       logger: createMockLogger(),
       overrides: {
@@ -1489,7 +1536,10 @@ describe('BacklogAdapter.handleWebhook — fixture-driven §5.3 mapping', () => 
 
   it('unknown payload keys survive into raw.payload', async () => {
     const capturedMessages: unknown[] = [];
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const chat = createMockChatInstance({
       logger: createMockLogger(),
       overrides: {
@@ -1529,25 +1579,27 @@ describe('BacklogAdapter.handleWebhook — fixture-driven §5.3 mapping', () => 
       .mockReturnValueOnce(firstApi)
       .mockReturnValueOnce(otherApi);
 
-    const adapter = createBacklogAdapter({
-      installations: [
-        {
-          host: FIXTURE.host,
-          apiKey: 'k1',
-          botUserId: FIXTURE.bot.id,
-          botUserName: FIXTURE.bot.name,
-          webhookSecret: FIXTURE.webhookSecret,
-        },
-        {
-          host: FIXTURE.otherHost,
-          apiKey: 'k2',
-          botUserId: 998,
-          botUserName: 'Chatbot2',
-          webhookSecret: 'other-webhook-secret',
-        },
-      ],
-      createApi,
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        installations: [
+          {
+            host: FIXTURE.host,
+            apiKey: 'k1',
+            botUserId: FIXTURE.bot.id,
+            botUserName: FIXTURE.bot.name,
+            webhookSecret: FIXTURE.webhookSecret,
+          },
+          {
+            host: FIXTURE.otherHost,
+            apiKey: 'k2',
+            botUserId: 998,
+            botUserName: 'Chatbot2',
+            webhookSecret: 'other-webhook-secret',
+          },
+        ],
+      }),
+      createApi
+    );
     const capturedMessages: { threadId: string; message: { id: string } }[] =
       [];
     const chat = createMockChatInstance({
@@ -1585,8 +1637,8 @@ describe('BacklogAdapter.handleWebhook — fixture-driven §5.3 mapping', () => 
     expect(capturedMessages[0]?.message.id).not.toBe(
       capturedMessages[1]?.message.id
     );
-    expect(adapter.api(FIXTURE.host)).toBe(firstApi);
-    expect(adapter.api(FIXTURE.otherHost)).toBe(otherApi);
+    expect(portOf(adapter, FIXTURE.host)).toBe(firstApi);
+    expect(portOf(adapter, FIXTURE.otherHost)).toBe(otherApi);
   });
 });
 
@@ -1676,7 +1728,10 @@ async function initializeCapturingDispatches(
 
 describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () => {
   it('a new pull request is a root message on a pull request thread', async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const dispatched = await initializeCapturingDispatches(adapter);
 
     const response = await adapter.handleWebhook(
@@ -1704,7 +1759,10 @@ describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () 
   });
 
   it("a comment on a pull request is dispatched to the pull request's thread", async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const dispatched = await initializeCapturingDispatches(adapter);
 
     const response = await adapter.handleWebhook(
@@ -1733,7 +1791,10 @@ describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () 
   });
 
   it("a pull request linked to an issue does not route to the issue's thread", async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const dispatched = await initializeCapturingDispatches(adapter);
 
     const response = await adapter.handleWebhook(
@@ -1755,7 +1816,10 @@ describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () 
   });
 
   it('assigning the bot to a pull request is a mention', async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const dispatched = await initializeCapturingDispatches(adapter);
 
     const response = await adapter.handleWebhook(
@@ -1828,25 +1892,27 @@ describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () 
       .fn()
       .mockReturnValueOnce(firstApi)
       .mockReturnValueOnce(otherApi);
-    const adapter = createBacklogAdapter({
-      installations: [
-        {
-          host: FIXTURE.host,
-          apiKey: 'k1',
-          botUserId: FIXTURE.bot.id,
-          botUserName: FIXTURE.bot.name,
-          webhookSecret: FIXTURE.webhookSecret,
-        },
-        {
-          host: FIXTURE.otherHost,
-          apiKey: 'k2',
-          botUserId: 998,
-          botUserName: 'Chatbot2',
-          webhookSecret: 'other-webhook-secret',
-        },
-      ],
-      createApi,
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        installations: [
+          {
+            host: FIXTURE.host,
+            apiKey: 'k1',
+            botUserId: FIXTURE.bot.id,
+            botUserName: FIXTURE.bot.name,
+            webhookSecret: FIXTURE.webhookSecret,
+          },
+          {
+            host: FIXTURE.otherHost,
+            apiKey: 'k2',
+            botUserId: 998,
+            botUserName: 'Chatbot2',
+            webhookSecret: 'other-webhook-secret',
+          },
+        ],
+      }),
+      createApi
+    );
     const dispatched = await initializeCapturingDispatches(adapter);
 
     await adapter.handleWebhook(
@@ -1865,8 +1931,8 @@ describe('BacklogAdapter.handleWebhook — pull-request activities (§5.3)', () 
       `backlog:${FIXTURE.otherHost}:${FIXTURE.projectId}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}`
     );
     expect(dispatched[0]?.message.id).not.toBe(dispatched[1]?.message.id);
-    expect(adapter.api(FIXTURE.host)).toBe(firstApi);
-    expect(adapter.api(FIXTURE.otherHost)).toBe(otherApi);
+    expect(portOf(adapter, FIXTURE.host)).toBe(firstApi);
+    expect(portOf(adapter, FIXTURE.otherHost)).toBe(otherApi);
   });
 });
 
@@ -1891,7 +1957,10 @@ describe('BacklogAdapter.handleWebhook — a notifications[] the adapter cannot 
   }
 
   it('an issue comment with no notifications key is dispatched, with mention detection falling back to the text', async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const dispatched = await initializeCapturingDispatches(adapter);
 
     const response = await adapter.handleWebhook(
@@ -1918,7 +1987,10 @@ describe('BacklogAdapter.handleWebhook — a notifications[] the adapter cannot 
   });
 
   it('an issue comment whose notifications entry names no user is dispatched', async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const dispatched = await initializeCapturingDispatches(adapter);
 
     const response = await adapter.handleWebhook(
@@ -1939,7 +2011,10 @@ describe('BacklogAdapter.handleWebhook — a notifications[] the adapter cannot 
   });
 
   it('an issue assignment with no notifications key is still a mention through changes[]', async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const dispatched = await initializeCapturingDispatches(adapter);
 
     const response = await adapter.handleWebhook(
@@ -1956,7 +2031,10 @@ describe('BacklogAdapter.handleWebhook — a notifications[] the adapter cannot 
   });
 
   it('a new pull request with no notifications key is dispatched as a root message', async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const dispatched = await initializeCapturingDispatches(adapter);
 
     const response = await adapter.handleWebhook(
@@ -1981,7 +2059,10 @@ describe('BacklogAdapter.handleWebhook — a notifications[] the adapter cannot 
   });
 
   it('a pull-request comment whose notifications entry names no user is dispatched', async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const dispatched = await initializeCapturingDispatches(adapter);
 
     const response = await adapter.handleWebhook(
@@ -2039,7 +2120,10 @@ function rawIssue(): Extract<BacklogRawMessage, { kind: 'issue' }>['issue'] {
 
 describe('BacklogAdapter.parseMessage', () => {
   it('an issue raw message becomes the thread root it describes', () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
 
     const message = adapter.parseMessage({
       kind: 'issue',
@@ -2065,7 +2149,10 @@ describe('BacklogAdapter.parseMessage', () => {
   });
 
   it('a raw message naming a host no installation was configured for is rejected', () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
 
     expect(() =>
       adapter.parseMessage({
@@ -2078,7 +2165,10 @@ describe('BacklogAdapter.parseMessage', () => {
   });
 
   it('builds one issue of a bulk update from the delivery and the issue id', () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const payload = issueMultiUpdated({
       text: 'Moving these to done.',
     }) as unknown as BacklogBulkUpdatePayload;
@@ -2101,7 +2191,10 @@ describe('BacklogAdapter.parseMessage', () => {
   });
 
   it('rejects a webhook raw message whose payload does not parse as its activity type', () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const parse = () =>
       adapter.parseMessage({
         kind: 'webhook',
@@ -2118,7 +2211,10 @@ describe('BacklogAdapter.parseMessage', () => {
   });
 
   it('rejects a bulk update raw message naming an issue the delivery does not cover', () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
 
     expect(() =>
       adapter.parseMessage({
@@ -2132,7 +2228,10 @@ describe('BacklogAdapter.parseMessage', () => {
   });
 
   it('rejects a bulk update raw message whose payload is not a type-14 activity', () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
 
     expect(() =>
       adapter.parseMessage({
@@ -2152,10 +2251,12 @@ describe('BacklogAdapter inbound formatting (§9.1)', () => {
       ...conformanceFixture.baseProject(),
       textFormattingRule: 'backlog' as const,
     };
-    const adapter = createBacklogAdapter({
-      ...webhookAdapterConfig(),
-      createApi: () => createInMemoryBacklogApi({ projects: [project] }),
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        ...webhookAdapterConfig(),
+      }),
+      () => createInMemoryBacklogApi({ projects: [project] })
+    );
     const dispatched = await initializeCapturingDispatches(adapter);
 
     await adapter.handleWebhook(
@@ -2266,15 +2367,17 @@ function egressAdapter(
     ...options.seed,
   });
 
-  const adapter = createBacklogAdapter({
-    host: FIXTURE.host,
-    apiKey: 'test-api-key',
-    botUserId: FIXTURE.bot.id,
-    botUserName: FIXTURE.bot.name,
-    webhookSecret: FIXTURE.webhookSecret,
-    createApi: () => options.wrapApi?.(api) ?? api,
-    ...(options.logger === undefined ? {} : { logger: options.logger }),
-  });
+  const adapter = onPort(
+    createBacklogAdapter({
+      host: FIXTURE.host,
+      apiKey: 'test-api-key',
+      botUserId: FIXTURE.bot.id,
+      botUserName: FIXTURE.bot.name,
+      webhookSecret: FIXTURE.webhookSecret,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+    }),
+    () => options.wrapApi?.(api) ?? api
+  );
 
   return { adapter, api };
 }
@@ -3420,16 +3523,18 @@ describe('BacklogAdapter.fetchChannelInfo (§7.5)', () => {
         ),
       ])
     );
-    const adapter = createBacklogAdapter({
-      installations: [FIXTURE.host, FIXTURE.otherHost].map((host) => ({
-        host,
-        apiKey: 'test-api-key',
-        botUserId: FIXTURE.bot.id,
-        botUserName: FIXTURE.bot.name,
-        webhookSecret: FIXTURE.webhookSecret,
-      })),
-      createApi: (installation) => ports.get(installation.host) as BacklogApi,
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        installations: [FIXTURE.host, FIXTURE.otherHost].map((host) => ({
+          host,
+          apiKey: 'test-api-key',
+          botUserId: FIXTURE.bot.id,
+          botUserName: FIXTURE.bot.name,
+          webhookSecret: FIXTURE.webhookSecret,
+        })),
+      }),
+      (installation) => ports.get(installation.host) as BacklogApi
+    );
     const threadOn = (host: string): string =>
       `backlog:${host}:${FIXTURE.projectId}:pr:${FIXTURE.repositoryId}:${FIXTURE.pullRequestNumber}`;
 
@@ -3945,14 +4050,16 @@ describe('BacklogAdapter wiring with a real Chat instance', () => {
       users: [CHATBOT_USER_REF],
       me: CHATBOT_USER_REF,
     });
-    const adapter = createBacklogAdapter({
-      host: FIXTURE.host,
-      apiKey: 'test-api-key',
-      botUserId: FIXTURE.bot.id,
-      botUserName: FIXTURE.bot.name,
-      webhookSecret: FIXTURE.webhookSecret,
-      createApi: () => api,
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        host: FIXTURE.host,
+        apiKey: 'test-api-key',
+        botUserId: FIXTURE.bot.id,
+        botUserName: FIXTURE.bot.name,
+        webhookSecret: FIXTURE.webhookSecret,
+      }),
+      () => api
+    );
 
     let resolveMentionHandled: (() => void) | undefined;
     const mentionHandled = new Promise<void>((resolve) => {
@@ -3998,24 +4105,29 @@ const CONNECT_BOT_USER_ID = 999;
 connectWebhookContract({
   name: 'backlog',
   createAdapter: ({ webhookVerifier }) =>
-    createBacklogAdapter({
-      host: FIXTURE.host,
-      apiKey: 'connect-key',
-      botUserId: CONNECT_BOT_USER_ID,
-      botUserName: FIXTURE.bot.name,
-      webhookVerifier,
-      createApi: () =>
+    onPort(
+      createBacklogAdapter({
+        host: FIXTURE.host,
+        apiKey: 'connect-key',
+        botUserId: CONNECT_BOT_USER_ID,
+        botUserName: FIXTURE.bot.name,
+        webhookVerifier,
+      }),
+      () =>
         createInMemoryBacklogApi({
           projects: [conformanceFixture.baseProject()],
-        }),
-    }),
+        })
+    ),
   makeWebhookRequest: () => webhookRequest(issueCommented(), { token: null }),
 });
 
 selfMessageContract({
   name: 'backlog',
   setup: async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const chat = createMockChatInstance({ logger: createMockLogger() });
     await adapter.initialize(chat);
     return { adapter, chat };
@@ -4043,7 +4155,10 @@ selfMessageContract({
 selfMessageContract({
   name: 'backlog (pull request)',
   setup: async () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
+    const adapter = onPort(
+      createBacklogAdapter(webhookAdapterConfig()),
+      fixturePort
+    );
     const chat = createMockChatInstance({ logger: createMockLogger() });
     await adapter.initialize(chat);
     return { adapter, chat };
@@ -4076,12 +4191,11 @@ function myselfCountingApi(host: string = FIXTURE.host) {
   return { api, getMyself, host };
 }
 
-function identitylessConfig(createApi: () => BacklogApi) {
+function identitylessConfig() {
   return {
     host: FIXTURE.host,
     apiKey: 'test-api-key',
     webhookSecret: FIXTURE.webhookSecret,
-    createApi,
   };
 }
 
@@ -4098,11 +4212,14 @@ function selfAuthoredComment() {
 describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   it('a configured botUserId and botUserName cost no GET /users/myself at all', async () => {
     const { api, getMyself } = myselfCountingApi();
-    const adapter = createBacklogAdapter({
-      ...identitylessConfig(() => api),
-      botUserId: FIXTURE.bot.id,
-      botUserName: FIXTURE.bot.name,
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        ...identitylessConfig(),
+        botUserId: FIXTURE.bot.id,
+        botUserName: FIXTURE.bot.name,
+      }),
+      () => api
+    );
     const chat = createMockChatInstance({ logger: createMockLogger() });
     await adapter.initialize(chat);
 
@@ -4116,7 +4233,10 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   it('constructing without a bot identity validates synchronously and calls nothing', () => {
     const createApi = vi.fn(() => myselfCountingApi().api);
 
-    const adapter = createBacklogAdapter(identitylessConfig(createApi));
+    const adapter = onPort(
+      createBacklogAdapter(identitylessConfig()),
+      createApi
+    );
 
     expect(adapter.name).toBe('backlog');
     expect(createApi).not.toHaveBeenCalled();
@@ -4132,16 +4252,22 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
 
   it('a configured half is still validated when the other half is left to the API', () => {
     expect(() =>
-      createBacklogAdapter({
-        ...identitylessConfig(() => myselfCountingApi().api),
-        botUserName: '  ',
-      })
+      onPort(
+        createBacklogAdapter({
+          ...identitylessConfig(),
+          botUserName: '  ',
+        }),
+        () => myselfCountingApi().api
+      )
     ).toThrow(ValidationError);
     expect(() =>
-      createBacklogAdapter({
-        ...identitylessConfig(() => myselfCountingApi().api),
-        botUserId: 0,
-      })
+      onPort(
+        createBacklogAdapter({
+          ...identitylessConfig(),
+          botUserId: 0,
+        }),
+        () => myselfCountingApi().api
+      )
     ).toThrow(ValidationError);
   });
 
@@ -4149,7 +4275,10 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
     process.env.BACKLOG_BOT_USER_ID = '';
     process.env.BACKLOG_BOT_USER_NAME = '';
     const { api, getMyself } = myselfCountingApi();
-    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+    const adapter = onPort(
+      createBacklogAdapter(identitylessConfig()),
+      () => api
+    );
 
     await adapter.initialize(
       createMockChatInstance({ logger: createMockLogger() })
@@ -4160,8 +4289,9 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   });
 
   it('botUserName before the identity is known is refused rather than guessed', () => {
-    const adapter = createBacklogAdapter(
-      identitylessConfig(() => myselfCountingApi().api)
+    const adapter = onPort(
+      createBacklogAdapter(identitylessConfig()),
+      () => myselfCountingApi().api
     );
 
     let failure: unknown;
@@ -4177,7 +4307,10 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
 
   it('with neither configured, initialize reads both from one GET /users/myself', async () => {
     const { api, getMyself } = myselfCountingApi();
-    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+    const adapter = onPort(
+      createBacklogAdapter(identitylessConfig()),
+      () => api
+    );
     const chat = createMockChatInstance({ logger: createMockLogger() });
 
     await adapter.initialize(chat);
@@ -4189,7 +4322,10 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
 
   it('the fetched id suppresses the bot’s own comments and the lookup is not repeated', async () => {
     const { api, getMyself } = myselfCountingApi();
-    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+    const adapter = onPort(
+      createBacklogAdapter(identitylessConfig()),
+      () => api
+    );
     const chat = createMockChatInstance({ logger: createMockLogger() });
     await adapter.initialize(chat);
 
@@ -4208,10 +4344,13 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
 
   it('a configured botUserName wins over the fetched name, and the id still comes from the API', async () => {
     const { api } = myselfCountingApi();
-    const adapter = createBacklogAdapter({
-      ...identitylessConfig(() => api),
-      botUserName: 'Support Bot',
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        ...identitylessConfig(),
+        botUserName: 'Support Bot',
+      }),
+      () => api
+    );
     const chat = createMockChatInstance({ logger: createMockLogger() });
     await adapter.initialize(chat);
 
@@ -4222,10 +4361,13 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
 
   it('a configured botUserId wins over the fetched id, and the name still comes from the API', async () => {
     const { api } = myselfCountingApi();
-    const adapter = createBacklogAdapter({
-      ...identitylessConfig(() => api),
-      botUserId: FIXTURE.alice.id,
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        ...identitylessConfig(),
+        botUserId: FIXTURE.alice.id,
+      }),
+      () => api
+    );
     const chat = createMockChatInstance({ logger: createMockLogger() });
     await adapter.initialize(chat);
 
@@ -4242,23 +4384,25 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
       [first.host, first.api],
       [second.host, second.api],
     ]);
-    const adapter = createBacklogAdapter({
-      installations: [
-        {
-          host: FIXTURE.host,
-          apiKey: 'k1',
-          botUserId: FIXTURE.bot.id,
-          botUserName: FIXTURE.bot.name,
-          webhookSecret: FIXTURE.webhookSecret,
-        },
-        {
-          host: FIXTURE.otherHost,
-          apiKey: 'k2',
-          webhookSecret: 'other-webhook-secret',
-        },
-      ],
-      createApi: (installation) => ports.get(installation.host) as BacklogApi,
-    });
+    const adapter = onPort(
+      createBacklogAdapter({
+        installations: [
+          {
+            host: FIXTURE.host,
+            apiKey: 'k1',
+            botUserId: FIXTURE.bot.id,
+            botUserName: FIXTURE.bot.name,
+            webhookSecret: FIXTURE.webhookSecret,
+          },
+          {
+            host: FIXTURE.otherHost,
+            apiKey: 'k2',
+            webhookSecret: 'other-webhook-secret',
+          },
+        ],
+      }),
+      (installation) => ports.get(installation.host) as BacklogApi
+    );
     const chat = createMockChatInstance({ logger: createMockLogger() });
 
     await adapter.initialize(chat);
@@ -4272,7 +4416,10 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
     const { api, getMyself } = myselfCountingApi();
     getMyself.mockRejectedValueOnce(new Error('network down'));
     const logger = createMockLogger();
-    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+    const adapter = onPort(
+      createBacklogAdapter(identitylessConfig()),
+      () => api
+    );
     const chat = createMockChatInstance({ logger });
 
     await expect(adapter.initialize(chat)).resolves.toBeUndefined();
@@ -4297,7 +4444,10 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
     // bot that answers its own comments answers them forever.
     const { api, getMyself } = myselfCountingApi();
     getMyself.mockRejectedValue(new Error('network down'));
-    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+    const adapter = onPort(
+      createBacklogAdapter(identitylessConfig()),
+      () => api
+    );
     const chat = createMockChatInstance({ logger: createMockLogger() });
     await adapter.initialize(chat);
 
@@ -4311,8 +4461,9 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
   });
 
   it('parseMessage before the identity is known is refused rather than guessed', () => {
-    const adapter = createBacklogAdapter(
-      identitylessConfig(() => myselfCountingApi().api)
+    const adapter = onPort(
+      createBacklogAdapter(identitylessConfig()),
+      () => myselfCountingApi().api
     );
 
     let failure: unknown;
@@ -4333,7 +4484,10 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
 
   it('a mention of the fetched name reaches a real Chat, which answers once', async () => {
     const { api } = myselfCountingApi();
-    const adapter = createBacklogAdapter(identitylessConfig(() => api));
+    const adapter = onPort(
+      createBacklogAdapter(identitylessConfig()),
+      () => api
+    );
     let resolveMentionHandled: (() => void) | undefined;
     const mentionHandled = new Promise<void>((resolve) => {
       resolveMentionHandled = resolve;
@@ -4367,8 +4521,9 @@ describe('BacklogAdapter bot identity (§3.2, D23)', () => {
 selfMessageContract({
   name: 'backlog (identity from GET /users/myself)',
   setup: async () => {
-    const adapter = createBacklogAdapter(
-      identitylessConfig(() => myselfCountingApi().api)
+    const adapter = onPort(
+      createBacklogAdapter(identitylessConfig()),
+      () => myselfCountingApi().api
     );
     const chat = createMockChatInstance({ logger: createMockLogger() });
     await adapter.initialize(chat);

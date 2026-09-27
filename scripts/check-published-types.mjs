@@ -94,3 +94,35 @@ if (leaked.length > 0) {
   );
 }
 
+/**
+ * Fails the build when the declarations hand a consumer a type it cannot
+ * name. tsdown bundles every type an export reaches, but exports only what
+ * `src/index.ts` names, so a type that `BacklogRawMessage` references and the
+ * barrel forgets still ships, as a declaration nobody can import (#113).
+ */
+const DECLARED_TYPE_PATTERN = /^(?:declare )?(?:interface|type) (\w+)/gm;
+const TYPE_EXPORT_PATTERN = /^export type \{([^}]*)\}/gm;
+
+const exportedTypes = new Set(
+  [...declarations.matchAll(TYPE_EXPORT_PATTERN)].flatMap((match) =>
+    match[1].split(',').map((name) =>
+      name
+        .trim()
+        .split(/\s+as\s+/)
+        .pop()
+    )
+  )
+);
+const unnameable = [...declarations.matchAll(DECLARED_TYPE_PATTERN)]
+  .map((match) => match[1])
+  .filter((name) => !exportedTypes.has(name))
+  .sort();
+
+if (unnameable.length > 0) {
+  throw new Error(
+    `${entry} declares ${unnameable.join(', ')} without exporting them, so ` +
+      'a consumer receives values of those types but cannot name them. ' +
+      'Export them from src/index.ts, or stop an exported type from ' +
+      'referencing them (docs/specs/adapter.md §3.1).'
+  );
+}

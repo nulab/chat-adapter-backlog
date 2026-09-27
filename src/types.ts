@@ -1,4 +1,3 @@
-import type { BacklogApi } from './client/port';
 import type { Logger } from 'chat';
 
 /**
@@ -537,15 +536,14 @@ export type Resolvable = string | (() => string | Promise<string>);
  * `BacklogAdapterConfig.webhookVerifier` is set (D2); the constructor
  * enforces both.
  *
- * Deliberately **not** the union {@link ResolvedCredential} uses, although
- * this is the same rule: config is the shape a consumer assembles, often from
+ * Deliberately **not** a union stating "exactly one credential", although
+ * that is the rule: config is the shape a consumer assembles, often from
  * `process.env` or JSON the compiler knows nothing about, and every field
  * here is checked at construction anyway. Stating the exclusivity in the
  * input type would turn one uniform `ValidationError` naming the field into a
  * type error a plain-JavaScript consumer never sees and a TypeScript one
  * meets while building the object rather than where the value came from. The
- * strictness belongs on the way out, which is what {@link
- * ResolvedInstallation} is for.
+ * strictness belongs on the way out, after the constructor's check.
  */
 export interface BacklogInstallation {
   host: string;
@@ -570,8 +568,8 @@ export type ResolvedCredential =
 
 /**
  * One configured Backlog installation after shape A/B resolution and
- * validation (docs/specs/adapter.md §3.2). `createApi` receives this, not the
- * raw config, so a test seam or a future port never has to re-derive
+ * validation (docs/specs/adapter.md §3.2). The port factory receives this,
+ * not the raw config, so a test seam or a future port never has to re-derive
  * validation the constructor already did — which is only worth anything if
  * the type says what was validated, so it is not a second copy of
  * {@link BacklogInstallation}:
@@ -580,11 +578,11 @@ export type ResolvedCredential =
  *   `apiKey`/`accessToken`" holds by construction;
  * - `host` is lowercased, and stays a plain `string` deliberately. A brand
  *   would state that too, but only by making every construction site — the
- *   constructor, every fixture, every `createApi` double a consumer writes —
+ *   constructor, every fixture, every port double a test writes —
  *   cast into it, and the one producer of the value is `validateHost` in
  *   `src/ids.ts`, which lowercases through the same grammar the id codec
  *   uses. The cost outweighs what the brand buys (issue #62);
- * - `botUserId`/`botUserName` stay as configured: `createApi` runs before
+ * - `botUserId`/`botUserName` stay as configured: the port is built before
  *   `GET /users/myself` has answered, so the fetched identity is not here.
  */
 export type ResolvedInstallation = {
@@ -617,9 +615,4 @@ export interface BacklogAdapterConfig {
   userName?: string;
   logger?: Logger;
   maxWebhookBodyBytes?: number;
-  /**
-   * Test seam and escape hatch: receives the resolved installation and returns
-   * the Backlog API port. Defaults to the `backlog-js`-backed implementation.
-   */
-  createApi?: (installation: ResolvedInstallation) => BacklogApi;
 }

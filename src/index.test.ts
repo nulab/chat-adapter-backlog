@@ -1,37 +1,6 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
 import { describe, expect, it } from 'vitest';
 
 import * as entry from './index';
-
-const SRC = path.dirname(fileURLToPath(import.meta.url));
-
-function declaredTypeNames(file: string): Set<string> {
-  const source = readFileSync(path.join(SRC, file), 'utf8');
-  return new Set(
-    [...source.matchAll(/^export (?:interface|type) (\w+)/gm)].map(
-      (match) => match[1] ?? ''
-    )
-  );
-}
-
-/**
- * The names the barrel's header claims are declared in both modules. Read out
- * of the prose rather than kept in a constant beside it, because the prose is
- * what a reader believes: the raw shapes were called `BacklogIssue` and
- * `BacklogComment` until they were renamed to `BacklogRaw*`, and the sentence
- * naming them as duplicates outlived the rename unchallenged.
- */
-function namesClaimedTwiceByTheHeader(): string[] {
-  const header = readFileSync(path.join(SRC, 'index.ts'), 'utf8').split(
-    '*/'
-  )[0];
-  const claim = (header ?? '').split('declared in both modules:')[1] ?? '';
-  const sentence = claim.split('.')[0] ?? '';
-  return [...sentence.matchAll(/`(\w+)`/g)].map((match) => match[1] ?? '');
-}
 
 /**
  * The package entry is the only surface a consumer sees, and `.github/workflows/ci.yml`
@@ -73,45 +42,36 @@ describe('package entry point', () => {
     ).toBe('backlog:example.backlog.com:500:pr:700:12');
   });
 
-  it('exports the id codec and the mention helpers', () => {
-    for (const name of [
-      'encodeThreadId',
-      'decodeThreadId',
-      'encodeChannelId',
-      'decodeChannelId',
-      'channelIdFromThreadId',
-      'encodeMessageId',
+  it('exports the two decoders a handler has no adapter member for', () => {
+    expect(typeof entry.decodeMessageId).toBe('function');
+    expect(typeof entry.decodeUserId).toBe('function');
+  });
+
+  it('exports nothing at run time beyond the adapter, its factory and those decoders', () => {
+    expect(Object.keys(entry).sort()).toEqual([
+      'BacklogAdapter',
+      'createBacklogAdapter',
       'decodeMessageId',
-      'encodeUserId',
       'decodeUserId',
-      'mentionUser',
-      'mentionTeam',
-      'mentionPattern',
-    ] as const) {
-      expect(typeof entry[name]).toBe('function');
-    }
-    expect(entry.MENTION_PROJECT_MEMBERS).toBe('<@project>');
-  });
-
-  it('exports the converters and the in-memory port for consumers to test against', () => {
-    expect(typeof entry.BacklogMarkdownConverter).toBe('function');
-    expect(typeof entry.BacklogNotationConverter).toBe('function');
-    expect(typeof entry.createInMemoryBacklogApi).toBe('function');
-  });
-
-  it('names in its header exactly the types the port and the raw-message module both declare', () => {
-    const port = declaredTypeNames('client/port.ts');
-    const raw = declaredTypeNames('types.ts');
-    const declaredTwice = [...port].filter((name) => raw.has(name)).sort();
-
-    expect(namesClaimedTwiceByTheHeader()).toEqual(declaredTwice);
+    ]);
   });
 
   it('keeps the internals off the public surface', () => {
-    // §3.1: the backlog-js wrapper, the zod schemas, the plain-text fallback
-    // converter, the fixtures and the subject layer are not part of the
-    // contract, so a consumer cannot come to depend on them.
+    // §3.1: the port and its in-memory double, the id encoders, the
+    // converters, the mention helpers, the backlog-js wrapper, the zod schemas
+    // and the subject layer are not part of the contract, so a consumer
+    // cannot come to depend on them.
     for (const name of [
+      'createInMemoryBacklogApi',
+      'encodeThreadId',
+      'decodeThreadId',
+      'channelIdFromThreadId',
+      'encodeMessageId',
+      'encodeUserId',
+      'BacklogMarkdownConverter',
+      'BacklogNotationConverter',
+      'mentionUser',
+      'mentionPattern',
       'createBacklogJsApi',
       'createBacklogJsTransport',
       'FallbackFormatConverter',

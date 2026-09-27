@@ -84,7 +84,7 @@ One `onNewMessage` handler serves both jobs, in `src/bot.ts`. Everything it
 decides is in `src/intake.ts`: the prompt, the fallback, and the two readers
 that say whether a delivery is interesting.
 
-**Is this an issue at all?** `decodeThreadId(thread.id)` gives the subject, and
+**Is this an issue at all?** `backlog.decodeThreadId(thread.id)` gives the subject, and
 a subject whose `kind` is not `issue` is dropped — the same webhook can carry
 pull-request activity.
 
@@ -126,7 +126,7 @@ Nothing else parses, and `newValue` is compared with `DONE_STATUS_ID`.
 the report; `generateText()` from the Vercel AI SDK answers it, and the reply
 is posted as the comment body with no parsing — the prompt fixes the Markdown
 shape, so there is nothing to parse. The reporter
-(`issue.createdUser.id`) is mentioned with `mentionUser()`. If the model throws
+(`issue.createdUser.id`) is mentioned as `<@U<id>>`, Backlog's mention notation. If the model throws
 or answers with nothing, a fixed sentence is posted instead and the reason is
 logged; the reporter always gets an answer.
 

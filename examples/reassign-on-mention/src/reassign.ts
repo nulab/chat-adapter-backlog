@@ -1,4 +1,3 @@
-import { mentionUser } from '@nulab/chat-adapter-backlog';
 import { z } from 'zod';
 
 /** A person this bot could hand the issue to: the two fields it needs of one. */
@@ -89,7 +88,7 @@ export function chooseAssignee(
 }
 
 /**
- * `mentionUser` builds Backlog's `<@U<id>>` notation, which notifies the user
+ * `<@U<id>>` is Backlog's mention notation, which notifies the user
  * on its own — no `notifiedUserId` needed — and survives both outbound
  * converters unchanged, so a plain string is all `thread.post` needs.
  */
@@ -101,7 +100,7 @@ export function reassignmentComment(decision: Reassignment): string {
     decision.candidateCount === 1
       ? '1 person'
       : `${decision.candidateCount} people`;
-  return `Assigned to ${mentionUser(decision.to.id)} (picked from ${people} you notified).`;
+  return `Assigned to <@U${decision.to.id}> (picked from ${people} you notified).`;
 }
 
 export const NO_CANDIDATES_COMMENT =
