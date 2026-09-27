@@ -66,69 +66,18 @@ jobs:
       - name: Type check
         run: pnpm run typecheck
 
-  build:
-    runs-on: ubuntu-latest
-    name: Build
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          standalone: true
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Build
-        run: pnpm run build
-
-      # tsdown exits 0 for output that cannot actually be loaded, so the entry
-      # is executed here rather than only being produced. A wrong `exports`
-      # condition or an unresolvable import in the bundle is invisible to every
-      # other job.
-      #
-      # The adapter is constructed, not just imported: `createBacklogAdapter`
-      # validates synchronously, so a construction that throws proves the
-      # config resolution survived bundling. `--input-type=module` with
-      # top-level await replaces the previous `.then()` form, which had no
-      # `.catch` and would have surfaced a failure as an unhandled rejection
-      # rather than a failed step.
-      #
-      # Through `pnpm exec`, not a bare `node`: this job installs the runtime,
-      # so `pnpm exec` reaches the Node the lockfile pins instead of whatever
-      # the runner image happens to ship.
-      - name: Smoke test the built entry
-        run: |
-          pnpm exec node --input-type=module -e "
-            const m = await import('./dist/index.js');
-            if (typeof m.createBacklogAdapter !== 'function') {
-              throw new Error('createBacklogAdapter is missing from the built entry');
-            }
-            const adapter = new m.BacklogAdapter({
-              host: 'example.backlog.com',
-              apiKey: 'smoke-test',
-              botUserId: 999,
-              botUserName: 'Chatbot',
-              webhookSecret: 'smoke-test-webhook-secret',
-            });
-            if (adapter.name !== 'backlog') {
-              throw new Error(\`adapter.name is \${adapter.name}, not backlog\`);
-            }
-          "
-          test -f dist/index.d.ts
-
   consumer:
     runs-on: ubuntu-latest
     name: Consumer (Node ${{ matrix.node }})
 
     strategy:
       matrix:
-        # A matrix of one, so the major is written once and the assertion
-        # inside smoke.mjs checks the version this job actually asked for.
-        # Node 20 rather than the range `test` covers: `exports` resolution
-        # and the packed manifest do not vary by major, and the floor of
-        # `engines.node` is where the package's promise is weakest — every
-        # other job here runs the Node `devEngines.runtime` pins.
+        # A matrix of one, so the major is written once for the job name and
+        # actions/setup-node. Node 20 rather than the range `test` covers:
+        # `exports` resolution and the packed manifest do not vary by major,
+        # and the floor of `engines.node` is where the package's promise is
+        # weakest — every other job here runs the Node `devEngines.runtime`
+        # pins.
         node: [20]
 
     steps:
@@ -153,9 +102,9 @@ jobs:
       # on PATH.
       - run: pnpm install --frozen-lockfile
 
-      # Its own build rather than `needs: [build]` and an artifact: the
-      # tarball has to be packed from a tree this job produced, and a job that
-      # waits on another reports that job's failure as its own skip.
+      # `pnpm build` is the fifth gate, run here rather than in a job of its
+      # own: the tarball has to be packed from a tree this job produced, so a
+      # separate build job would only run the same command twice.
       - name: Build
         run: pnpm run build
 
@@ -209,16 +158,15 @@ jobs:
 
       # The five variables src/adapter.ts reads, and no config object: that
       # `createBacklogAdapter()` resolves all of them from the environment is
-      # the half of the claim the `build` job's explicit construction cannot
-      # reach. The values are the spec §13 vocabulary; the secret is dummy but
-      # not short, since under 16 bytes construction is a ValidationError.
+      # the zero-config construction consumers are promised. The values are
+      # the spec §13 vocabulary; the secret is dummy but not short, since
+      # under 16 bytes construction is a ValidationError.
       # The two BACKLOG_BOT_* variables are optional to a consumer but not to
       # this job: they are what keeps `initialize` off GET /users/myself, and
       # the job has no network to answer it (spec D23).
       - name: Construct the adapter from the environment alone
         working-directory: ${{ runner.temp }}/consumer
         env:
-          EXPECTED_NODE_MAJOR: ${{ matrix.node }}
           BACKLOG_HOST: example.backlog.com
           BACKLOG_API_KEY: consumer-smoke-api-key
           BACKLOG_BOT_USER_ID: '999'

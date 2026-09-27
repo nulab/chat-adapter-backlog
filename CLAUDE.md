@@ -53,14 +53,10 @@ it lands, read `src/index.ts` for which side the barrel exports. zod types
 never reach the published `.d.ts`: `scripts/check-published-types.mjs` fails
 the build on any import there but `chat` and `backlog-js`.
 
-`.github/workflows/ci.yml` builds the bundle, imports it in a real Node
-process, constructs an adapter from it and asserts `adapter.name === 'backlog'`.
-Changing the public entry means changing that smoke test in the same commit, or
-the build job breaks.
-
-A second job, `consumer`, is the same claim about the **published** package
-rather than the bundle: it packs the tarball, installs it with npm outside the
-repository and runs `scripts/consumer-smoke/smoke.mjs` on Node 20, where the
+`.github/workflows/ci.yml`'s `consumer` job builds the package, packs the
+tarball, installs it with npm outside the repository — lifecycle scripts
+included, so a `preinstall` that would break a consumer's install (#99) fails
+there — and runs `scripts/consumer-smoke/smoke.mjs` on Node 20, where the
 entry has to resolve through `exports` and `createBacklogAdapter()` gets no
 argument at all — the five `BACKLOG_*` variables are the whole configuration,
 and because the two `BACKLOG_BOT_*` ones are set, `initialize` must reach no
@@ -218,13 +214,10 @@ pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
   say `import type`), `noUnusedLocals` and `noUnusedParameters` (prefix
   intentionally unused params with `_`).
 - `pnpm build` fails on `publint` problems, on `attw` problems at the
-  `esm-only` profile, via `scripts/check-published-scripts.mjs`, which runs
-  before tsdown, on a `package.json` that declares a `preinstall`, `install` or
-  `postinstall` script — npm and Yarn run those on a consumer's machine, where
-  no devDependency exists (#99) — and via `scripts/check-published-types.mjs`,
-  which runs after tsdown, on a `dist/index.d.ts` that imports any module but
-  `chat` and `backlog-js`. Touching `exports`, `files`, `scripts` or the build
-  config means running the build, not just the type check.
+  `esm-only` profile, and via `scripts/check-published-types.mjs`, which runs
+  after tsdown, on a `dist/index.d.ts` that imports any module but `chat` and
+  `backlog-js`. Touching `exports`, `files`, `scripts` or the build config
+  means running the build, not just the type check.
 - `engines.node` is `">=20"` (matching the `chat` core package), so do not use
   APIs newer than Node 20 in shipped code. The test matrix runs the suite on
   Node 20, 22, 24 and 26, so a 26-only API now fails a job rather than reaching

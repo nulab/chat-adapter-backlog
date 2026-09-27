@@ -110,9 +110,9 @@ curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=12.2.1 sh -
   run `only-allow pnpm`, but npm and Yarn run a dependency's `preinstall` on
   the consumer's machine, and `only-allow` is a devDependency no consumer has,
   so every npm install of the published package failed with exit 127 (#99;
-  `scripts/check-published-scripts.mjs` now fails the build on any such
-  script). The `packageManager` field still turns Yarn 1 away outright — it
-  insists on Corepack — and makes pnpm switch itself to the pinned version.
+  CI's `consumer` job now fails on any such script). The `packageManager`
+  field still turns Yarn 1 away outright — it insists on Corepack — and makes
+  pnpm switch itself to the pinned version.
   `devEngines.packageManager` was measured and not adopted: npm enforces it on
   `npm version` and `npm publish` as well as `npm install`, and those two are
   how release.yml publishes. Running `npm install` here is unsupported rather
@@ -144,11 +144,9 @@ later ones.
 
 | Script               | Command                                          | When to use it                                                                                        |
 | -------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| `pnpm build`         | `tsdown`                                         | Produce `dist/` (ESM + `.d.ts` + source maps). Also runs `publint`, `attw` and the two `scripts/check-published-*.mjs` guards, and fails on any. |
-| `pnpm dev`           | `tsdown --watch`                                 | Rebuild on change while working against a local consumer.                                             |
+| `pnpm build`         | `tsdown`                                         | Produce `dist/` (ESM + `.d.ts`). Also runs `publint`, `attw` and `scripts/check-published-types.mjs`, and fails on any. |
 | `pnpm test`          | `vitest run`                                     | Run the suite once. Required before opening a PR. Needs no credentials.                               |
 | `pnpm test:watch`    | `vitest`                                         | Watch mode while writing tests.                                                                       |
-| `pnpm test:coverage` | `vitest run --coverage`                          | V8 coverage into `coverage/` (text, json, html, lcov).                                                |
 | `pnpm lint`          | `oxlint --max-warnings 0`                        | Lint. Warnings are failures, so `no-console` warnings block CI too.                                   |
 | `pnpm lint:fix`      | `oxlint --fix`                                   | Apply the auto-fixable lint results.                                                                  |
 | `pnpm format`        | `oxfmt src examples tsdown.config.ts vitest.config.ts` | Format the files the formatter owns.                                                            |
@@ -358,14 +356,13 @@ not written — never a paraphrase of the spec or a section number.
 
 `.github/workflows/ci.yml` runs on pushes to `main`, on **every** pull request
 whatever branch it is based on — so a stacked PR is checked before its parent
-merges — and as a reusable workflow called by the release. Five jobs:
+merges — and as a reusable workflow called by the release. Four jobs:
 
 | Job          | What it does                                                                       |
 | ------------ | ---------------------------------------------------------------------------------- |
 | `lint`       | `pnpm lint` then `pnpm format:check`.                                              |
 | `typecheck`  | `pnpm typecheck`.                                                                  |
-| `build`      | `pnpm build`, then imports `dist/index.js` in a real Node process and asserts the entry loads and `dist/index.d.ts` exists. |
-| `consumer`   | `pnpm pack`, then installs the tarball with npm into a directory outside the repository, runs `scripts/consumer-smoke/smoke.mjs` on Node 20, and type checks the documented usage and every `examples/*` against the same tarball. |
+| `consumer`   | `pnpm build` and `pnpm pack`, then installs the tarball with npm into a directory outside the repository, runs `scripts/consumer-smoke/smoke.mjs` on Node 20, and type checks the documented usage and every `examples/*` against the same tarball. |
 | `test`       | Matrix over Node 20, 22, 24 and 26. Asserts the running Node is the major the job asked for, then runs the suite (`vitest run`) with a bare `node`. |
 
 Every job provisions pnpm with `pnpm/action-setup` and `standalone: true`,
@@ -374,9 +371,9 @@ which installs the pnpm build with Node.js linked in and reads the version from
 that `pnpm install` provisions, so nothing in CI may assume a Node on PATH
 before pnpm has run.
 
-`lint`, `typecheck` and `build` then run
+`lint` and `typecheck` then run
 `pnpm install --frozen-lockfile` and get the runtime the lockfile pins, exactly
-like a contributor — no job carries a Node version of its own.
+like a contributor, and name no Node version of their own.
 
 `test` and `consumer` are the two that name a Node version, and they get it on
 PATH in opposite ways. `consumer` installs with the runtime, because building
@@ -409,18 +406,13 @@ re-materializing install rather than letting it pass as three green checks.
 A bare `node` appears only where a job has deliberately put one on PATH with
 `actions/setup-node`: the assertion and the suite in `test`, and the npm
 installs, the consumer script and the type checks in `consumer`. Everywhere
-else it goes through `pnpm exec node`, the build job's smoke test included —
-the runner images ship a Node of their own, and it would quietly service any
-step that asked for it.
+else it goes through pnpm — the runner images ship a Node of their own, and it
+would quietly service any step that asked for it.
 
 Installs use `pnpm install --frozen-lockfile`, so `pnpm-lock.yaml` must be
 committed alongside any `package.json` change.
 
-The build job's smoke test asserts on the value the entry point exports today.
-If you change the public entry, the smoke test in `ci.yml` has to change with
-it.
-
-`consumer` covers what a path import cannot. It packs the tarball with
+`consumer` builds the package, then packs the tarball with
 `pnpm pack --out` — a name of its own, because the default is derived from
 `version`, which stays `0.0.0` on `main` — installs it with npm under
 `$RUNNER_TEMP`, and runs `scripts/consumer-smoke/smoke.mjs` from there:
@@ -437,8 +429,6 @@ required variables alone.
 
 The install runs lifecycle scripts, as a consumer's does, so a `preinstall`
 the tarball should not carry (#99) fails it rather than being stepped around.
-`scripts/check-published-scripts.mjs` is the guard that names the cause; this
-install is where a consumer would have met it.
 
 Two type checks follow, against the declarations that shipped rather than
 `src/`. `attw` and `check-published-types.mjs` prove the declarations resolve
