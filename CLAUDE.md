@@ -164,6 +164,10 @@ needs a reason specific to Backlog.
   Without one, delete it; do not keep it because it already works.
 - Everything public is permanent once released and a test obligation now, so
   the default answer to "should this be exported?" is no.
+- Until the first release is published, there is no backward compatibility:
+  a breaking change is made directly, with the `!` title and `BREAKING CHANGE:`
+  footer the PR rules require, and never with a shim, deprecated alias or
+  fallback for the old shape. The maintainer revisits this after that release.
 - A spec requirement that no consumer relies on is a deletion from the spec,
   not an implementation task. Propose the deletion; do not build around it.
 - Say a thing once. Two modules that make the same decision, two types for
