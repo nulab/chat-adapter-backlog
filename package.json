@@ -47,17 +47,17 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "chat": "^4.41.0"
+    "chat": "^4.41.1"
   },
   "devDependencies": {
     "@arethetypeswrong/core": "^0.18.5",
-    "@chat-adapter/state-memory": "^4.41.0",
-    "@chat-adapter/tests": "^4.41.0",
-    "@types/node": "^26.6.1",
-    "chat": "^4.41.0",
-    "lefthook": "^2.1.14",
-    "oxfmt": "^0.70.0",
-    "oxlint": "^1.83.0",
+    "@chat-adapter/state-memory": "^4.41.1",
+    "@chat-adapter/tests": "^4.41.1",
+    "@types/node": "^26.6.3",
+    "chat": "^4.41.1",
+    "lefthook": "^2.1.15",
+    "oxfmt": "^0.71.0",
+    "oxlint": "^1.86.0",
     "publint": "^0.3.24",
     "tsdown": "^0.23.0",
     "typescript": "^7.0.2",
