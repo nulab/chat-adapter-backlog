@@ -33,5 +33,5 @@ nothing about live behavior.
       PR too (CLAUDE.md, State of the repo).
 
 <!-- Adapter design constraints: rate limits in .claude/rules/backlog-api-facts.md; webhook authenticity
-(D2) and `stream()` (D4) in docs/specs/adapter.md's decision table; how to comment and
+(D2) and `stream()` (D4) in docs/spec.md's decision table; how to comment and
 where each fact lives in CLAUDE.md; title, label, squash body and stacks in CONTRIBUTING.md. -->

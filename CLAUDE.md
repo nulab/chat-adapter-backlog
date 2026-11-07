@@ -71,15 +71,15 @@ Every fact has exactly one home. Before writing one down, find that home; if
 the fact is already there, point at it or say nothing. A second copy is not
 emphasis, it is the version that goes stale.
 
-| Kind of fact                                         | Home                                                       |
-| ---------------------------------------------------- | ---------------------------------------------------------- |
-| How the adapter does something                       | the code: names, types, structure                          |
-| What it guarantees, member by member                 | the tests, named after the behaviour                       |
-| The consumer-visible contract and design decisions   | [the spec](./docs/specs/adapter.md) and its decision table |
-| What Backlog and the Chat SDK core do, with the date | `.claude/rules/*.md`                                       |
-| Why one change was made                              | the squash commit body                                     |
-| Why the obvious code would break                     | a comment on that code                                     |
-| How to work here: gates, CI coupling, PR rules       | this file and [CONTRIBUTING.md](./CONTRIBUTING.md)         |
+| Kind of fact                                         | Home                                               |
+| ---------------------------------------------------- | -------------------------------------------------- |
+| How the adapter does something                       | the code: names, types, structure                  |
+| What it guarantees, member by member                 | the tests, named after the behaviour               |
+| The consumer-visible contract and design decisions   | [the spec](./docs/spec.md) and its decision table  |
+| What Backlog and the Chat SDK core do, with the date | `.claude/rules/*.md`                               |
+| Why one change was made                              | the squash commit body                             |
+| Why the obvious code would break                     | a comment on that code                             |
+| How to work here: gates, CI coupling, PR rules       | this file and [CONTRIBUTING.md](./CONTRIBUTING.md) |
 
 - **The spec** states what a consumer can observe and which decisions shaped
   it. It describes behaviour: it does not restate the README's content, list
@@ -118,10 +118,10 @@ with no comments is the expected state for straightforward code; comment
 volume is not care.
 
 - **Never restate the spec, a rules file or the types.** A paraphrase of
-  docs/specs/adapter.md tells the reader nothing the spec does not and goes
+  docs/spec.md tells the reader nothing the spec does not and goes
   stale the day the spec changes. Cite the decision instead, or say nothing.
 - **No section numbers in `src/`.** Not `§5.1 step 12`, not
-  `docs/specs/adapter.md §3.2`, not `docs/plans/… §3.4`: sections renumber,
+  `docs/spec.md §3.2`, not `docs/plans/… §3.4`: sections renumber,
   plans are records, and an exported doc comment ships to a consumer who has
   neither document. When a Why-not rests on a recorded design decision, end
   it with the **decision id** alone — `(D5)`, `(D-PR3)` — which is stable and

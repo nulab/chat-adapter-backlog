@@ -123,7 +123,7 @@ export function checkPublishedTypes(root: string): void {
         `but a consumer only installs ${[...ALLOWED_SPECIFIERS].map((s) => `"${s}"`).join(', ')}.\n` +
         'An exported type is reaching an implementation type. Declare the ' +
         'public shape by hand in src/types.ts and keep the schema aligned with ' +
-        'it (docs/specs/adapter.md D-API1). If the module really belongs in the ' +
+        'it (docs/spec.md D-API1). If the module really belongs in the ' +
         'published contract, add it to ALLOWED_SPECIFIERS here and to the ' +
         "spec's exports in the same commit."
     );
@@ -139,7 +139,7 @@ export function checkPublishedTypes(root: string): void {
       `${entry} declares ${unnameable.join(', ')} without exporting them, so ` +
         'a consumer receives values of those types but cannot name them. ' +
         'Export them from src/index.ts, or stop an exported type from ' +
-        'referencing them (docs/specs/adapter.md D-API1).'
+        'referencing them (docs/spec.md D-API1).'
     );
   }
 

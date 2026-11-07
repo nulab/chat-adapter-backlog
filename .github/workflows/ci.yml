@@ -129,7 +129,7 @@ jobs:
       # The four variables src/config.ts reads, and no config object:
       # that `createBacklogAdapter()` resolves all of them from the
       # environment is the zero-config construction consumers are promised.
-      # The values are the sample-messages.md vocabulary; the secret is dummy
+      # The values are the docs/sample-messages.md vocabulary; the secret is dummy
       # but not short, since under 16 bytes construction is a ValidationError.
       # BACKLOG_BOT_USER_ID is required: without it construction
       # throws, and with it `initialize` makes no request,

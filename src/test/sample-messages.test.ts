@@ -27,7 +27,7 @@ import {
   statusChanged,
 } from './fixtures/webhooks';
 
-const SAMPLES_PATH = '../../sample-messages.md';
+const SAMPLES_PATH = '../../docs/sample-messages.md';
 
 const rows: [string, string, string, unknown][] = [
   [
