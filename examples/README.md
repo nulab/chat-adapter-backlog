@@ -45,7 +45,7 @@ Vercel project. Do this once; an example's own README picks up from here.
 
 ### 1. A bot user, its API key, and its numeric id
 
-Follow **Webhook setup** in the [root README](../README.md#webhook-setup):
+Follow **Webhook setup** in the [root README](https://github.com/nulab/chat-adapter-backlog/blob/main/README.md#webhook-setup):
 create a bot user, add it to the project, issue an API key as that user, and
 find its numeric id (the `id`, not the login `userId`) with
 `curl -H "Backlog-API-Key: $BACKLOG_API_KEY" https://$BACKLOG_HOST/api/v2/users/myself`,
@@ -76,7 +76,7 @@ https://<your-app>/api/webhooks/backlog?token=<secret>
 
 `<secret>` is the value above, exactly as in `BACKLOG_WEBHOOK_SECRET`.
 
-Read **Webhook authenticity** in the [root README](../README.md#webhook-authenticity)
+Read **Webhook authenticity** in the [root README](https://github.com/nulab/chat-adapter-backlog/blob/main/README.md#webhook-authenticity)
 before you deploy anything. The short version: the URL is the credential, so
 keep it out of logs and issue trackers, and register it only in the space
 `BACKLOG_HOST` names.
@@ -140,8 +140,8 @@ per-issue event — and that is true of a batch of one, so an update made from
 the issue list is a type 14 even for a single issue. The adapter fans that
 delivery out into one message per issue. Leaving 14 unregistered is the
 supported way to decline the fan-out, at the cost of missing any update made
-from the issue list. The root README's **Platform setup** covers the trade-off
-in full.
+from the issue list. The root README's [Webhook setup](https://github.com/nulab/chat-adapter-backlog/blob/main/README.md#webhook-setup) covers the
+trade-off.
 
 ## What every example looks like
 
@@ -174,7 +174,7 @@ than boilerplate:
   keys the adapter's own schema does not name readable at all — the payload is
   the body Backlog sent, with its unknown keys intact.
 - **Backlog is called through `backlog.client()`**, the `backlog-js` client
-  the adapter hands out, for the endpoints its port does not name. It is the
+  the adapter hands out, for every endpoint outside the Chat SDK contract. It is the
   same client the adapter makes its own calls with, so an example's requests
   are counted in the same rate-limit budget, retried on a 429 by the same rule,
   and fail with the same error classes.

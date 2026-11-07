@@ -74,9 +74,8 @@ async function gateOnClose(thread: Thread, message: Message): Promise<void> {
     return;
   }
 
-  // Through the client the adapter hands out rather than a second one built
-  // here: the port names no custom fields, but this request still spends the
-  // adapter's own rate-limit budget and fails with its error classes.
+  // Not a client of our own: the adapter's keeps the 429 retry and error
+  // classes.
   const issue = await backlog.client().getIssue(issueId);
   const field = requiredFieldState(
     issue.customFields,

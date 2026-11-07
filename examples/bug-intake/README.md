@@ -126,7 +126,7 @@ Nothing else parses, and `newValue` is compared with `DONE_STATUS_ID`.
 the report; `generateText()` from the Vercel AI SDK answers it, and the reply
 is posted as the comment body with no parsing — the prompt fixes the Markdown
 shape, so there is nothing to parse. The reporter
-(`issue.createdUser.id`) is mentioned as `<@U<id>>`, Backlog's mention notation. If the model throws
+(`issue.createdUser.id`) is mentioned as `<@U<id>>`, Backlog's mention syntax. If the model throws
 or answers with nothing, a fixed sentence is posted instead and the reason is
 logged; the reporter always gets an answer.
 

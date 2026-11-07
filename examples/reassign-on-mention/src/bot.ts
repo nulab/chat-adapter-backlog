@@ -49,10 +49,8 @@ chat.onNewMention(async (thread, message) => {
   );
 
   if (decision.kind === 'reassign') {
-    // The adapter's port has no issue-update member, so this goes through the
-    // `backlog-js` client it hands out — the same one it makes its own calls
-    // with, so this request is counted in the same rate-limit budget and its
-    // failures arrive as the same error classes.
+    // Not a client of our own: the adapter's keeps the 429 retry and error
+    // classes.
     await backlog
       .client()
       .patchIssue(subject.issueId, { assigneeId: decision.to.id });
