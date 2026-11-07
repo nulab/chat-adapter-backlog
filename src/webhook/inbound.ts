@@ -1,11 +1,6 @@
 import { Message } from 'chat';
 
-import {
-  encodeMessageId,
-  encodeThreadId,
-  mentionPattern,
-  mentionUser,
-} from '../ids';
+import { encodeMessageId, encodeThreadId } from '../ids';
 import { authorOf } from '../reads';
 
 import { payloadOf } from './payload';
@@ -28,62 +23,29 @@ export type BulkUpdateLink = BulkUpdateActivity['content']['link'][number];
 export interface InboundContext {
   host: string;
   botUserId: number;
-  botUserName?: string | undefined;
   format: (text: string) => MessageData['formatted'];
 }
 
 type Notification = WebhookActivity['notifications'][number];
 
 interface MentionEvidence {
-  /** Unset turns off the two rules that match the name; the id rules remain. */
-  botUserName: string | undefined;
   botUserId: number;
-  text: string;
   /**
    * Only a root activity's `content.assignee`. On every other type the key is
    * the standing assignee, repeated whether or not it changed (measured), so
    * reading it there turns an unrelated edit into a mention.
    */
   assigneeId: number | undefined;
-  changes: readonly BacklogChange[];
   notifications: readonly Notification[];
-  /**
-   * A pull request's summary is stored without `<@U<id>>` being rewritten to
-   * `@<display name>` (measured); everywhere else a literal `<@U…>` is a
-   * mention that notified nobody.
-   */
-  rawMentionSurvives: boolean;
 }
 
-// An issue reports a new assignee as `assigner`, a pull request as `assignee`,
-// both by display name (measured).
-const ASSIGNMENT_CHANGE_FIELDS: readonly string[] = ['assigner', 'assignee'];
-
 function detectMention(evidence: MentionEvidence): boolean {
-  const { botUserName, botUserId, text, assigneeId, changes } = evidence;
+  const { botUserId, assigneeId } = evidence;
   // Not narrowed to one `reason`: an allowlist could only drop a directed
   // notification whose code nobody has measured yet.
-  if (evidence.notifications.some((entry) => entry.user.id === botUserId)) {
-    return true;
-  }
-  if (botUserName !== undefined && mentionPattern(botUserName).test(text)) {
-    return true;
-  }
-  if (evidence.rawMentionSurvives && text.includes(mentionUser(botUserId))) {
-    return true;
-  }
-  if (assigneeId === botUserId) {
-    return true;
-  }
-  // Kept beside the notification rule for a body replayed from the activity
-  // API, whose `notifications[]` is always empty (measured).
   return (
-    botUserName !== undefined &&
-    changes.some(
-      (change) =>
-        ASSIGNMENT_CHANGE_FIELDS.includes(change.field) &&
-        change.newValue === botUserName
-    )
+    evidence.notifications.some((entry) => entry.user.id === botUserId) ||
+    assigneeId === botUserId
   );
 }
 
@@ -130,7 +92,6 @@ interface MessageParts {
   attachments: Attachment[];
   assigneeId: number | undefined;
   changes: BacklogChange[];
-  rawMentionSurvives: boolean;
 }
 
 // Comment edits emit no webhook (measured), so a webhook message is never
@@ -141,8 +102,8 @@ function assemble(
   parts: MessageParts,
   raw: BacklogRawMessage
 ): Message<BacklogRawMessage> {
-  const { host, botUserId, botUserName } = context;
-  const { subject, text, changes } = parts;
+  const { host, botUserId } = context;
+  const { subject, text } = parts;
   return new Message<BacklogRawMessage>({
     id: encodeMessageId({ host, subject, ...parts.part }),
     threadId: encodeThreadId({ host, projectId: activity.project.id, subject }),
@@ -153,13 +114,9 @@ function assemble(
     metadata: { dateSent: new Date(activity.created), edited: false },
     attachments: parts.attachments,
     isMention: detectMention({
-      botUserName,
       botUserId,
-      text,
       assigneeId: parts.assigneeId,
-      changes,
       notifications: activity.notifications,
-      rawMentionSurvives: parts.rawMentionSurvives,
     }),
   });
 }
@@ -179,7 +136,6 @@ function rootParts(
     attachments: attachments.map((file) => subject.webhookAttachment(file)),
     assigneeId: assignee?.id,
     changes: [],
-    rawMentionSurvives: activity.type === 18,
   };
 }
 
@@ -204,7 +160,6 @@ function commentParts(
     ],
     assigneeId: undefined,
     changes,
-    rawMentionSurvives: false,
   };
 }
 
@@ -248,7 +203,6 @@ export function buildBulkUpdateMessage(
       attachments: [],
       assigneeId: undefined,
       changes,
-      rawMentionSurvives: false,
     },
     {
       kind: 'bulkUpdate',

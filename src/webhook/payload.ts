@@ -60,7 +60,7 @@ const envelope = {
   created: z.string(),
   project: z.looseObject({ id: z.number() }),
   createdUser: userSchema,
-  // Absent on a body replayed from `GET /space/activities` (measured).
+  // Absent on a `GET /space/activities` entry (measured).
   notifications: z
     .array(z.looseObject({ user: z.looseObject({ id: z.number() }) }))
     .catch([]),
@@ -99,8 +99,8 @@ const activitySchema = z.discriminatedUnion('type', [
     content: z.looseObject({
       link: z.array(
         z.looseObject({
-          // A decimal string over the webhook, a number from the activity API
-          // (measured).
+          // A decimal string over the webhook (measured); `coerce` keeps the
+          // numeric id the rest of the adapter reads.
           id: z.coerce.number(),
           comment: commentSchema,
         })

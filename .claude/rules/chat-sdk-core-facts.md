@@ -58,12 +58,18 @@ wins, so re-verify against the tag before changing code.
 
 ## Mention detection
 
-- `message.isMention = message.isMention || detectMention(...)`; the regex is
+- Up to `chat@4.40.0`: `message.isMention = message.isMention || detectMention(...)`
+  (`chat.ts:3180` at that tag). From `chat@4.41.0`: `message.isMention =
+  message.isMention ?? detectMention(...)` (vercel/chat#946 "honor
+  adapter-reported non-mentions", commit `fcdc1c9`, 2026-09-17; `chat.ts:3279`
+  at `chat@4.41.0`, still `??` at `4.44.0`; verified 2026-11-07). So an adapter
+  that sets `false` suppresses the core's `@userName` match, and only an unset
+  value falls through to it. The core's regex is
   `(?<!\w)@<escaped userName>(?![\w-])`, case-insensitive, with `userName =
-  adapter.userName || chat.userName` (`chat.ts:3174-3308, 3271`); with
+  adapter.userName || chat.userName` (`chat.ts:3174-3308, 3271` at 4.40.0); with
   `botUserId` set, `@<botUserId>` and `<@!?<botUserId>>` also match
-  (`chat.ts:3272, 3284-3300`).
-- `message.text` must therefore contain the bot's mention literally as
+  (`chat.ts:3272, 3284-3300` at 4.40.0).
+- For an adapter that leaves `isMention` unset, `message.text` must contain the bot's mention literally as
   `@<userName>`, and `userName` must equal what users type. Backlog rewrites
   mentions to `@<display name>` (see `backlog-webhook-facts.md`), so `userName`
   is the bot's display name and `(?![\w-])` decides where a multi-word name may

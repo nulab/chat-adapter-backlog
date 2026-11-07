@@ -361,10 +361,9 @@ captured when present (§7.3).
 
 The only normalisations anywhere:
 
-- An absent `notifications[]` — every body replayed from the activity API —
-  or one in a shape not measured reads as `[]`.
-- `content.link[].id` on type 14, a decimal string over the webhook and a
-  number from the activity API, reads as a number.
+- An absent `notifications[]`, or one in a shape not measured, reads as `[]`.
+- `content.link[].id` on type 14, a decimal string over the webhook, reads as
+  a number.
 - A `changes[]` `new_value` or `old_value` reads as a string, and as `null`
   when absent (a type 14 sends no `old_value`) or in a shape not measured.
 - A changelog comment's `content` — `null` over the webhook, `""` over REST —
@@ -376,16 +375,16 @@ The only normalisations anywhere:
 
 | `type` | Backlog meaning | Message id | `text` | Attachments | Mention (§5.4), besides `notifications[]` |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Issue Created | `<host>:issue:<issueId>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` | `content.assignee?.id === botUserId`, or text |
-| 2 | Issue Updated, with `content.comment.id` | `<host>:issue:<issueId>:c<commentId>` | `comment.content` | `content.attachments[]` | assignment change to `botUserName`, or text |
-| 2 | Issue Updated, no comment id | `<host>:issue:<issueId>:u:<created>` | `""` | none | as above |
-| 3 | Issue Commented | `<host>:issue:<issueId>:c<commentId>` | `comment.content` | `content.attachments[]` | text |
+| 1 | Issue Created | `<host>:issue:<issueId>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` | `content.assignee?.id === botUserId` |
+| 2 | Issue Updated, with `content.comment.id` | `<host>:issue:<issueId>:c<commentId>` | `comment.content` | `content.attachments[]` | none |
+| 2 | Issue Updated, no comment id | `<host>:issue:<issueId>:u:<created>` | `""` | none | none |
+| 3 | Issue Commented | `<host>:issue:<issueId>:c<commentId>` | `comment.content` | `content.attachments[]` | none |
 | 4 | Issue Deleted | root `<host>:issue:<issueId>:r` | — | — | → `chat.processMessageDeleted({ adapter, channelId, threadId, messageId, raw, deletedAt: new Date(created) })` |
-| 14 | Issues updated in bulk | one per `content.link[]` entry: `…:issue:<link.id>:c<link.comment.id>`, or `…:u:<created>` without a comment | `link[].comment.content` | none | assignment change to `botUserName`, or text (D22) |
-| 18 | Pull Request Added | `<host>:pr:<repository.id>:<number>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` if present | `content.assignee?.id === botUserId`, or text including `<@U<botUserId>>` |
-| 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content` | `content.attachments[]` if present | assignment change to `botUserName`, or text |
-| 19 | Pull Request Updated, no comment id | `…:u:<created>` | `""` | none | as above |
-| 20 | Comment Added on Pull Request | `…:c<commentId>` | `comment.content` | `content.attachments[]` if present; a `changes[field="attachment"]` entry (§6.6) | text |
+| 14 | Issues updated in bulk | one per `content.link[]` entry: `…:issue:<link.id>:c<link.comment.id>`, or `…:u:<created>` without a comment | `link[].comment.content` | none | none (D22) |
+| 18 | Pull Request Added | `<host>:pr:<repository.id>:<number>:r` | `summary + "\n\n" + description`, trimmed | `content.attachments[]` if present | `content.assignee?.id === botUserId` |
+| 19 | Pull Request Updated, with `content.comment.id` | `…:c<commentId>` | `comment.content` | `content.attachments[]` if present | none |
+| 19 | Pull Request Updated, no comment id | `…:u:<created>` | `""` | none | none |
+| 20 | Comment Added on Pull Request | `…:c<commentId>` | `comment.content` | `content.attachments[]` if present; a `changes[field="attachment"]` entry (§6.6) | none |
 | 17, 21, 12, 13, other | Comment notification added, pull request deleted/merged, git, wiki, document, … | — | — | — | 200 Ignored (D10, D-PR5) |
 
 A pull-request thread id is built from `project.id`, `content.repository.id`
@@ -430,42 +429,29 @@ What a handler observes as a consequence of Backlog's behaviour:
 
 ### 5.4 Mention detection (D9)
 
-Backlog stores mentions as `<@U<id>>` / `<@T<id>>` / `<@project>` but returns
-the resolved text `@<display name>` everywhere. A webhook body also names the
-users the activity notified, in the top-level `notifications[]`; the same
-activity read from `GET /space/activities` carries `[]`. A message is a
-mention when any rule holds:
+A webhook body names the users the activity notified in the top-level
+`notifications[]`. A message is a mention when either rule holds:
 
-1. **Text.** `(?<![\w@])@<escaped botUserName>(?![\w-])`, case-sensitive,
-   against `text` (type 1 and 18: summary and description). `@Chatbot`,
-   `@Chatbotさん` and `(@Chatbot)` match; `@Chatbot2`, `foo@Chatbot`,
-   `@@Chatbot` and an unresolved `<@U999>` do not.
+1. **Notification.** Any `notifications[]` entry with `user.id === botUserId`,
+   whatever its `reason`. A `<@U<id>>` in a description or comment always
+   creates one, and it is the only signal for recipients chosen in the notification field,
+   which leave no `@name` in the text, and for an assignment a multi-field
+   `PATCH` left out of `changes[]`.
 2. **Assignment at creation.** Types 1 and 18: `content.assignee?.id === botUserId`.
-3. **Assignment by update.** A `changes[]` entry whose `field` is
-   `"assigner"` or `"assignee"` and whose `new_value` equals `botUserName`, on
-   every type. Backlog names the field `assigner` on issues (types 2 and 14)
-   and `assignee` on pull requests (type 19), and reports the new assignee by
-   display name; either name is accepted on either kind.
-4. **A raw `<@U…>` in a pull-request summary.** Backlog leaves a `<@U…>`
-   mention unrewritten in a pull request's summary, so type-18 text is also matched
-   against `<@U<botUserId>>`. A handler that matches the display name in text
-   finds nothing there; it reads `isMention`.
-5. **Notification.** Any `notifications[]` entry with `user.id === botUserId`,
-   whatever its `reason`. This is the only rule that catches a comment whose
-   recipients were chosen in the notification field, which leaves no `@name`
-   in the text, and an assignment a multi-field `PATCH` left out of
-   `changes[]`.
 
 On types 2, 3, 19 and 20, `content.assignee` is the **standing** assignee,
 repeated on every delivery, and is not read: it would make every comment on a
 bot-assigned subject a mention. An assignment on those types is a mention only
-through rule 3 or rule 5.
+through rule 1.
 
-`message.isMention` is pre-set from these. The core additionally runs its own
-`@<userName>` regex — case-insensitive, ORed in — so `@chatbot` reaches a
-handler with `isMention` true although rule 1 alone says false. The core can
-only add mentions. A hand-typed `@Chatbot`, and a display name another user
-shares, are accepted false positives.
+The adapter decides `message.isMention` itself, always as a boolean, and the
+core defers to it: the core fills `isMention` only when it is unset
+(`.claude/rules/chat-sdk-core-facts.md`), so its own `@<userName>` text match
+never runs. A hand-typed `@name` without a notification is therefore not a
+mention, which matches Backlog sending no notification for it (accepted cost).
+A `<@U…>` written only in a pull-request summary is not a mention either:
+Backlog leaves it unrewritten there, and whether the type-18 `notifications[]`
+carries it is unmeasured.
 
 Outbound, a consumer writes Backlog's mention syntax itself; the package
 exports no helper. `<@U<id>>` in content notifies the user without `notifiedUserId`;
@@ -475,8 +461,7 @@ exports no helper. `<@U<id>>` in content notifies the user without `notifiedUser
 
 - **At least once.** The core dedupes on `dedupe:backlog:<message.id>` for
   `dedupeTtlMs` (10 minutes by default); a redelivery after that is processed
-  again. `message.id` is stable across deliveries and equal to the id an
-  activity replay produces, so durable idempotency keys on it.
+  again. `message.id` is stable across deliveries, so durable idempotency keys on it.
 - **200 first.** Backlog's delivery timeout is undocumented, so the response
   never waits for processing; a serverless host passes `waitUntil`.
 - **Down may mean lost.** Deliveries attempted while the endpoint answered 503
@@ -877,7 +862,7 @@ evidence for a measured reason is in the rules file named.
 | D6 | Error class from `errors[].code` first, the status second; the detail as `cause` | Backlog maps meaning to codes and reuses statuses. | Status-only mapping; re-exporting `backlog-js` errors. |
 | D7 | No host-application hooks; `client()` is the only escape hatch | Engagement and subscription state is the `StateAdapter`'s. | An engagement callback, an inbound observer, dedupe-key helpers. |
 | D8 | Numeric ids; the host inside message and user ids | A project-key rename rewrites issue keys (`backlog-webhook-facts.md`); the core's dedupe key has no thread component. | Issue keys in ids; host-less message ids. |
-| D9 | A mention is a notification naming the bot (any `reason`), the display name in text, or an assignment to the bot | The notification list is the only signal for recipients chosen in the notification field, and a watcher never appears in it (`backlog-webhook-facts.md`). | Text and assignment only; filtering on `reason: 2`; a case-insensitive match. |
+| D9 | A mention is a notification naming the bot (any `reason`) or, at creation, an assignment to the bot; the adapter always sets `isMention`, so the core's text match never runs | The notification list is the whole signal: it is the only one for recipients chosen in the notification field, and a visible mention in a description or comment always notifies. A hand-typed `@name` sends no notification in Backlog, so it is not a mention here either. | Leaving `isMention` unset so the core matches `@<userName>` (would flag a mention Backlog never notified); the adapter's own text match; a raw `<@U…>` rule for a pull-request summary (a `<@U…>` written only there is an accepted miss: whether the type-18 `notifications[]` carries it is unmeasured); a display-name `changes[]` rule (served only an activity-API body fed to the webhook); filtering on `reason: 2`. |
 | D10 | Types 1–4, 14 and 18–20 are processed and the rest ignored; `allEvent` is never registered | Only issue and pull-request activity maps to a thread. Type 17 carries the original comment under the id already dispatched, and dedupe holds only for `dedupeTtlMs`, so a recipient added later would redeliver the same message (`backlog-webhook-facts.md`). The accepted cost: adding the bot as a recipient to an existing comment is never a mention. | `allEvent`; dispatching 17. |
 | D11 | Uploads in two steps; downloads through the client; `rehydrateAttachment` from the API URL | A Backlog attachment needs authentication, and a URL is the only handle that survives a queue. | Public URLs (none exist); `fetchMetadata` blobs. |
 | D12 | Root and update messages cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Editing what the bot posted does not extend to rewriting a person's issue, and an update has no resource. | `editMessage(:r)` as Update Issue. |

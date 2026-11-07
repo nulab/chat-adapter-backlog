@@ -10,8 +10,6 @@ import {
   encodeChannelId,
   encodeMessageId,
   encodeThreadId,
-  mentionPattern,
-  mentionUser,
 } from './ids';
 import type { BacklogMessageId, BacklogThreadId } from './types';
 
@@ -582,35 +580,5 @@ describe('ids past 2^53-1, which Number would read as a float that re-encodes as
       issueId: Number.MAX_SAFE_INTEGER,
     });
     expect(encodeThreadId(decoded)).toBe(encoded);
-  });
-});
-
-describe('mentionUser', () => {
-  it('renders a Backlog user mention token', () => {
-    expect(mentionUser(100)).toBe('<@U100>');
-  });
-});
-
-describe('mentionPattern', () => {
-  it.each(['@Chatbot', '@Chatbotさん', '(@Chatbot)'])('matches %s', (text) => {
-    expect(mentionPattern('Chatbot').test(text)).toBe(true);
-  });
-
-  it.each([
-    '@Chatbot2',
-    'foo@Chatbot',
-    '@@Chatbot',
-    'unresolved mention <@U999>',
-  ])('does not match %s', (text) => {
-    expect(mentionPattern('Chatbot').test(text)).toBe(false);
-  });
-
-  it('is case-sensitive', () => {
-    expect(mentionPattern('Chatbot').test('@chatbot')).toBe(false);
-  });
-
-  it('escapes regex metacharacters in the bot user name', () => {
-    expect(mentionPattern('Chat.Bot+1').test('@Chat.Bot+1')).toBe(true);
-    expect(mentionPattern('Chat.Bot+1').test('@ChatXBot+1')).toBe(false);
   });
 });
