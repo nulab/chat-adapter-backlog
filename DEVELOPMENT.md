@@ -144,8 +144,8 @@ step is shaped as it is lives in the comments beside it.
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `lint`      | `pnpm lint`, then `pnpm format:check`.                                                                                                                                                                                                               |
 | `typecheck` | `pnpm typecheck`.                                                                                                                                                                                                                                    |
-| `consumer`  | `pnpm build` and `pnpm pack`; installs the tarball with npm outside the repository; runs `scripts/consumer-smoke/smoke.mjs` on Node 20; type checks `documented-usage.ts` and every `examples/*` against the tarball (CLAUDE.md, State of the repo). |
-| `test`      | The suite on Node 20, 22, 24 and 26, each asserted to be the Node that actually ran.                                                                                                                                                                 |
+| `consumer`  | `pnpm build` and `pnpm pack`; installs the tarball with npm outside the repository; runs `scripts/consumer-smoke/smoke.mjs` on Node 22; type checks `documented-usage.ts` and every `examples/*` against the tarball (CLAUDE.md, State of the repo). |
+| `test`      | The suite on Node 22, 24 and 26, each asserted to be the Node that actually ran.                                                                                                                                                                 |
 
 Installs are `--frozen-lockfile`, so commit `pnpm-lock.yaml` with any
 `package.json` change. An example is checked by hand the way its README says:

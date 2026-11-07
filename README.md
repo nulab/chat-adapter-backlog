@@ -29,7 +29,7 @@ npm i @nulab/chat-adapter-backlog chat
 npm i @chat-adapter/state-memory @vercel/functions # used by the Quick start below
 ```
 
-`chat` is a peer dependency (`^4.41.0`). You need Node.js 20 or newer. The
+`chat` is a peer dependency (`^4.41.0`). You need Node.js 22 or newer. The
 package is ESM-only and includes its own types.
 
 While the version is `0.x`, a breaking change ships as a minor release.

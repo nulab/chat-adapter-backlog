@@ -73,12 +73,12 @@ jobs:
     strategy:
       matrix:
         # A matrix of one, so the major is written once for the job name and
-        # actions/setup-node. Node 20 rather than the range `test` covers:
+        # actions/setup-node. Node 22 rather than the range `test` covers:
         # `exports` resolution and the packed manifest do not vary by major,
         # and the floor of `engines.node` is where the package's promise is
         # weakest — every other job here runs the Node `devEngines.runtime`
         # pins.
-        node: [20]
+        node: [22]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,7 +96,7 @@ jobs:
           standalone: true
 
       # With the runtime, unlike `test`: building and packing are development
-      # commands and belong on the pinned Node. Node 20 stays reachable
+      # commands and belong on the pinned Node. Node 22 stays reachable
       # because nothing after the pack goes through pnpm except reading the
       # lockfile, so a bare `node` or `npm` is the one actions/setup-node put
       # on PATH.
@@ -232,7 +232,7 @@ jobs:
         # the one version development happens on; this is the range the
         # published package promises, and it is only a promise if something
         # runs on all of it.
-        node: [20, 22, 24, 26]
+        node: [22, 24, 26]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
