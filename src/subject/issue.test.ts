@@ -62,7 +62,6 @@ describe('the issue subject client', () => {
 
     expect(getIssue).toHaveBeenCalledWith(REST.issueId);
     expect(root).toMatchObject({
-      ref: REF,
       title: 'Login fails on retry',
       body: 'Steps to reproduce',
       status: fixture.status,

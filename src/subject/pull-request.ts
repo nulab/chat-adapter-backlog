@@ -119,7 +119,6 @@ export function createPullRequestSubjectClient(
     ]);
     const url = `https://${host}/git/${project.projectKey}/${repository.name}/pullRequests/${number}`;
     return {
-      ref,
       title: pullRequest.summary,
       body: pullRequest.description,
       status: pullRequest.status,

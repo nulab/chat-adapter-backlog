@@ -16,7 +16,6 @@ import type { Attachment } from 'chat';
  * caller asks the client about it again.
  */
 export interface SubjectRoot {
-  ref: BacklogSubjectRef;
   title: string;
   body: string;
   status: { id: number; name: string };

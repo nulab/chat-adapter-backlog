@@ -589,6 +589,10 @@ root message prepended when `startsWithRoot`, or when backward and `!hasMore`.
 a backward page, the newest on a forward one, or `"0"` for a forward page that
 held only the root.
 
+A page that includes the root message reads that root: one Get Issue for an
+issue, and for a pull request Get Pull Request, Get Project and Get Git
+Repository, three reads (D-PR11).
+
 A forward `limit: 1` page still fetches one comment, only for `hasMore`: it is
 what separates "come back with cursor 0" from "this thread has no comments".
 
@@ -607,8 +611,9 @@ changelog comments and, on a pull request, the system comment of §5.3.
 `null`, without a call, when the message's host or subject differs from the
 thread's, and for a `:u:` id (D12). `:r` reads
 [Get Issue](https://developer.nulab.com/docs/backlog/api/2/get-issue/) or
-[Get Pull Request](https://developer.nulab.com/docs/backlog/api/2/get-pull-request/);
-`:c<id>` reads [Get Comment](https://developer.nulab.com/docs/backlog/api/2/get-comment/)
+[Get Pull Request](https://developer.nulab.com/docs/backlog/api/2/get-pull-request/)
+plus the Get Project and Get Git Repository of §7.3, three reads for a pull
+request (D-PR11) against one for an issue; `:c<id>` reads [Get Comment](https://developer.nulab.com/docs/backlog/api/2/get-comment/)
 on an issue, and on a pull request — which has no single-comment endpoint —
 the comment list with `minId = id - 1`, `maxId = id + 1`, `count = 1`, where an
 empty page or a different id is not found. `ResourceNotFoundError` becomes
@@ -869,5 +874,5 @@ evidence for a measured reason is in the rules file named.
 | D-PR8 | `fetchSubject().type` is `"pull_request"` | The `@chat-adapter/github` convention bot authors already branch on. | `"pullRequest"`. |
 | D-PR9 | The root part is `r` for both kinds | A kind-named tag would mislead on the other kind. | `i`; no tag. |
 | D-PR10 | A pull-request comment's attachment resolves its id by name, the newest match winning, when read | Neither the webhook nor REST carries its id (`backlog-pull-request-facts.md`). | No `fetchData`; one list call per comment. |
-| D-PR11 | The pull-request client reads the project key and repository name on every root read; no cache, and a failed read fails the call | The names are needed only for the URL, so two reads per root read is the honest cost, and a cache in the adapter spread the kind decision into the adapter (D-PR2). A root is one complete value, so no caller asks the client about it again. | Per-adapter caches primed from webhooks (built and removed); omitting the URL when a lookup fails. |
+| D-PR11 | The pull-request client reads the project key and repository name on every root read; no cache, and a failed read fails the call | The project key names the channel and, with the repository name, the URL, so two reads per root read is the honest cost, and a cache in the adapter spread the kind decision into the adapter (D-PR2). A root is one complete value, so no caller asks the client about it again. | Per-adapter caches primed from webhooks (built and removed); omitting the URL when a lookup fails. |
 | D-API1 | The public surface is the adapter, its factory, the types reachable from them, two id decoders and `client()` | Every export is permanent, and the first-party adapters export the same kinds of thing and one client getter; the decoders read a grammar no `Adapter` member reads back. | A second escape hatch; a `createApi` config field with an exported in-memory port; free-function codecs; mention helpers; the converters. |

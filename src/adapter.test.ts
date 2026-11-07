@@ -982,20 +982,6 @@ describe('BacklogAdapter read budget', () => {
     expect(getGitRepository).toHaveBeenCalledTimes(1);
   });
 
-  it('a pull request thread whose project or repository cannot be read fails rather than omitting the url', async () => {
-    const { adapter, backlog } = egressAdapter();
-    vi.spyOn(backlog.client, 'getPullRequest').mockResolvedValue(
-      pullRequest() as never
-    );
-    vi.spyOn(backlog.client, 'getGitRepository').mockRejectedValue(
-      new ResourceNotFoundError('backlog', 'gitRepository')
-    );
-
-    await expect(
-      adapter.fetchThread(PULL_REQUEST_THREAD_ID)
-    ).rejects.toBeInstanceOf(ResourceNotFoundError);
-  });
-
   it('the subject of a serialised issue root spends none', async () => {
     const { adapter, backlog } = egressAdapter();
     const message = await adapter.fetchMessage(

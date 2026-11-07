@@ -107,7 +107,6 @@ describe('the pull request subject client', () => {
 
     expect(getPullRequest).toHaveBeenCalledWith(...ENDPOINT);
     expect(root).toMatchObject({
-      ref: REF,
       title: 'Add the thing',
       body: 'Body of the PR.',
       status: { id: 1, name: 'Open' },
@@ -427,17 +426,20 @@ describe('the pull request subject client', () => {
     );
   });
 
-  it('a root whose project or repository cannot be read fails rather than omitting the url', async () => {
-    const unreadable = new ResourceNotFoundError('backlog', 'project', '500');
-    const subject = subjectOn(
-      stubClient({
-        ...NAME_READS,
-        getProject: vi.fn().mockRejectedValue(unreadable),
-      })
-    );
+  it.each(['getProject', 'getGitRepository'] as const)(
+    'a root whose %s read fails fails rather than omitting the url',
+    async (failing) => {
+      const unreadable = new ResourceNotFoundError('backlog', 'name', '1');
+      const subject = subjectOn(
+        stubClient({
+          ...NAME_READS,
+          [failing]: vi.fn().mockRejectedValue(unreadable),
+        })
+      );
 
-    await expect(rootOf(subject)).rejects.toBe(unreadable);
-  });
+      await expect(rootOf(subject)).rejects.toBe(unreadable);
+    }
+  );
 
   it('a pull request thread is described by its ids, summary and status, and its channel by its project key', async () => {
     const root = await rootOf(subjectOn());

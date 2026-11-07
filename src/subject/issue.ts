@@ -68,7 +68,6 @@ export function createIssueSubjectClient(
   function rootOf(issue: BacklogRawIssue): SubjectRoot {
     const url = issueWebUrl(host, issue.issueKey);
     return {
-      ref,
       title: issue.summary,
       body: issue.description,
       status: issue.status,
