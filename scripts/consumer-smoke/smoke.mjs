@@ -73,7 +73,7 @@ assert.equal(
 );
 
 // No argument: every field comes from a BACKLOG_* variable, which is the
-// zero-config construction CLAUDE.md's conventions promise.
+// zero-config construction the spec promises (D1).
 const adapter = adapterModule.createBacklogAdapter();
 
 assert.equal(adapter.name, 'backlog');

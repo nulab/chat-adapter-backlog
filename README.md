@@ -293,7 +293,7 @@ Deployable bots built on this adapter are in
 
 ## Contributing
 
-See [DEVELOPMENT.md](https://github.com/nulab/chat-adapter-backlog/blob/main/DEVELOPMENT.md).
+See [CONTRIBUTING.md](https://github.com/nulab/chat-adapter-backlog/blob/main/CONTRIBUTING.md).
 The behaviour and its design decisions are specified in
 [docs/specs/adapter.md](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md).
 

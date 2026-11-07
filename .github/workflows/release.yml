@@ -143,7 +143,7 @@ jobs:
           else
             previous_tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
             if [ -z "$previous_tag" ] && [ "$NEW_VERSION_TYPE" != minor ]; then
-              echo "::error::The first release is 0.1.0, a minor from the implicit v0.0.0 (DEVELOPMENT.md, Versioning); dispatch with newversion: minor."
+              echo "::error::The first release is 0.1.0, a minor from the implicit v0.0.0 (CONTRIBUTING.md, Versioning); dispatch with newversion: minor."
               exit 1
             fi
             # package.json stays at 0.0.0 on main; git tags are the version of
