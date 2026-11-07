@@ -41,11 +41,11 @@ function issueRaw(fixture: BacklogRawIssue = issue()): BacklogRawMessage {
   return { kind: 'issue', host: REST.host, issue: fixture, changes: [] };
 }
 
-function rootOf(
+async function rootOf(
   subject: SubjectClient,
   fixture: BacklogRawIssue = issue()
-): SubjectRoot {
-  const root = subject.rootFrom(issueRaw(fixture));
+): Promise<SubjectRoot> {
+  const root = await subject.rootFrom(issueRaw(fixture));
   if (root === undefined) {
     throw new Error('an issue raw did not yield an issue root');
   }
@@ -61,7 +61,7 @@ describe('the issue subject client', () => {
     const root = await subject.fetchRoot();
 
     expect(getIssue).toHaveBeenCalledWith(REST.issueId);
-    expect(root).toEqual({
+    expect(root).toMatchObject({
       ref: REF,
       title: 'Login fails on retry',
       body: 'Steps to reproduce',
@@ -69,7 +69,6 @@ describe('the issue subject client', () => {
       assignee: ALICE,
       createdUser: BOB,
       created: '2026-09-01T10:00:00Z',
-      source: { kind: 'issue', issue: fixture },
     });
   });
 
@@ -174,40 +173,36 @@ describe('the issue subject client', () => {
     });
   });
 
-  it('carries the issue it read into raw data unchanged', () => {
+  it('the root message raw and the subject raw carry the issue it read unchanged', async () => {
     const subject = subjectOn();
     const fixture = issue();
 
-    expect(subject.rootRaw(rootOf(subject, fixture))).toEqual({
+    const root = await rootOf(subject, fixture);
+
+    expect(root.raw).toEqual({
       kind: 'issue',
       host: REST.host,
       issue: fixture,
       changes: [],
     });
+    expect(root.subject.raw).toBe(fixture);
   });
 
-  it('the subject of an issue raw is the issue it carries, read without a request', () => {
+  it('a root survives a JSON round trip through its raw', async () => {
     const subject = subjectOn();
-    const fixture = issue();
-
-    expect(subject.subjectRaw(rootOf(subject, fixture))).toBe(fixture);
-  });
-
-  it('a root survives a JSON round trip through its raw', () => {
-    const subject = subjectOn();
-    const root = rootOf(subject);
+    const root = await rootOf(subject);
     const serialised = JSON.parse(
-      JSON.stringify(subject.rootRaw(root))
+      JSON.stringify(root.raw)
     ) as BacklogRawMessage;
 
-    expect(subject.rootFrom(serialised)).toEqual(root);
+    expect(await subject.rootFrom(serialised)).toEqual(root);
   });
 
-  it("a raw belonging to another kind is not mistaken for this subject's root", () => {
+  it("a raw belonging to another kind is not mistaken for this subject's root", async () => {
     const subject = subjectOn();
 
     expect(
-      subject.rootFrom({
+      await subject.rootFrom({
         kind: 'pullRequest',
         host: REST.host,
         pullRequest: pullRequest(),
@@ -215,7 +210,7 @@ describe('the issue subject client', () => {
       })
     ).toBeUndefined();
     expect(
-      subject.rootFrom({
+      await subject.rootFrom({
         kind: 'comment',
         host: REST.host,
         projectId: REST.projectId,
@@ -224,16 +219,6 @@ describe('the issue subject client', () => {
         changes: [],
       })
     ).toBeUndefined();
-  });
-
-  it('a pull request root is refused rather than read as an issue', () => {
-    const subject = subjectOn();
-    const root: SubjectRoot = {
-      ...rootOf(subject),
-      source: { kind: 'pullRequest', pullRequest: pullRequest() },
-    };
-
-    expect(() => subject.subjectLabels(root)).toThrow(AdapterError);
   });
 
   it('an issue comment attachment takes its id from the changelog rather than a lookup', async () => {
@@ -320,35 +305,26 @@ describe('the issue subject client', () => {
     ).toBeUndefined();
   });
 
-  it('names the channel from the issue key rather than looking the project up', () => {
-    const subject = subjectOn();
+  it('names the channel from the issue key rather than looking the project up', async () => {
+    const getProject = vi.fn();
+    const subject = subjectOn(stubClient({ getProject }));
 
-    expect(subject.channelName(rootOf(subject), {})).toBe('PROJECT');
+    expect((await rootOf(subject)).channelName).toBe('PROJECT');
+    expect(getProject).not.toHaveBeenCalled();
   });
 
-  it('keeps the project key of a key that holds several dashes', () => {
+  it('keeps the project key of a key that holds several dashes', async () => {
     const subject = subjectOn();
 
-    expect(
-      subject.channelName(
-        rootOf(subject, issue({ issueKey: 'MY-PROJECT-42' })),
-        {}
-      )
-    ).toBe('MY-PROJECT');
+    const root = await rootOf(subject, issue({ issueKey: 'MY-PROJECT-42' }));
+
+    expect(root.channelName).toBe('MY-PROJECT');
   });
 
-  it('an issue web url needs no name the read did not already fetch', () => {
-    const subject = subjectOn();
+  it('an issue thread carries its ids, key, summary, status and url, under its own kind', async () => {
+    const root = await rootOf(subjectOn());
 
-    expect(subject.webUrl(rootOf(subject), {})).toBe(
-      'https://example.backlog.com/view/PROJECT-42'
-    );
-  });
-
-  it('an issue thread carries its ids, key, summary, status and url, under its own kind', () => {
-    const subject = subjectOn();
-
-    expect(subject.threadMetadata(rootOf(subject), {})).toEqual({
+    expect(root.threadMetadata).toEqual({
       kind: 'issue',
       host: REST.host,
       projectId: REST.projectId,
@@ -360,14 +336,13 @@ describe('the issue subject client', () => {
     });
   });
 
-  it('describes an issue subject by its type and its priority', () => {
-    const subject = subjectOn();
+  it('describes an issue subject by its type, its issue type and priority, and its url', async () => {
+    const { subject } = await rootOf(subjectOn());
 
-    expect(subject.subjectType).toBe('issue');
-    expect(subject.subjectLabels(rootOf(subject))).toEqual(['Bug', 'Normal']);
-  });
-
-  it('an issue thread needs no repository name', () => {
-    expect(subjectOn().repositoryIdForName).toBeUndefined();
+    expect(subject).toMatchObject({
+      type: 'issue',
+      labels: ['Bug', 'Normal'],
+      url: 'https://example.backlog.com/view/PROJECT-42',
+    });
   });
 });

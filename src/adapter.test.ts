@@ -553,23 +553,6 @@ describe('BacklogAdapter.handleWebhook', () => {
     await vi.waitFor(() => expect(dispatched).toHaveLength(1));
     expect(dispatched[0]?.threadId).toBe(PULL_REQUEST_THREAD_ID);
   });
-
-  it('keeps the repository name a delivery carries, sparing the next thread read a lookup', async () => {
-    const { adapter, backlog } = egressAdapter();
-    vi.spyOn(backlog.client, 'getPullRequest').mockResolvedValue(
-      pullRequest() as never
-    );
-    const getGitRepository = vi.spyOn(backlog.client, 'getGitRepository');
-    await initializeCapturingDispatches(adapter);
-
-    await adapter.handleWebhook(webhookRequest(pullRequestCommented()));
-    const thread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
-
-    expect(thread.metadata).toMatchObject({
-      url: `https://${FIXTURE.host}/git/${FIXTURE.projectKey}/${FIXTURE.repositoryName}/pullRequests/${FIXTURE.pullRequestNumber}`,
-    });
-    expect(getGitRepository).not.toHaveBeenCalled();
-  });
 });
 
 describe('BacklogAdapter.parseMessage', () => {
@@ -943,49 +926,6 @@ describe('BacklogAdapter.fetchMessages / fetchMessage / fetchThread', () => {
       url: `https://${FIXTURE.host}/git/${FIXTURE.projectKey}/${FIXTURE.repositoryName}/pullRequests/${FIXTURE.pullRequestNumber}`,
     });
   });
-
-  it('a pull request thread whose repository cannot be read is described without a url', async () => {
-    const logger = createMockLogger();
-    const { adapter, backlog } = egressAdapter({ logger });
-    vi.spyOn(backlog.client, 'getPullRequest').mockResolvedValue(
-      pullRequest() as never
-    );
-    vi.spyOn(backlog.client, 'getGitRepository').mockRejectedValue(
-      new ResourceNotFoundError('backlog', 'gitRepository')
-    );
-
-    const thread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
-
-    expect(thread.metadata).toMatchObject({ kind: 'pullRequest' });
-    expect(thread.metadata).not.toHaveProperty('url');
-    expect(logger.warn).toHaveBeenCalledWith(
-      'repository name lookup failed; url omitted',
-      expect.objectContaining({ repositoryId: FIXTURE.repositoryId })
-    );
-  });
-
-  it('a pull request thread whose project cannot be read is described without a url', async () => {
-    const logger = createMockLogger();
-    const { adapter, backlog } = egressAdapter({ logger });
-    vi.spyOn(backlog.client, 'getPullRequest').mockResolvedValue(
-      pullRequest() as never
-    );
-    vi.spyOn(backlog.client, 'getGitRepository').mockResolvedValue(
-      gitRepository({ name: FIXTURE.repositoryName })
-    );
-    backlog.getProject.mockRejectedValue(
-      new ResourceNotFoundError('backlog', 'project')
-    );
-
-    const thread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
-
-    expect(thread.metadata).toMatchObject({ kind: 'pullRequest' });
-    expect(thread.metadata).not.toHaveProperty('url');
-    expect(logger.warn).toHaveBeenCalledWith(
-      'project key lookup failed; url omitted',
-      expect.objectContaining({ projectId: FIXTURE.projectId })
-    );
-  });
 });
 
 describe('BacklogAdapter read budget', () => {
@@ -998,6 +938,62 @@ describe('BacklogAdapter read budget', () => {
     expect(backlog.getIssue).toHaveBeenCalledTimes(1);
     expect(backlog.getProject).not.toHaveBeenCalled();
     expect(network).not.toHaveBeenCalled();
+  });
+
+  it('resolving a pull request thread spends three reads: the pull request, its project and its repository', async () => {
+    const { adapter, backlog } = egressAdapter();
+    const getPullRequest = vi
+      .spyOn(backlog.client, 'getPullRequest')
+      .mockResolvedValue(pullRequest() as never);
+    const getGitRepository = vi
+      .spyOn(backlog.client, 'getGitRepository')
+      .mockResolvedValue(gitRepository({ name: FIXTURE.repositoryName }));
+
+    await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
+    await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
+
+    expect(getPullRequest).toHaveBeenCalledTimes(2);
+    expect(backlog.getProject).toHaveBeenCalledTimes(2);
+    expect(getGitRepository).toHaveBeenCalledTimes(2);
+  });
+
+  it('the subject of a serialised pull request root spends two reads, the names but not the pull request', async () => {
+    const { adapter, backlog } = egressAdapter();
+    const getPullRequest = vi
+      .spyOn(backlog.client, 'getPullRequest')
+      .mockResolvedValue(pullRequest() as never);
+    const getGitRepository = vi
+      .spyOn(backlog.client, 'getGitRepository')
+      .mockResolvedValue(gitRepository({ name: FIXTURE.repositoryName }));
+
+    const subject = await adapter.fetchSubject({
+      kind: 'pullRequest',
+      host: FIXTURE.host,
+      pullRequest: pullRequest(),
+      changes: [],
+    });
+
+    expect(subject).toMatchObject({
+      type: 'pull_request',
+      url: `https://${FIXTURE.host}/git/${FIXTURE.projectKey}/${FIXTURE.repositoryName}/pullRequests/${FIXTURE.pullRequestNumber}`,
+    });
+    expect(getPullRequest).not.toHaveBeenCalled();
+    expect(backlog.getProject).toHaveBeenCalledTimes(1);
+    expect(getGitRepository).toHaveBeenCalledTimes(1);
+  });
+
+  it('a pull request thread whose project or repository cannot be read fails rather than omitting the url', async () => {
+    const { adapter, backlog } = egressAdapter();
+    vi.spyOn(backlog.client, 'getPullRequest').mockResolvedValue(
+      pullRequest() as never
+    );
+    vi.spyOn(backlog.client, 'getGitRepository').mockRejectedValue(
+      new ResourceNotFoundError('backlog', 'gitRepository')
+    );
+
+    await expect(
+      adapter.fetchThread(PULL_REQUEST_THREAD_ID)
+    ).rejects.toBeInstanceOf(ResourceNotFoundError);
   });
 
   it('the subject of a serialised issue root spends none', async () => {

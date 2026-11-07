@@ -350,8 +350,7 @@ Required, else 400: `type`, `created`, `project.id`, `createdUser.id`,
 `createdUser.name`; `content.id` on types 1–4; `content.summary` and a
 nullable `content.description` on type 1; `content.number` and
 `content.repository.id` on types 18–20; `content.link[]` with an `id` on every
-entry on type 14. Everything else is optional; `content.repository.name` is
-captured when present (§7.3).
+entry on type 14. Everything else is optional.
 
 The only normalisations anywhere:
 
@@ -620,17 +619,14 @@ empty page or a different id is not found. `ResourceNotFoundError` becomes
 Issue: one Get Issue →
 `{ id, channelId, channelName: <project key>, isDM: false, metadata: { kind: "issue", host, projectId, issueId, issueKey, summary, status: { id, name }, url: https://<host>/view/<issueKey> } }`.
 
-Pull request: one Get Pull Request →
-`{ id, channelId, channelName: <project key>, isDM: false, metadata: { kind: "pullRequest", host, projectId, repositoryId, number, summary, status: { id, name }, url? } }`,
+Pull request: one Get Pull Request, one
+[Get Project](https://developer.nulab.com/docs/backlog/api/2/get-project/) and
+one [Get Git Repository](https://developer.nulab.com/docs/backlog/api/2/get-git-repository/) →
+`{ id, channelId, channelName: <project key>, isDM: false, metadata: { kind: "pullRequest", host, projectId, repositoryId, number, summary, status: { id, name }, url } }`,
 with `url = https://<host>/git/<projectKey>/<repositoryName>/pullRequests/<number>`.
-The object carries neither name: the project key comes from a cache filled by
-one [Get Project](https://developer.nulab.com/docs/backlog/api/2/get-project/)
-per project, and the repository name from a cache filled by every pull-request
-webhook that carries `content.repository.name` and, on a miss, by one
-[Get Git Repository](https://developer.nulab.com/docs/backlog/api/2/get-git-repository/).
-Both last the process's lifetime. A name lookup that fails is not cached, logs
-`warn` `project key lookup failed; url omitted` or
-`repository name lookup failed; url omitted`, and leaves `url` out.
+The object carries neither name, so every root read of a pull request reads
+both and nothing is cached; `url` is always present, and a read that fails
+fails the call (D-PR11).
 Statuses are `1 Open`, `2 Closed`, `3 Merged`.
 
 `metadata` names the thread and nothing more; every other field is on
@@ -638,11 +634,13 @@ Statuses are `1 Open`, `2 Closed`, `3 Merged`.
 
 ### 7.4 `fetchSubject(raw)`
 
-The issue or pull request `raw` belongs to (one Get Issue or Get Pull Request;
-none for the `issue` and `pullRequest` kinds), as a `MessageSubject`:
+The issue or pull request `raw` belongs to, as a `MessageSubject`. An issue
+costs one Get Issue, or none for the `issue` kind; a pull request costs the
+reads of §7.3, or only Get Project and Get Git Repository for the
+`pullRequest` kind (D-PR11):
 
 - issue: `{ id: <threadId>, type: "issue", title: summary, description, status: status.name, url, author: { id: <host>:<createdUser.id>, name }, assignee?, labels: [issueType.name, priority.name], raw: issue }`
-- pull request: `{ id, type: "pull_request", title, description, status, url?, author, assignee?, labels: [status.name, "<base> ← <branch>"], raw: pullRequest }` (D-PR8)
+- pull request: `{ id, type: "pull_request", title, description, status, url, author, assignee?, labels: [status.name, "<base> ← <branch>"], raw: pullRequest }` (D-PR8)
 
 The core calls it lazily from `message.subject` and turns an error into `null`.
 
@@ -650,7 +648,6 @@ The core calls it lazily from `message.subject` and turns an error into `null`.
 
 [Get Project](https://developer.nulab.com/docs/backlog/api/2/get-project/) →
 `{ id: channelId, name: project.name, isDM: false, metadata: { host, projectId, projectKey } }`.
-It touches no cache.
 
 ### 7.6 `getUser(userId)`
 
@@ -671,13 +668,12 @@ spends:
 
 | Member | Calls | Limit |
 | --- | --- | --- |
-| `fetchThread`, `fetchSubject` on a pull request | `getProject`, once per project per process (§7.3) | read |
 | `postMessage` | `postSpaceAttachment` per file; `postIssueComments` / `postPullRequestComments` | update |
 | `editMessage` | `patchIssueComment` / `patchPullRequestComments` | update |
 | `deleteMessage` | `getIssueComment`; `deleteIssueComment` | read, update |
 | `addReaction` / `removeReaction` | one comment read; `postStar` / `removeStar` | read, update |
-| `fetchMessages` | `getIssueComments` / `getPullRequestComments`; `getIssue` / `getPullRequest` for the root | read |
-| `fetchMessage`, `fetchThread`, `fetchSubject` | `getIssueComment`, `getIssue`, `getPullRequest`, `getPullRequestComments`; `getGitRepository` on a name-cache miss | read |
+| `fetchMessages` | `getIssueComments` / `getPullRequestComments`; the root's reads below | read |
+| `fetchMessage`, `fetchThread`, `fetchSubject` | `getIssueComment`, `getPullRequestComments`; for a root, `getIssue`, or `getPullRequest`, `getProject` and `getGitRepository` (D-PR11) | read |
 | `fetchChannelInfo` | `getProject` | read |
 | `getUser` | `getUser` | read |
 | `fetchData` | `getIssueAttachment` / `getPullRequestAttachment`; `getPullRequestAttachments` to resolve an id by name | read |
@@ -790,9 +786,9 @@ A single-column table's dash row turns the line above into a setext heading.
 - Everything goes through the `Logger` from `chat`; nothing is written to the
   console directly.
 - `debug` for per-request flow (a skipped self message); `info` for ignored
-  activity types; `warn` for rejected webhooks, a name lookup that left a URL
-  out and the two rate-limit outcomes; `error` for processing
-  failures after the 200 (their only carrier), and a webhook before `initialize`.
+  activity types; `warn` for rejected webhooks and the two rate-limit outcomes;
+  `error` for processing failures after the 200 (their only carrier), and a
+  webhook before `initialize`.
 - Structured fields only — `host`, `projectId`, `repositoryId`, `type`,
   `threadId`, `issuePaths`, `remaining`, `resetAt`, `waitMs`, `attempt`, and
   `error` as the caught error's message. Never a body, comment text, token,
@@ -873,4 +869,5 @@ evidence for a measured reason is in the rules file named.
 | D-PR8 | `fetchSubject().type` is `"pull_request"` | The `@chat-adapter/github` convention bot authors already branch on. | `"pullRequest"`. |
 | D-PR9 | The root part is `r` for both kinds | A kind-named tag would mislead on the other kind. | `i`; no tag. |
 | D-PR10 | A pull-request comment's attachment resolves its id by name, the newest match winning, when read | Neither the webhook nor REST carries its id (`backlog-pull-request-facts.md`). | No `fetchData`; one list call per comment. |
+| D-PR11 | The pull-request client reads the project key and repository name on every root read; no cache, and a failed read fails the call | The names are needed only for the URL, so two reads per root read is the honest cost, and a cache in the adapter spread the kind decision into the adapter (D-PR2). A root is one complete value, so no caller asks the client about it again. | Per-adapter caches primed from webhooks (built and removed); omitting the URL when a lookup fails. |
 | D-API1 | The public surface is the adapter, its factory, the types reachable from them, two id decoders and `client()` | Every export is permanent, and the first-party adapters export the same kinds of thing and one client getter; the decoders read a grammar no `Adapter` member reads back. | A second escape hatch; a `createApi` config field with an exported in-memory port; free-function codecs; mention helpers; the converters. |

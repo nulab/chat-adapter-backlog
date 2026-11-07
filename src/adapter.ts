@@ -9,7 +9,6 @@ import { createBacklogClient } from './client/backlog';
 import { errorMessage } from './client/errors';
 import { parseConfig } from './config';
 import type { SpaceConfig } from './config';
-import { readGitRepository, readProject } from './client/responses';
 import type { Backlog } from 'backlog-js';
 import {
   addReaction as addReactionToComment,
@@ -25,7 +24,6 @@ import {
   decodeChannelId,
   decodeThreadId as decodeThreadIdString,
   decodeUserId as decodeUserIdString,
-  encodeChannelId,
   encodeMessageId,
   encodeThreadId as encodeThreadIdStruct,
 } from './ids';
@@ -40,7 +38,7 @@ import {
 } from './reads';
 import type { MessageBuilders } from './reads';
 import { subjectClientFor } from './subject/client';
-import type { SubjectClient, SubjectNames } from './subject/client';
+import type { SubjectClient } from './subject/client';
 import type {
   BacklogAdapterConfig,
   BacklogRawMessage,
@@ -53,7 +51,6 @@ import {
   activityOf,
   parseDelivery,
   payloadOf,
-  repositoryNameOf,
   subjectOfActivity,
 } from './webhook/payload';
 import type { SubjectActivity } from './webhook/payload';
@@ -115,10 +112,6 @@ function subjectOfRaw(raw: BacklogRawMessage): {
   }
 }
 
-function repositoryNameKey(host: string, repositoryId: number): string {
-  return `${host}:${repositoryId}`;
-}
-
 /**
  * A Chat SDK adapter for one Backlog space, where a thread is an issue or a
  * pull request and a channel is a project.
@@ -131,9 +124,6 @@ export class BacklogAdapter implements Adapter<
 
   private readonly space: SpaceConfig;
   private readonly backlog: Backlog;
-  /** The two halves of a pull request's web URL, which its object lacks. */
-  private readonly projectKeyCache = new Map<string, string>();
-  private readonly repositoryNameCache = new Map<string, string>();
 
   private logger: Logger;
   private chat: ChatInstance | undefined;
@@ -240,78 +230,6 @@ export class BacklogAdapter implements Adapter<
       projectId,
       subject: this.subjectClient(host, projectId, subject),
     };
-  }
-
-  /**
-   * `repositoryIdForName` gates the project key too, so an issue thread
-   * spends no Get Project: its read budget is one Get Issue, and the issue
-   * client derives its project key from `issueKey`. A kind that needs the
-   * key without a repository gets a `SubjectClient` member of its own rather
-   * than an unconditional lookup here.
-   */
-  private async namesFor(
-    host: string,
-    projectId: number,
-    subject: SubjectClient
-  ): Promise<SubjectNames> {
-    const repositoryId = subject.repositoryIdForName;
-    if (repositoryId === undefined) {
-      return {};
-    }
-    return {
-      projectKey: await this.cachedName(
-        this.projectKeyCache,
-        encodeChannelId({ host, projectId }),
-        async () =>
-          (await readProject(this.clientFor(host).getProject(projectId)))
-            .projectKey,
-        'project key',
-        { host, projectId }
-      ),
-      repositoryName: await this.cachedName(
-        this.repositoryNameCache,
-        repositoryNameKey(host, repositoryId),
-        async () =>
-          (
-            await readGitRepository(
-              this.clientFor(host).getGitRepository(
-                projectId,
-                String(repositoryId)
-              )
-            )
-          ).name,
-        'repository name',
-        { host, projectId, repositoryId }
-      ),
-    };
-  }
-
-  /**
-   * A failed lookup is not cached: the caller omits the URL rather than
-   * failing, and the next call may find the name readable again.
-   */
-  private async cachedName(
-    cache: Map<string, string>,
-    key: string,
-    lookUp: () => Promise<string>,
-    what: string,
-    fields: Record<string, unknown>
-  ): Promise<string | undefined> {
-    const cached = cache.get(key);
-    if (cached !== undefined) {
-      return cached;
-    }
-    try {
-      const name = await lookUp();
-      cache.set(key, name);
-      return name;
-    } catch (cause) {
-      this.logger.warn(`${what} lookup failed; url omitted`, {
-        ...fields,
-        error: errorMessage(cause),
-      });
-      return undefined;
-    }
   }
 
   /**
@@ -449,16 +367,6 @@ export class BacklogAdapter implements Adapter<
         );
       }
       return new Response('OK', { status: 200 });
-    }
-
-    // Cached before the response, not in the factory: it is what spares the
-    // next `fetchThread` a Get Git Repository.
-    const repository = repositoryNameOf(activity);
-    if (repository !== undefined) {
-      this.repositoryNameCache.set(
-        repositoryNameKey(host, repository.repositoryId),
-        repository.name
-      );
     }
 
     const subject = subjectOfActivity(activity);
@@ -657,12 +565,8 @@ export class BacklogAdapter implements Adapter<
   }
 
   async fetchThread(threadId: string): Promise<ThreadInfo> {
-    const { host, projectId, subject } = this.subjectFor(threadId);
-    return fetchThreadRead({
-      threadId,
-      subject,
-      names: await this.namesFor(host, projectId, subject),
-    });
+    const { subject } = this.subjectFor(threadId);
+    return fetchThreadRead({ threadId, subject });
   }
 
   /**
@@ -689,7 +593,6 @@ export class BacklogAdapter implements Adapter<
     return fetchSubjectRead({
       raw,
       subject: subjectClient,
-      names: await this.namesFor(host, projectId, subjectClient),
       threadId: encodeThreadIdStruct({ host, projectId, subject }),
     });
   }

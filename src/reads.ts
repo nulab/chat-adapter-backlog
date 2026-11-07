@@ -13,11 +13,7 @@ import {
 import { readProject, readUser } from './client/responses';
 import { parseAttachmentPath } from './subject/url';
 
-import type {
-  SubjectClient,
-  SubjectNames,
-  SubjectRoot,
-} from './subject/client';
+import type { SubjectClient, SubjectRoot } from './subject/client';
 import type {
   BacklogChange,
   BacklogRawComment,
@@ -116,7 +112,7 @@ function buildRootMessage(
     threadId: encodeThreadId({ host, projectId, subject: subject.ref }),
     text,
     formatted: format(text),
-    raw: subject.rootRaw(root),
+    raw: root.raw,
     author: authorOf(host, botUserId, root.createdUser),
     metadata: { dateSent: new Date(root.created), edited: false },
     // Empty by decision (D11): the webhook path carries a body's files
@@ -296,13 +292,12 @@ export async function fetchMessage(
 export interface FetchThreadInput {
   threadId: string;
   subject: SubjectClient;
-  names: SubjectNames;
 }
 
 export async function fetchThread(
   input: FetchThreadInput
 ): Promise<ThreadInfo> {
-  const { threadId, subject, names } = input;
+  const { threadId, subject } = input;
   const { host, projectId } = decodeThreadId(threadId);
   const root = await subject.fetchRoot();
 
@@ -310,35 +305,27 @@ export async function fetchThread(
     id: threadId,
     channelId: encodeChannelId({ host, projectId }),
     isDM: false,
-    metadata: subject.threadMetadata(root, names),
+    metadata: root.threadMetadata,
+    channelName: root.channelName,
   };
-  const channelName = subject.channelName(root, names);
-  if (channelName !== undefined) {
-    info.channelName = channelName;
-  }
   return info;
 }
 
 export interface FetchSubjectInput {
   raw: BacklogRawMessage;
   subject: SubjectClient;
-  names: SubjectNames;
   threadId: string;
 }
 
-/**
- * `url` is omitted rather than set to `undefined` when a pull request's names
- * are unresolved: a present-but-empty key reads as "this subject has no page".
- */
 export async function fetchSubject(
   input: FetchSubjectInput
 ): Promise<MessageSubject> {
-  const { raw, subject, names, threadId } = input;
-  const root = subject.rootFrom(raw) ?? (await subject.fetchRoot());
+  const { raw, subject, threadId } = input;
+  const root = (await subject.rootFrom(raw)) ?? (await subject.fetchRoot());
 
   const messageSubject: MessageSubject = {
     id: threadId,
-    type: subject.subjectType,
+    type: root.subject.type,
     title: root.title,
     description: root.body,
     status: root.status.name,
@@ -346,14 +333,10 @@ export async function fetchSubject(
       id: encodeUserId({ host: raw.host, userId: root.createdUser.id }),
       name: root.createdUser.name,
     },
-    labels: subject.subjectLabels(root),
-    raw: subject.subjectRaw(root),
+    labels: root.subject.labels,
+    raw: root.subject.raw,
+    url: root.subject.url,
   };
-
-  const url = subject.webUrl(root, names);
-  if (url !== undefined) {
-    messageSubject.url = url;
-  }
   if (root.assignee !== null) {
     messageSubject.assignee = {
       id: encodeUserId({ host: raw.host, userId: root.assignee.id }),

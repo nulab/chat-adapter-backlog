@@ -7,7 +7,9 @@ import {
   REST,
   comment,
   fileData,
+  gitRepository,
   issue,
+  project,
   pullRequest,
   stubClient,
 } from '../test/fixtures/rest';
@@ -19,7 +21,7 @@ import type {
   BacklogRawPullRequest,
   BacklogSubjectRef,
 } from '../types';
-import type { SubjectClient, SubjectNames, SubjectRoot } from './client';
+import type { SubjectClient, SubjectRoot } from './client';
 import type { Backlog, Entity } from 'backlog-js';
 
 const COMMENT_ID = 7000001;
@@ -38,12 +40,13 @@ const ENDPOINT = [
   REST.pullRequestNumber,
 ] as const;
 
-const NAMES: SubjectNames = {
-  projectKey: REST.projectKey,
-  repositoryName: REST.repositoryName,
+/** What a root read needs besides the pull request itself. */
+const NAME_READS = {
+  getProject: () => Promise.resolve(project()),
+  getGitRepository: () => Promise.resolve(gitRepository()),
 };
 
-function subjectOn(client: Backlog = stubClient({})): SubjectClient {
+function subjectOn(client: Backlog = stubClient(NAME_READS)): SubjectClient {
   return createPullRequestSubjectClient(client, REF, {
     host: REST.host,
     projectId: REST.projectId,
@@ -61,11 +64,11 @@ function pullRequestRaw(
   };
 }
 
-function rootOf(
+async function rootOf(
   subject: SubjectClient,
   fixture: BacklogRawPullRequest = pullRequest()
-): SubjectRoot {
-  const root = subject.rootFrom(pullRequestRaw(fixture));
+): Promise<SubjectRoot> {
+  const root = await subject.rootFrom(pullRequestRaw(fixture));
   if (root === undefined) {
     throw new Error('a pull request raw did not yield a pull request root');
   }
@@ -98,12 +101,12 @@ describe('the pull request subject client', () => {
   it('addresses a pull request by its repository and number, never by its global id', async () => {
     const fixture = pullRequest({ assignee: BOB });
     const getPullRequest = vi.fn().mockResolvedValue(fixture);
-    const subject = subjectOn(stubClient({ getPullRequest }));
+    const subject = subjectOn(stubClient({ ...NAME_READS, getPullRequest }));
 
     const root = await subject.fetchRoot();
 
     expect(getPullRequest).toHaveBeenCalledWith(...ENDPOINT);
-    expect(root).toEqual({
+    expect(root).toMatchObject({
       ref: REF,
       title: 'Add the thing',
       body: 'Body of the PR.',
@@ -111,7 +114,6 @@ describe('the pull request subject client', () => {
       assignee: BOB,
       createdUser: ALICE,
       created: '2026-09-01T10:00:00Z',
-      source: { kind: 'pullRequest', pullRequest: fixture },
     });
   });
 
@@ -214,37 +216,31 @@ describe('the pull request subject client', () => {
     });
   });
 
-  it('carries the pull request it read into raw data unchanged', () => {
+  it('the root message raw and the subject raw carry the pull request it read unchanged', async () => {
     const subject = subjectOn();
     const fixture = pullRequest();
 
-    expect(subject.rootRaw(rootOf(subject, fixture))).toEqual(
-      pullRequestRaw(fixture)
-    );
+    const root = await rootOf(subject, fixture);
+
+    expect(root.raw).toEqual(pullRequestRaw(fixture));
+    expect(root.subject.raw).toBe(fixture);
   });
 
-  it('the subject of a pull request raw is the pull request it carries, read without a request', () => {
+  it('a root survives a JSON round trip through its raw', async () => {
     const subject = subjectOn();
-    const fixture = pullRequest();
-
-    expect(subject.subjectRaw(rootOf(subject, fixture))).toBe(fixture);
-  });
-
-  it('a root survives a JSON round trip through its raw', () => {
-    const subject = subjectOn();
-    const root = rootOf(subject);
+    const root = await rootOf(subject);
     const serialised = JSON.parse(
-      JSON.stringify(subject.rootRaw(root))
+      JSON.stringify(root.raw)
     ) as BacklogRawMessage;
 
-    expect(subject.rootFrom(serialised)).toEqual(root);
+    expect(await subject.rootFrom(serialised)).toEqual(root);
   });
 
-  it("a raw belonging to another kind is not mistaken for this subject's root", () => {
+  it("a raw belonging to another kind is not mistaken for this subject's root", async () => {
     const subject = subjectOn();
 
     expect(
-      subject.rootFrom({
+      await subject.rootFrom({
         kind: 'issue',
         host: REST.host,
         issue: issue(),
@@ -252,7 +248,7 @@ describe('the pull request subject client', () => {
       })
     ).toBeUndefined();
     expect(
-      subject.rootFrom({
+      await subject.rootFrom({
         kind: 'comment',
         host: REST.host,
         projectId: REST.projectId,
@@ -261,16 +257,6 @@ describe('the pull request subject client', () => {
         changes: [],
       })
     ).toBeUndefined();
-  });
-
-  it('an issue root is refused rather than read as a pull request', () => {
-    const subject = subjectOn();
-    const root: SubjectRoot = {
-      ...rootOf(subject),
-      source: { kind: 'issue', issue: issue() },
-    };
-
-    expect(() => subject.subjectLabels(root)).toThrow(AdapterError);
   });
 
   it('a pull request comment attachment resolves its id by name when it is first read', async () => {
@@ -424,31 +410,40 @@ describe('the pull request subject client', () => {
     });
   });
 
-  it('a pull request web url needs the project key and the repository name', () => {
-    const subject = subjectOn();
-    const root = rootOf(subject);
+  it('reads the project key and repository name with the root, since the pull request object carries neither', async () => {
+    const getProject = vi.fn().mockResolvedValue(project());
+    const getGitRepository = vi.fn().mockResolvedValue(gitRepository());
+    const subject = subjectOn(stubClient({ getProject, getGitRepository }));
 
-    expect(subject.webUrl(root, NAMES)).toBe(
-      'https://example.backlog.com/git/PROJECT/example-repo/pullRequests/12'
+    await rootOf(subject);
+    await rootOf(subject);
+
+    expect(getProject).toHaveBeenCalledTimes(2);
+    expect(getProject).toHaveBeenCalledWith(REST.projectId);
+    expect(getGitRepository).toHaveBeenCalledTimes(2);
+    expect(getGitRepository).toHaveBeenCalledWith(
+      REST.projectId,
+      String(REST.repositoryId)
     );
-    expect(
-      subject.webUrl(root, { ...NAMES, repositoryName: undefined })
-    ).toBeUndefined();
-    expect(
-      subject.webUrl(root, { ...NAMES, projectKey: undefined })
-    ).toBeUndefined();
   });
 
-  it('the channel of a pull request thread is named by its project, not its repository', () => {
-    const subject = subjectOn();
+  it('a root whose project or repository cannot be read fails rather than omitting the url', async () => {
+    const unreadable = new ResourceNotFoundError('backlog', 'project', '500');
+    const subject = subjectOn(
+      stubClient({
+        ...NAME_READS,
+        getProject: vi.fn().mockRejectedValue(unreadable),
+      })
+    );
 
-    expect(subject.channelName(rootOf(subject), NAMES)).toBe(REST.projectKey);
+    await expect(rootOf(subject)).rejects.toBe(unreadable);
   });
 
-  it('a pull request thread carries its ids, summary, status and url, under its own kind', () => {
-    const subject = subjectOn();
+  it('a pull request thread is described by its ids, summary and status, and its channel by its project key', async () => {
+    const root = await rootOf(subjectOn());
 
-    expect(subject.threadMetadata(rootOf(subject), NAMES)).toEqual({
+    expect(root.channelName).toBe(REST.projectKey);
+    expect(root.threadMetadata).toEqual({
       kind: 'pullRequest',
       host: REST.host,
       projectId: REST.projectId,
@@ -460,29 +455,13 @@ describe('the pull request subject client', () => {
     });
   });
 
-  it('a thread whose repository name is unknown omits the url rather than guessing', () => {
-    const subject = subjectOn();
+  it('describes a pull request subject by its status, the branches it joins and its web url', async () => {
+    const { subject } = await rootOf(subjectOn());
 
-    const metadata = subject.threadMetadata(rootOf(subject), {
-      ...NAMES,
-      repositoryName: undefined,
+    expect(subject).toMatchObject({
+      type: 'pull_request',
+      labels: ['Open', 'main ← feature/thing'],
+      url: 'https://example.backlog.com/git/PROJECT/example-repo/pullRequests/12',
     });
-
-    expect(metadata).not.toHaveProperty('url');
-    expect(metadata['number']).toBe(REST.pullRequestNumber);
-  });
-
-  it('describes a pull request subject by its status and the branches it joins', () => {
-    const subject = subjectOn();
-
-    expect(subject.subjectType).toBe('pull_request');
-    expect(subject.subjectLabels(rootOf(subject))).toEqual([
-      'Open',
-      'main ← feature/thing',
-    ]);
-  });
-
-  it('names the repository whose display name its url needs', () => {
-    expect(subjectOn().repositoryIdForName).toBe(REST.repositoryId);
   });
 });

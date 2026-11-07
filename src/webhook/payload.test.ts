@@ -13,12 +13,7 @@ import {
   pullRequestDeleted,
   unrelatedActivity,
 } from '../test/fixtures/webhooks';
-import {
-  parseDelivery,
-  payloadOf,
-  repositoryNameOf,
-  subjectOfActivity,
-} from './payload';
+import { parseDelivery, payloadOf, subjectOfActivity } from './payload';
 
 import type { SubjectActivity, WebhookActivity } from './payload';
 
@@ -176,21 +171,4 @@ describe('subjectOfActivity', () => {
       });
     }
   );
-});
-
-describe('repositoryNameOf', () => {
-  it('reports the repository name a pull-request delivery carries', () => {
-    expect(repositoryNameOf(subjectActivity(pullRequestCommented()))).toEqual({
-      repositoryId: FIXTURE.repositoryId,
-      name: FIXTURE.repositoryName,
-    });
-  });
-
-  it('reports nothing for an issue delivery, or a pull-request one without the name', () => {
-    const unnamed = pullRequestCommented();
-    delete (content(unnamed)['repository'] as Record<string, unknown>)['name'];
-
-    expect(repositoryNameOf(subjectActivity(issueCommented()))).toBeUndefined();
-    expect(repositoryNameOf(subjectActivity(unnamed))).toBeUndefined();
-  });
 });
