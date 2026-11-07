@@ -152,21 +152,3 @@ export function decodeUserId(id: string): BacklogUserId {
   const { groups, posint } = parseUserId(id);
   return { host: groups.host, userId: posint(groups.userId) };
 }
-
-export function mentionUser(id: number): string {
-  return `<@U${id}>`;
-}
-
-const REGEXP_METACHARACTERS = /[.*+?^${}()|[\]\\]/g;
-
-function escapeRegExp(value: string): string {
-  return value.replace(REGEXP_METACHARACTERS, '\\$&');
-}
-
-/**
- * Case-sensitive, unlike the core's own `@<userName>` match: Japanese display
- * names have no case, and folding ASCII names over-matches (D9).
- */
-export function mentionPattern(botUserName: string): RegExp {
-  return new RegExp(`(?<![\\w@])@${escapeRegExp(botUserName)}(?![\\w-])`);
-}

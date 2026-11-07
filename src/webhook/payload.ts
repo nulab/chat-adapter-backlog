@@ -60,7 +60,7 @@ const envelope = {
   created: z.string(),
   project: z.looseObject({ id: z.number() }),
   createdUser: userSchema,
-  // Absent on a body replayed from `GET /space/activities` (measured).
+  // Absent on a `GET /space/activities` entry (measured).
   notifications: z
     .array(z.looseObject({ user: z.looseObject({ id: z.number() }) }))
     .catch([]),

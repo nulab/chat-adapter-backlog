@@ -58,7 +58,11 @@ wins, so re-verify against the tag before changing code.
 
 ## Mention detection
 
-- `message.isMention = message.isMention || detectMention(...)`; the regex is
+- `message.isMention = message.isMention ?? detectMention(...)`, so an adapter
+  that pre-sets `false` stops the core's matching altogether and only an unset
+  value falls through to it (published bundle `chat@4.41.0` `dist/index.js:2822`,
+  and `chat@4.44.0`, checked 2026-11-07; `chat.ts` at the `4.40.0` tag was read
+  as `||`, which is wrong). The regex is
   `(?<!\w)@<escaped userName>(?![\w-])`, case-insensitive, with `userName =
   adapter.userName || chat.userName` (`chat.ts:3174-3308, 3271`); with
   `botUserId` set, `@<botUserId>` and `<@!?<botUserId>>` also match

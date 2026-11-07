@@ -445,12 +445,6 @@ export function commentNotificationAdded(
   );
 }
 
-/**
- * The form a pull-request summary keeps: `backlog-pull-request-facts.md` § What
- * each pull-request operation emits.
- */
-export const RAW_MENTION = `<@U${FIXTURE.bot.id}>`;
-
 /** The rewritten form a description or a comment carries instead. */
 export const RESOLVED_MENTION = `@${FIXTURE.bot.name}`;
 

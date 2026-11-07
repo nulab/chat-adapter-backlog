@@ -198,7 +198,8 @@ The full grammar is in the spec's
 ### Mentions
 
 A message is a mention when the webhook lists the bot among the notified users,
-or when it assigns the subject to the bot. Read `message.isMention` rather than matching the text yourself. The rules
+or when it assigns the subject to the bot at creation. Read
+`message.isMention` rather than matching the text yourself. The rules
 are in
 [Mention detection](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#54-mention-detection-d9).
 

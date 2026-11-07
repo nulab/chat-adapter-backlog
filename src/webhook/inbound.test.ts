@@ -119,7 +119,6 @@ function pullRequestInput(overrides: Partial<Input> = {}): Input {
 const CONTEXT: InboundContext = {
   host: FIXTURE.host,
   botUserId: FIXTURE.bot.id,
-  botUserName: FIXTURE.bot.name,
   format: (text) => ({
     type: 'root',
     children: [
@@ -135,7 +134,8 @@ function mapped(activity: MessageActivity, { subject }: Input) {
     messageId: message.id,
     text: message.text,
     attachments: message.attachments,
-    isMention: message.isMention,
+    isMention: message.isMention === true,
+    messageIsMention: message.isMention,
     changes: message.raw.changes,
   };
 }
@@ -207,7 +207,7 @@ describe('buildInboundMessage — type 1 Issue Created', () => {
     expect(fields.isMention).toBe(true);
   });
 
-  it('assigning someone else with no mention text is not a mention', () => {
+  it('creating an issue assigned to someone else is not a mention', () => {
     const activity = created(
       issueCreated({
         assignee: { id: FIXTURE.alice.id, name: FIXTURE.alice.name },
@@ -219,15 +219,14 @@ describe('buildInboundMessage — type 1 Issue Created', () => {
     expect(fields.isMention).toBe(false);
   });
 
-  it('a mention placed in the summary counts', () => {
-    const activity = created(
-      issueCreated({ summary: 'cc @Chatbot please review' })
-    );
+  it.each([null, undefined])(
+    'creating an issue with assignee %s is not a mention',
+    (assignee) => {
+      const payload = issueCreated(assignee === undefined ? {} : { assignee });
 
-    const fields = mapped(activity, input());
-
-    expect(fields.isMention).toBe(true);
-  });
+      expect(mapped(created(payload), input()).isMention).toBe(false);
+    }
+  );
 
   it('attachments carry an authenticated download URL, not a public link', () => {
     const activity = created(
@@ -305,31 +304,6 @@ describe('buildInboundMessage — types 2 and 3, comment id present', () => {
     expect(fields.changes).toEqual([
       { field: 'status', newValue: '4', oldValue: '3' },
     ]);
-  });
-
-  it('assigning the bot is a mention, a status change alone is not', () => {
-    const mentionFields = mapped(
-      updated(assigneeChanged({ assigneeName: FIXTURE.bot.name })),
-      input()
-    );
-    const statusOnlyFields = mapped(updated(statusChanged()), input());
-
-    expect(mentionFields.isMention).toBe(true);
-    expect(mentionFields.text).toBe('');
-    expect(mentionFields.changes[0]).toMatchObject({
-      field: 'assigner',
-      newValue: FIXTURE.bot.name,
-    });
-    expect(statusOnlyFields.isMention).toBe(false);
-  });
-
-  it('assigning someone other than the bot is not a mention', () => {
-    const fields = mapped(
-      updated(assigneeChanged({ assigneeName: FIXTURE.alice.name })),
-      input()
-    );
-
-    expect(fields.isMention).toBe(false);
   });
 
   it('a description edit carries both complete bodies in changes[] with empty text', () => {
@@ -412,49 +386,6 @@ describe('buildInboundMessage — type 18 Pull Request Added', () => {
     expect(withLink.text).toBe(withoutLink.text);
   });
 
-  it('a mention typed into the description counts', () => {
-    const activity = activityOfType(
-      18,
-      pullRequestAdded({ description: 'cc @Chatbot please review' })
-    );
-
-    const fields = mapped(activity, pullRequestInput());
-
-    expect(fields.isMention).toBe(true);
-  });
-
-  it('a summary mentioning the bot in the raw `<@U…>` form is a mention', () => {
-    const activity = activityOfType(
-      18,
-      pullRequestAdded({ summary: `cc <@U${FIXTURE.bot.id}> please review` })
-    );
-
-    const fields = mapped(activity, pullRequestInput());
-
-    expect(fields.isMention).toBe(true);
-  });
-
-  it('an issue summary carrying the same raw form is not a mention', () => {
-    const activity = created(
-      issueCreated({ summary: `cc <@U${FIXTURE.bot.id}> please review` })
-    );
-
-    const fields = mapped(activity, input());
-
-    expect(fields.isMention).toBe(false);
-  });
-
-  it('a summary mentioning another user in the raw form is not a mention', () => {
-    const activity = activityOfType(
-      18,
-      pullRequestAdded({ summary: `cc <@U${FIXTURE.alice.id}> please review` })
-    );
-
-    const fields = mapped(activity, pullRequestInput());
-
-    expect(fields.isMention).toBe(false);
-  });
-
   it('opening a pull request assigned to the bot is a mention', () => {
     const fields = mapped(
       activityOfType(18, pullRequestAdded({ assignee: FIXTURE.bot })),
@@ -483,9 +414,6 @@ describe('buildInboundMessage — type 18 Pull Request Added', () => {
   });
 
   it('opening a pull request whose body carries no assignee key at all is not a mention', () => {
-    // The activity form of type 18 has no `assignee` key (measured
-    // 2026-09-06), so a replayed activity reaches the mapping without one;
-    // the key is deleted by hand because the builders model the webhook form.
     const payload = pullRequestAdded();
     delete (payload['content'] as Record<string, unknown>)['assignee'];
 
@@ -564,35 +492,6 @@ describe('buildInboundMessage — types 19 and 20, comment id present', () => {
     expect(fields.changes).toEqual([
       { field: 'status', newValue: '3', oldValue: '1' },
     ]);
-    expect(fields.isMention).toBe(false);
-  });
-
-  it('assigning the bot to a pull request is a mention', () => {
-    const fields = mapped(
-      activityOfType(
-        19,
-        pullRequestAssigneeChanged({ assigneeName: FIXTURE.bot.name })
-      ),
-      pullRequestInput()
-    );
-
-    expect(fields.isMention).toBe(true);
-    expect(fields.text).toBe('');
-    expect(fields.changes[0]).toMatchObject({
-      field: 'assignee',
-      newValue: FIXTURE.bot.name,
-    });
-  });
-
-  it('assigning someone other than the bot to a pull request is not a mention', () => {
-    const fields = mapped(
-      activityOfType(
-        19,
-        pullRequestAssigneeChanged({ assigneeName: FIXTURE.alice.name })
-      ),
-      pullRequestInput()
-    );
-
     expect(fields.isMention).toBe(false);
   });
 
@@ -691,7 +590,7 @@ describe('buildInboundMessage — types 19 and 20, comment id present', () => {
     expect(fields.isMention).toBe(false);
   });
 
-  it('an update is decided by its changes entry alone, whatever assignee a body carries', () => {
+  it('an issue update carrying the standing bot assignee and no notification is not a mention', () => {
     // An issue webhook does carry the standing `content.assignee` on type 2
     // (measured 2026-09-06), but the issue fixtures model the key set the
     // adapter's issue tests were written against, so it is added by hand: an
@@ -703,17 +602,6 @@ describe('buildInboundMessage — types 19 and 20, comment id present', () => {
     };
 
     const fields = mapped(updated(payload), input());
-
-    expect(fields.isMention).toBe(false);
-  });
-
-  it('a raw `<@U…>` in a comment is not a mention, only a summary keeps it literal', () => {
-    const activity = activityOfType(
-      20,
-      pullRequestCommented({ text: `cc <@U${FIXTURE.bot.id}>` })
-    );
-
-    const fields = mapped(activity, pullRequestInput());
 
     expect(fields.isMention).toBe(false);
   });
@@ -844,19 +732,6 @@ describe('mention detection from notifications[]', () => {
     expect(fields.isMention).toBe(false);
   });
 
-  it('a typed mention arrives together with the notification it created', () => {
-    const activity = commented(
-      issueCommented({
-        text: `${RESOLVED_MENTION} mention in text`,
-        notifications: [{ user: FIXTURE.bot, reason: 2 }],
-      })
-    );
-
-    const fields = mapped(activity, input());
-
-    expect(fields.isMention).toBe(true);
-  });
-
   it.each([[1], [2], [10]])(
     'a notification naming the bot counts whatever its reason code (%i)',
     (reason) => {
@@ -887,27 +762,6 @@ describe('mention detection from notifications[]', () => {
     expect(fields.changes[0]).toMatchObject({ field: 'assigner' });
   });
 
-  it('a multi-field pull-request update whose assignee change Backlog omitted is a mention through its notification', () => {
-    const activity = activityOfType(
-      19,
-      pullRequestUpdated({
-        changes: [
-          {
-            field: 'summary',
-            old_value: 'Retry the deploy step',
-            new_value: 'Retry the deploy step on a 5xx',
-          },
-        ],
-        notifications: [{ user: FIXTURE.bot, reason: 10 }],
-      })
-    );
-
-    const fields = mapped(activity, pullRequestInput());
-
-    expect(fields.changes.map((change) => change.field)).toEqual(['summary']);
-    expect(fields.isMention).toBe(true);
-  });
-
   it('a delivery that notified nobody is not a mention, comment or field-only update alike', () => {
     const comment = commented(
       issueCommented({ text: 'no @ here', notifications: [] })
@@ -918,47 +772,12 @@ describe('mention detection from notifications[]', () => {
     expect(mapped(fieldOnlyUpdate, input()).isMention).toBe(false);
   });
 
-  it('an activity body replayed from the activity API carries no notifications and falls back to the text', () => {
-    const withoutText = commented(issueCommented({ text: 'no @ here' }));
-    const withText = commented(
-      issueCommented({ text: `${RESOLVED_MENTION} please look` })
+  it('a message with no evidence leaves isMention unset so the core can match the typed name', () => {
+    const comment = commented(
+      issueCommented({ text: `@${FIXTURE.bot.name} hi`, notifications: [] })
     );
 
-    expect(mapped(withoutText, input()).isMention).toBe(false);
-    expect(mapped(withText, input()).isMention).toBe(true);
-  });
-});
-
-describe('mention detection without a bot name', () => {
-  const isMention = (activity: MessageActivity) =>
-    buildInboundMessage(
-      activity,
-      { ...CONTEXT, botUserName: undefined },
-      issueSubject()
-    ).isMention;
-
-  it('a typed @name is not a mention', () => {
-    const activity = commented(
-      issueCommented({ text: `@${FIXTURE.bot.name} please help` })
-    );
-
-    expect(isMention(activity)).toBe(false);
-  });
-
-  it('a notification to the bot is still a mention', () => {
-    const activity = commented(
-      issueCommented({ notifications: [{ user: FIXTURE.bot, reason: 2 }] })
-    );
-
-    expect(isMention(activity)).toBe(true);
-  });
-
-  it('creating an issue assigned to the bot is still a mention', () => {
-    const activity = created(
-      issueCreated({ assignee: { id: FIXTURE.bot.id, name: FIXTURE.bot.name } })
-    );
-
-    expect(isMention(activity)).toBe(true);
+    expect(mapped(comment, input()).messageIsMention).toBeUndefined();
   });
 });
 
@@ -1065,7 +884,7 @@ describe('buildBulkUpdateMessage', () => {
   it('does not mention the bot for a batch that neither names nor notifies it', () => {
     expect(
       messages(issueMultiUpdated()).map((message) => message.isMention)
-    ).toEqual([false, false]);
+    ).toEqual([undefined, undefined]);
   });
 });
 
