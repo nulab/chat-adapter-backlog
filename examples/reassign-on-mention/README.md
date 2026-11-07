@@ -86,7 +86,7 @@ hands out the `backlog-js` client the adapter makes its own calls with, so this
 request is counted in the same rate-limit budget, retried on a 429 by the same
 rule, and fails with the same error classes — none of which would be true of a
 second client built beside it. The reply then goes out with `thread.post()`,
-mentioning the new assignee in Backlog's `<@U<id>>` notation; that notation
+mentioning the new assignee in Backlog's `<@U<id>>` mention syntax; that syntax
 notifies the user on its own, so the bot needs no `notifiedUserId`.
 
 **Pull requests are declined.** A pull request's assignee is set through a
@@ -129,7 +129,7 @@ This example adds none of its own:
 | `BACKLOG_BOT_USER_ID`    | The bot user's numeric id.                                         |
 | `BACKLOG_WEBHOOK_SECRET` | The secret carried in the hook URL you register.                   |
 
-All five are validated at cold start, so a missing variable or a non-numeric id
+All four are validated at cold start, so a missing variable or a non-numeric id
 fails the deployment's first request instead of sending `NaN` to Backlog later.
 
 ### The webhook

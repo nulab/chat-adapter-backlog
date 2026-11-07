@@ -88,7 +88,7 @@ export function chooseAssignee(
 }
 
 /**
- * `<@U<id>>` is Backlog's mention notation, which notifies the user
+ * `<@U<id>>` is Backlog's mention syntax, which notifies the user
  * on its own — no `notifiedUserId` needed — and survives both outbound
  * converters unchanged, so a plain string is all `thread.post` needs.
  */

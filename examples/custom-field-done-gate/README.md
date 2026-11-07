@@ -69,8 +69,8 @@ trip the gate.
 issue now holds, so the bot reads the issue back with
 `backlog.client().getIssue(issueId)` and looks through `customFields[]` for
 the configured id. `client()` hands out the `backlog-js` client the adapter
-makes its own calls with — the port names no custom fields — so this read is
-counted in the same rate-limit budget and fails with the same error classes as
+makes its own calls with, and the adapter has no custom-field member, so this
+read is counted in the same rate-limit budget and fails with the same error classes as
 everything else the adapter does.
 
 A field is empty when its value is `null`, an empty or whitespace-only string,
@@ -81,7 +81,7 @@ configuration mistake, and the bot logs it and does nothing rather than
 accusing anybody.
 
 **Handing it back.** The bot mentions the person who closed the issue with
-`<@U{id}>`, the notation Backlog resolves to a mention and a notification, and
+`<@U{id}>`, the syntax Backlog resolves to a mention and a notification, and
 sets `assigneeId` to the same user. It never changes the status: a bot that
 reopened what somebody just closed would be in an edit war with them by the
 second round, and the assignee plus a comment already puts the issue in front
@@ -112,7 +112,7 @@ npm install
 npm run deploy      # npx vercel deploy
 ```
 
-On top of the five shared variables:
+On top of the four shared variables:
 
 | Variable                   | Required | Meaning                                                              |
 | -------------------------- | -------- | -------------------------------------------------------------------- |
