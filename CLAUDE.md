@@ -50,20 +50,11 @@ so a field the adapter validates cannot drift from the type it publishes.
 Call sites take a reader, never a schema and a type argument: `Validated<T>`
 accepts any subset of `T`'s fields, so a schema passed with the wrong type
 would compile. zod types never reach the published `.d.ts`, so an overlay
-helper type a raw shape references is exported too (the last coupling below).
+helper type a raw shape references is exported too (the coupling below).
 
-**Files CI couples together.** Changing any of these means changing its
-counterpart in the same commit, or CI keeps passing on the old shape:
-
-- `exports`, `files`, the environment fallbacks or `engines.node`:
-  `scripts/consumer-smoke/smoke.mjs`, which the `consumer` job runs against the
-  packed tarball on Node 22.
-- A README sample that changes shape: `scripts/consumer-smoke/documented-usage.ts`,
-  the usage README.md documents written out by hand and compiled against the
-  installed declarations.
-- A declared type that `src/index.ts` does not export, or an import in the
-  published declarations other than `chat` and `backlog-js`:
-  `scripts/check-published-types.ts` fails `vp pack`.
+**Files CI couples together.** `scripts/check-published-types.ts` fails
+`vp pack` on a declared type that `src/index.ts` does not export, or on an
+import in the published declarations other than `chat` and `backlog-js`.
 
 ## Where each fact lives
 
@@ -206,7 +197,7 @@ vp check && vp test && vp pack
   say `import type`), `noUnusedLocals` and `noUnusedParameters` (prefix
   intentionally unused params with `_`).
 - `vp pack` fails on `publint` problems, on `attw` problems at the `esm-only`
-  profile, and on `scripts/check-published-types.ts` (see the couplings above).
+  profile, and on `scripts/check-published-types.ts` (see the coupling above).
   Touching `exports`, `files`, `scripts` or the build config means running
   `vp pack`, not just `vp check`.
 - `engines.node` is `">=22"`, so do not use APIs newer than Node 22 in
