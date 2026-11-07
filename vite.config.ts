@@ -44,16 +44,7 @@ export default defineConfig({
       },
     ],
     // `examples/*` are outside the root toolchain altogether (CLAUDE.md).
-    // `scripts/consumer-smoke` is a standalone project whose dependencies are
-    // installed only by the ci.yml consumer job, against the packed tarball;
-    // type-aware linting here would report every import of the adapter as
-    // unresolved.
-    ignorePatterns: [
-      'dist',
-      'node_modules',
-      'examples/**',
-      'scripts/consumer-smoke/**',
-    ],
+    ignorePatterns: ['dist', 'node_modules', 'examples/**'],
     options: { typeAware: true, typeCheck: true },
   },
 

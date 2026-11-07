@@ -28,9 +28,6 @@ nothing about live behavior.
       labels).
 - [ ] `package.json` changed: `pnpm-lock.yaml` is committed with it, because CI
       installs with `--frozen-lockfile`.
-- [ ] The public entry's exports, `package.json`'s `exports` or `files`, the
-      env fallbacks or `engines.node` changed: `scripts/consumer-smoke/smoke.mjs` changed in this
-      PR too (CLAUDE.md, State of the repo).
 
 <!-- Adapter design constraints: rate limits in .claude/rules/backlog-api-facts.md; webhook authenticity
 (D2) and `stream()` (D4) in docs/spec.md's decision table; how to comment and
