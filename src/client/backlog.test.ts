@@ -88,25 +88,16 @@ describe('credentials', () => {
     expect(sentHeaders(1).get('Backlog-API-Key')).toBe('second-key');
   });
 
-  it.each([
-    [
-      'throws',
-      () => {
-        throw new Error('vault unavailable');
-      },
-    ],
-    ['rejects', () => Promise.reject(new Error('vault unavailable'))],
-  ])(
-    'fails with AuthenticationError and sends nothing when the resolver %s',
-    async (_how, resolve) => {
-      const client = clientWith({ resolveApiKey: async () => resolve() });
+  it('fails with AuthenticationError and sends nothing when the resolver rejects', async () => {
+    const client = clientWith({
+      resolveApiKey: () => Promise.reject(new Error('vault unavailable')),
+    });
 
-      await expect(client.getIssue(REST.issueId)).rejects.toBeInstanceOf(
-        AuthenticationError
-      );
-      expect(fetchMock).not.toHaveBeenCalled();
-    }
-  );
+    await expect(client.getIssue(REST.issueId)).rejects.toBeInstanceOf(
+      AuthenticationError
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it('fails with AuthenticationError, not NetworkError, on a credential containing CR/LF', async () => {
     const client = clientWith({

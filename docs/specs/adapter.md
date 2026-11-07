@@ -35,9 +35,8 @@ registering webhooks on the consumer's
 behalf, any persistent state of the adapter's own (subscriptions and dedupe
 belong to the Chat SDK `StateAdapter`), creating an issue through
 `channel.post` (D24), creating, closing or merging pull requests (Backlog has
-no status API), a git repository as a channel (D-PR1), `listThreads` (D13), an OAuth
-access token as a credential (D33), and projects that use Backlog notation
-(D32).
+no status API), a git repository as a channel (D-PR1), `listThreads` (D13), an OAuth access
+token as a credential (D33), and projects that use Backlog notation (D32).
 
 ## 2. Conceptual model
 
@@ -797,13 +796,12 @@ A single-column table's dash row turns the line above into a setext heading.
 - Structured fields only — `host`, `projectId`, `repositoryId`, `type`,
   `threadId`, `issuePaths`, `remaining`, `resetAt`, `waitMs`, `attempt`, and
   `error` as the caught error's message. Never a body, comment text, token,
-  API key, `Authorization` value or full request URL (it carries `?token=`).
+  API key or full request URL (it carries `?token=`).
 - Messages are English, one line and stable.
 
 ## 11. Security
 
-- **Secrets stay in headers.** API keys travel in `Backlog-API-Key`, tokens in
-  `Authorization`; errors and logs carry URLs with the query string stripped.
+- **Secrets stay in headers.** The API key travels in `Backlog-API-Key`; errors and logs carry URLs with the query string stripped.
 - **Webhook authenticity** (D2). A secret of at least 16 bytes or a verifier
   is required at construction, and the secret is compared in constant time.
   Backlog offers no HMAC

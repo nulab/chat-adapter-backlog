@@ -17,19 +17,23 @@ import type { Logger } from 'chat';
  */
 const MIN_WEBHOOK_SECRET_BYTES = 16;
 
-const resolvable = (field: string) => {
-  const error = `${field} must be a non-empty string or a function`;
-  return z.union(
-    [
-      z.string().min(1, { error }),
-      z.custom<() => string | Promise<string>>(
-        (value) => typeof value === 'function',
-        { error }
-      ),
-    ],
-    { error }
-  );
-};
+const apiKeyInvalid = 'apiKey must be a non-empty string or a function';
+const apiKeyRequired =
+  'apiKey is required: set config.apiKey or BACKLOG_API_KEY';
+
+const apiKey = z.union(
+  [
+    z.string().min(1, { error: apiKeyInvalid }),
+    z.custom<() => string | Promise<string>>(
+      (value) => typeof value === 'function',
+      { error: apiKeyInvalid }
+    ),
+  ],
+  {
+    error: (issue) =>
+      issue.input === undefined ? apiKeyRequired : apiKeyInvalid,
+  }
+);
 
 const botUserIdMessage =
   'botUserId (BACKLOG_BOT_USER_ID) must be a positive integer, at most 2^53-1';
@@ -64,7 +68,7 @@ const configSchema = z
             'host must be a bare hostname such as example.backlog.com, without scheme, port or path',
         })
       ),
-    apiKey: resolvable('apiKey'),
+    apiKey,
     botUserId: botUserId,
     webhookSecret: z
       .string()

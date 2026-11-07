@@ -156,7 +156,7 @@ jobs:
             "devDependencies.typescript=$typescript"
           npm install --no-audit --no-fund "$TARBALL"
 
-      # Five of the six variables src/config.ts reads, and no config object:
+      # The five variables src/config.ts reads, and no config object:
       # that `createBacklogAdapter()` resolves all of them from the
       # environment is the zero-config construction consumers are promised.
       # The values are the sample-messages.md vocabulary; the secret is dummy

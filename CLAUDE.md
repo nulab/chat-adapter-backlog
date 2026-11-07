@@ -589,7 +589,7 @@ Two rules about what an example may do, both load-bearing:
 State is `@chat-adapter/state-memory`, and no example subscribes to a thread.
 
 Environment variable names are shared across examples, not invented per
-example: four of the five the adapter reads (`BACKLOG_HOST`, `BACKLOG_API_KEY`,
+example: the four the adapter reads (`BACKLOG_HOST`, `BACKLOG_API_KEY`,
 `BACKLOG_BOT_USER_ID`, `BACKLOG_WEBHOOK_SECRET` — the id required, set in every
 `.env.example`) plus
 meaningful names for the rest — `DONE_STATUS_ID`, `REQUIRED_CUSTOM_FIELD_ID`,

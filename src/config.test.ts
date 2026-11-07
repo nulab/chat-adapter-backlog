@@ -101,6 +101,12 @@ describe('parseConfig', () => {
     expect(rejection({ ...valid, host })).toMatch(/host/);
   });
 
+  it('rejects a missing apiKey, naming where to set it', () => {
+    const message = rejection(without('apiKey'));
+    expect(message).toMatch(/required/);
+    expect(message).toMatch(/BACKLOG_API_KEY/);
+  });
+
   it('treats an explicit empty apiKey as an error, not a reason to read the variable', () => {
     setEnv({ BACKLOG_API_KEY: 'from-env' });
     expect(rejection({ ...valid, apiKey: '' })).toMatch(/apiKey/);
