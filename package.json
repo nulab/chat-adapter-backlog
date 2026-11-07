@@ -58,8 +58,7 @@
   "devEngines": {
     "runtime": {
       "name": "node",
-      "version": "^26.0.0",
-      "onFail": "download"
+      "version": "26.13.0"
     }
   },
   "publishConfig": {

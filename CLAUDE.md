@@ -200,7 +200,7 @@ parsed type.
 Run all three before declaring work done; CI runs exactly these:
 
 ```sh
-pnpm exec vp check && pnpm exec vp test && pnpm exec vp pack
+vp check && vp test && vp pack
 ```
 
 All three are [Vite+](https://viteplus.dev/guide/) built-ins configured in
@@ -233,20 +233,23 @@ pack, so none of them takes a flag.
   26-only API now fails a job rather than reaching a consumer — but `vp check`
   and `vp pack` still only ever see the pinned runtime, so a type-level or
   build-time 26-ism is caught by `test` alone.
-- One Node runs the gates and pnpm provisions it: `devEngines.runtime` in
-  `package.json` (`^26.0.0`), pinned with a checksum in `pnpm-lock.yaml`.
-  `pnpm exec node`, `pnpm exec vp …` and a bare `node` inside a script all
-  get it. A bare `node` in your own shell is a different Node, or none at all —
-  never assume one exists; go through pnpm.
-- `pnpm install` needs nothing but pnpm on PATH. There is no `mise.toml` any
-  more, and no bootstrap Node: the standalone pnpm build has Node.js linked in,
-  and the install-script ordering bug that used to make this fail
-  (pnpm/pnpm#14358) is fixed in the pinned pnpm.
-- No setting overrides the runtime per invocation (`--config.useNodeVersion` and
-  `PNPM_SHIM_BYPASS` are accepted and ignored). To run a gate on a different
-  Node, install with `--no-runtime` and put that Node on PATH — that is exactly
-  what the CI matrix does. Do not edit `devEngines.runtime` to test another
-  major; it changes the lockfile.
+- One Node runs the gates and `vp` provisions it: `devEngines.runtime` in
+  `package.json`, an exact version, is the only place the development Node is
+  written down. `vp`, a bare `node` and `npm` inside a script all get it. pnpm
+  is the package manager `vp` drives, at the version `packageManager` names
+  (its hash is checked); it does not provision anything itself, because
+  `pnpm-workspace.yaml` sets `runtimeOnFail: ignore` and `pmOnFail: ignore`.
+  Without them pnpm would download and link the same Node a second time and
+  could switch to a different pnpm than `vp` launched.
+- The Node download is verified by `vp` against Node's release signing keys
+  and its SHA-256, not by a checksum committed in `pnpm-lock.yaml`: with
+  `runtimeOnFail: ignore` the lockfile holds no runtime entry. A range in
+  `devEngines.runtime` would resolve to the newest release on the day, past
+  `minimumReleaseAge`, so keep the version exact and move it by hand.
+- `vp install` needs nothing but the global `vp`. To run a gate on a different
+  Node once, `vp env use <version>` for the shell or `vp env exec --node
+  <version> <command>`; do not edit `devEngines.runtime` to test another major.
+  CI does the same through `voidzero-dev/setup-vp`'s `node-version`.
 - `@types/node` tracks the runtime's major on purpose. Running it ahead makes
   `vp check` accept APIs that do not exist at run time; holding it behind
   hides APIs that do. Move the two together.

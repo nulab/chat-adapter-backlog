@@ -67,25 +67,23 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
-          standalone: true
+          run-install: false
 
-      - run: pnpm install --frozen-lockfile
+      - run: vp install --frozen-lockfile
 
-      # Packing and publishing need npm, and npm comes with a Node from outside
-      # the project: the Node that `pnpm install` provisions is installed
-      # without npm, npx or corepack. Not `node-version: 26`: setup-node
-      # resolves a major to the newest release on the day — on 2026-09-23 a
-      # two-day-old 26.10.0 that `minimumReleaseAge` keeps out of every other
-      # install here — and `pack` and `publish` could each get a different npm.
-      # The lockfile's exact Node, read back from the runtime pnpm linked,
-      # makes both jobs and every re-run use the same one.
-      - name: Read the Node the lockfile pins
+      # Packing and publishing need npm, and `pack` and `publish` have to get
+      # the same one. Not `node-version: 26`: setup-node resolves a major to the
+      # newest release on the day — on 2026-09-23 a two-day-old 26.10.0 — and
+      # the two jobs could each get a different npm. `devEngines.runtime` is an
+      # exact version, so the Node `vp` selected for the project, read back
+      # here, makes both jobs and every re-run use the same one.
+      - name: Read the Node the project pins
         id: pinned
         run: |
-          node_version=$(pnpm exec node --version)
-          echo "node_version=${node_version#v}" >> "$GITHUB_OUTPUT"
+          node_version=$(vp env current --json | jq -er .node.version)
+          echo "node_version=${node_version}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -98,7 +96,7 @@ jobs:
           PINNED_NODE: ${{ steps.pinned.outputs.node_version }}
         run: |
           if [ "$(node --version)" != "v${PINNED_NODE}" ]; then
-            echo "::error::setup-node put $(node --version) on PATH, not the lockfile's v${PINNED_NODE}."
+            echo "::error::setup-node put $(node --version) on PATH, not the pinned v${PINNED_NODE}."
             exit 1
           fi
           {
@@ -184,7 +182,7 @@ jobs:
           fi
 
       - name: Build
-        run: pnpm exec vp pack
+        run: vp pack
 
       # `--ignore-scripts` because the build has already run and the only
       # lifecycle script left, `prepare`, installs the git hooks.
@@ -261,7 +259,7 @@ jobs:
           fi
 
       # npm publishes, so npm comes from here, from the same Node `pack` read
-      # off the lockfile. No upgrade step: every Node 26.x bundles npm 11.12.1
+      # off the project. No upgrade step: every Node 26.x bundles npm 11.12.1
       # or newer, above the 11.5.1 that trusted publishing needs, and
       # `npm install -g npm@latest` would install a new major the day it ships
       # (12.1.0 on 2026-09-22) — `.npmrc`'s `min-release-age` is a project

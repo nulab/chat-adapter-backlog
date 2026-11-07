@@ -15,6 +15,13 @@ minimumReleaseAge: 4320
 # the install rather than being skipped quietly.
 allowBuilds: {}
 
+# Vite+ provisions Node.js (from `devEngines.runtime`) and pnpm (from
+# `packageManager`) itself. Left on `download`, pnpm would fetch and link the
+# same Node a second time, and could switch to a different pnpm than the one
+# `vp` launched.
+runtimeOnFail: ignore
+pmOnFail: ignore
+
 # No `packages`: the root package is a member implicitly and nothing else is.
 # `examples/*` are deliberately not members — each one is a standalone project
 # that installs the published adapter from npm and deploys from its own

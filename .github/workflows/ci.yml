@@ -21,20 +21,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # `standalone: true` installs @pnpm/exe, the build with Node.js linked
-      # into the binary. Nothing here may assume a Node on PATH: Node is a
-      # lockfile dependency that `pnpm install` provisions, so the package
-      # manager has to run before any Node exists. The version comes from
-      # `packageManager` in package.json, which stays the single place it is
-      # written down.
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      # Installs `vp` at the version `vite-plus` has in the lockfile. `vp` then
+      # provisions Node from `devEngines.runtime` and pnpm from
+      # `packageManager`, so neither is written down anywhere else. The
+      # install is its own step, not setup-vp's, to say `--frozen-lockfile`.
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
-          standalone: true
+          run-install: false
 
-      - run: pnpm install --frozen-lockfile
+      - run: vp install --frozen-lockfile
 
       - name: Check
-        run: pnpm exec vp check
+        run: vp check
 
   consumer:
     runs-on: ubuntu-latest
@@ -53,39 +51,35 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The install half needs npm, and the Node `pnpm install` provisions
-      # ships without npm, npx or corepack — the same reason release.yml's
-      # publish job sets up a Node of its own. It is also the Node the
-      # consumer runs on, so both halves come from here.
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # Building and packing are development commands and belong on the Node
+      # `devEngines.runtime` pins, which is what `vp` selects here.
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
-          node-version: ${{ matrix.node }}
+          run-install: false
 
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          standalone: true
-
-      # With the runtime, unlike `test`: building and packing are development
-      # commands and belong on the pinned Node. Node 22 stays reachable
-      # because nothing after the pack goes through pnpm except reading the
-      # lockfile, so a bare `node` or `npm` is the one actions/setup-node put
-      # on PATH.
-      - run: pnpm install --frozen-lockfile
+      - run: vp install --frozen-lockfile
 
       # `vp pack` is the third gate, run here rather than in a job of its
       # own: the tarball has to be packed from a tree this job produced, so a
       # separate build job would only run the same command twice.
       - name: Build
-        run: pnpm exec vp pack
+        run: vp pack
 
-      # `--out`, not the default filename: `pnpm pack` names the tarball after
+      # `--out`, not the default filename: the tarball is named after
       # `version`, and `version` is `0.0.0` on `main` only because release.yml
       # bumps the manifest inside its publish job and never commits it back.
       # Naming the output keeps this job out of that arrangement.
       - name: Pack the tarball a consumer would install
         env:
           TARBALL: ${{ runner.temp }}/chat-adapter-backlog.tgz
-        run: pnpm pack --out "$TARBALL"
+        run: vp pm pack --out "$TARBALL"
+
+      # Set up after the pack, so that it comes first on PATH: this is the
+      # Node and the npm a consumer has, at the floor of `engines.node`.
+      # Nothing below goes through `vp` except reading the lockfile.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
 
       # Installed outside the repository, because inside it Node's resolution
       # walks up into the repo's own node_modules: an import the tarball does
@@ -112,7 +106,7 @@ jobs:
           CONSUMER: ${{ runner.temp }}/consumer
         run: |
           locked() {
-            pnpm list "$1" --lockfile-only --json --depth 0 |
+            vp pm list "$1" --depth 0 --json -- --lockfile-only |
               jq -er --arg name "$1" '.[0].devDependencies[$name].version'
           }
           chat=$(locked chat)
@@ -169,38 +163,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      # `node-version` overrides `devEngines.runtime` for this job, and `vp`
+      # provisions that Node; pnpm no longer links a second one beside it
+      # (`runtimeOnFail: ignore` in pnpm-workspace.yaml).
+      - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
           node-version: ${{ matrix.node }}
+          run-install: false
 
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          standalone: true
+      - run: vp install --frozen-lockfile
 
-      # `--no-runtime` is what makes this a matrix at all. Every other job
-      # installs the Node that `devEngines.runtime` pins, which lands a
-      # `node_modules/.bin/node` that shadows PATH for every `pnpm run` and
-      # `pnpm exec` — no flag, environment variable or setting overrides it,
-      # so a matrix without this would run Node 26 three times. The flag skips
-      # fetching and linking the runtime and leaves the rest of the install
-      # alone, so the lockfile still verifies under `--frozen-lockfile` and
-      # the Node this job asked for is the only one on PATH.
-      - run: pnpm install --frozen-lockfile --no-runtime
-
-      # From here on the job must not go through pnpm, which is why neither
-      # step below does. `pnpm exec` and `pnpm run` verify installed
-      # dependencies against the lockfile first, and a runtime deliberately
-      # left out by `--no-runtime` reads as a dependency that is missing: pnpm
-      # downloads and links Node 26, then services the command with it.
-      #
-      # Invoking the entry point with a bare `node` keeps one Node in play:
-      # the one actions/setup-node put on PATH.
-      #
       # Asserted inside the Node process rather than by capturing its output,
       # so there is nothing to parse and the process being identified is the
-      # one doing the identifying. Both halves are load-bearing — the major has
-      # to match, and it has to come from outside node_modules, which is the
-      # half that catches a runtime that got linked after all.
+      # one doing the identifying. `devEngines.runtime` pins a different Node
+      # from most of this matrix, so a `vp` that fell back to it would run the
+      # same Node three times and still pass.
       - name: Verify the running Node is the one this job asked for
         env:
           EXPECTED_MAJOR: ${{ matrix.node }}
@@ -209,18 +186,15 @@ jobs:
             const expected = process.env.EXPECTED_MAJOR;
             const actual = process.versions.node;
             console.log(`node ${actual} from ${process.execPath}`);
-            if (process.execPath.includes("node_modules")) {
-              throw new Error(`ran a pnpm-linked runtime at ${process.execPath}, not the Node ${expected} this job asked for`);
-            }
             if (actual.split(".")[0] !== expected) {
               throw new Error(`ran Node ${actual}, not the Node ${expected} this job asked for`);
             }
           '
 
-      # `vp` has Node-management logic of its own, so the check above only
-      # identifies the Node that started it. src/test/runtime.test.ts repeats
+      # `vp` launches the test runner itself, so the check above only
+      # identifies the Node a shell step gets. src/test/runtime.test.ts repeats
       # it inside the test process, from `EXPECTED_NODE_MAJOR`.
       - name: Test
         env:
           EXPECTED_NODE_MAJOR: ${{ matrix.node }}
-        run: node node_modules/vite-plus/bin/vp test
+        run: vp test
