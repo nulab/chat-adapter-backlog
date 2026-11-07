@@ -19,13 +19,15 @@ re-measure before changing code that contradicts them.
 ## Endpoints the adapter uses
 
 Endpoint pages never state a bucket; the column applies § Rate limit's bucket
-rule mechanically.
+rule mechanically. The `backlog-js` column is verified against the 1.0.2
+package's declarations (2026-11-08); each method is also a standalone function
+taking a client first, e.g. `getIssue(client, idOrKey)`.
 Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`.
 
-| Method and path                                                         | Bucket                                      | `backlog-js` 0.20.1                                                                   |
+| Method and path                                                         | Bucket                                      | `backlog-js` 1.0.2                                                                    |
 | ----------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `GET /issues/:issueIdOrKey`                                             | read                                        | `getIssue(idOrKey, params?)`                                                          |
-| `GET /issues`                                                           | **search**                                  | `getIssues(params)`                                                                   |
+| `GET /issues`                                                           | **search**                                  | `getIssues(params?)`                                                                  |
 | `PATCH /issues/:issueIdOrKey`                                           | update                                      | `patchIssue(idOrKey, params)`                                                         |
 | `GET /issues/:issueIdOrKey/comments`                                    | read                                        | `getIssueComments(idOrKey, {minId,maxId,count,order})`                                |
 | `GET /issues/:issueIdOrKey/comments/count`                              | read                                        | `getIssueCommentsCount(idOrKey)`                                                      |
@@ -155,7 +157,7 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
 The adapter reads no notification feed; these are facts for a consumer that
 does, through `client()`.
 
-- `backlog-js` 0.20.1: `getNotifications({minId,maxId,count,order})` has no
+- `backlog-js` 1.0.2 (re-verified 2026-11-08): `getNotifications({minId,maxId,count,order})` has no
   `senderId`; `getNotificationsCount({alreadyRead,resourceAlreadyRead})` types
   both as required where the docs say optional; `markAsReadNotification(id)`
   resolves on the 204.
@@ -289,11 +291,16 @@ Limits are **per user, per minute**, in four independent buckets:
   and the two candidate cursors are coarse: § Issue listing (`updatedSince` is
   a date) and § Notifications.
 
-## `backlog-js` 0.20.1 specifics
+## `backlog-js` 1.0.2 specifics
+
+Re-verified against the 1.0.2 package's `dist/index.d.mts` and `dist/index.mjs`
+on 2026-11-08.
 
 - Dual ESM/CJS with separate `.d.mts`/`.d.cts`, no `"type"` field, only
-  runtime dependency `qs`; exports `{ Backlog, OAuth2, Option, Entity, Types,
-  Error }`.
+  runtime dependency `qs`; exports `{ Backlog, Client, createClient, OAuth2,
+  Option, Entity, Types, Error }` plus one standalone function per endpoint
+  (`getIssue(client, …)`), which accept a `Backlog` instance or `createClient`'s
+  result.
 - Constructor `new Backlog({ host, apiKey?, accessToken?, timeout?, fetch?,
   userAgent? })`. `timeout` is set as a non-standard `RequestInit` key and is a
   **no-op with native fetch**; bring your own `AbortSignal`.
@@ -307,8 +314,8 @@ Limits are **per user, per minute**, in four independent buckets:
 - Gaps: no `GET /activities/:id`; no `senderId` on notifications; no
   `excludeGroupMembers`; no webhook receiver or inbound type (reuse
   `Entity.Activity.Activity`); no retry/backoff; `Entity.User.User` lacks
-  `nulabAccount`; `ActivityType` enum labels 21 `PullRequestMerged` (doc: Pull
-  Request Deleted) and omits 39/49.
+  `nulabAccount`; `Types.ActivityType` labels 21 `PullRequestMerged` (doc: Pull
+  Request Deleted) and omits 27–33, 39 and 49.
 
 ## Chat concepts with no Backlog counterpart
 
