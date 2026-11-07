@@ -8,7 +8,14 @@ import {
   threadIdContract,
 } from '@chat-adapter/tests';
 import { Chat } from 'chat';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test';
 import type { Mock } from 'vite-plus/test';
 
 import { BacklogAdapter, createBacklogAdapter } from './adapter';

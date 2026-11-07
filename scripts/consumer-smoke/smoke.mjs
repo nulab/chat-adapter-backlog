@@ -88,11 +88,7 @@ const silentLogger = {
   },
 };
 await adapter.initialize({ getLogger: () => silentLogger });
-assert.equal(
-  networkAttempts,
-  0,
-  'initialize reached the network'
-);
+assert.equal(networkAttempts, 0, 'initialize reached the network');
 
 for (const variable of ['BACKLOG_BOT_USER_ID']) {
   const value = process.env[variable];

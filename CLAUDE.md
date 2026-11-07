@@ -81,15 +81,15 @@ Every fact has exactly one home. Before writing one down, find that home; if
 the fact is already there, point at it or say nothing. A second copy is not
 emphasis, it is the version that goes stale.
 
-| Kind of fact                                         | Home                                                             |
-| ---------------------------------------------------- | ---------------------------------------------------------------- |
-| How the adapter does something                       | the code: names, types, structure                                |
-| What it guarantees, member by member                 | the tests, named after the behaviour                             |
-| The consumer-visible contract and design decisions   | [the spec](./docs/specs/adapter.md) and its decision table       |
-| What Backlog and the Chat SDK core do, with the date | `.claude/rules/*.md`                                             |
-| Why one change was made                              | the squash commit body                                           |
-| Why the obvious code would break                     | a comment on that code                                           |
-| How to work here: gates, CI coupling, PR rules       | this file and [DEVELOPMENT.md](./DEVELOPMENT.md)                 |
+| Kind of fact                                         | Home                                                       |
+| ---------------------------------------------------- | ---------------------------------------------------------- |
+| How the adapter does something                       | the code: names, types, structure                          |
+| What it guarantees, member by member                 | the tests, named after the behaviour                       |
+| The consumer-visible contract and design decisions   | [the spec](./docs/specs/adapter.md) and its decision table |
+| What Backlog and the Chat SDK core do, with the date | `.claude/rules/*.md`                                       |
+| Why one change was made                              | the squash commit body                                     |
+| Why the obvious code would break                     | a comment on that code                                     |
+| How to work here: gates, CI coupling, PR rules       | this file and [DEVELOPMENT.md](./DEVELOPMENT.md)           |
 
 - **The spec** states what a consumer can observe and which decisions shaped
   it. It describes behaviour: it does not restate the README's content, list

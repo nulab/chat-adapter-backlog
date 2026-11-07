@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/**/*.ts"
+  - 'src/**/*.ts'
 ---
 
 # Backlog API v2 facts
@@ -22,34 +22,34 @@ Endpoint pages never state a bucket; the column applies § Rate limit's bucket
 rule mechanically.
 Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`.
 
-| Method and path | Bucket | `backlog-js` 0.20.1 |
-| --- | --- | --- |
-| `GET /issues/:issueIdOrKey` | read | `getIssue(idOrKey, params?)` |
-| `GET /issues` | **search** | `getIssues(params)` |
-| `PATCH /issues/:issueIdOrKey` | update | `patchIssue(idOrKey, params)` |
-| `GET /issues/:issueIdOrKey/comments` | read | `getIssueComments(idOrKey, {minId,maxId,count,order})` |
-| `GET /issues/:issueIdOrKey/comments/count` | read | `getIssueCommentsCount(idOrKey)` |
-| `POST /issues/:issueIdOrKey/comments` | update | `postIssueComments(idOrKey, {content, notifiedUserId?, attachmentId?})` |
-| `GET /issues/:issueIdOrKey/comments/:commentId` | read | `getIssueComment(idOrKey, commentId)` |
-| `PATCH /issues/:issueIdOrKey/comments/:commentId` | update | `patchIssueComment(idOrKey, commentId, {content})` |
-| `DELETE /issues/:issueIdOrKey/comments/:commentId` | update | `deleteIssueComment(idOrKey, commentId)` |
-| `GET /issues/:issueIdOrKey/comments/:commentId/notifications` | read | `getIssueCommentNotifications(idOrKey, commentId)` |
-| `POST /issues/:issueIdOrKey/comments/:commentId/notifications` | update | `postIssueCommentNotifications(idOrKey, commentId, {notifiedUserId})` |
-| `GET /issues/:issueIdOrKey/attachments` | read | `getIssueAttachments(idOrKey)` |
-| `GET /issues/:issueIdOrKey/attachments/:attachmentId` | read | `getIssueAttachment(idOrKey, attachmentId)` → `FileData` |
-| `POST /space/attachment` | update | `postSpaceAttachment(formData)` |
-| `POST /stars` | update | `postStar({commentId})` → `void` |
-| `DELETE /stars/:starId` | update | `removeStar(starId)` → `void` |
-| `GET /projects/:projectIdOrKey` | read | `getProject(idOrKey)` |
-| `GET /projects/:projectIdOrKey/users` | read | `getProjectUsers(idOrKey)`; no `excludeGroupMembers` param |
-| `GET /projects/:projectIdOrKey/statuses` | read | `getProjectStatuses(idOrKey)` |
-| `GET /users/:userId` | read | `getUser(userId)` |
-| `GET /users/:userId/icon` | **icon** | `getUserIcon(userId)` → `FileData` |
-| `GET /projects/:projectIdOrKey/webhooks[/:webhookId]` | read | `getWebhooks`, `getWebhook` |
-| `POST`/`PATCH`/`DELETE /projects/:projectIdOrKey/webhooks[/:webhookId]` | update | `postWebhook`, `patchWebhook`, `deleteWebhook` |
-| `GET /space/activities`, `GET /projects/:projectIdOrKey/activities` | read | `getSpaceActivities(params)`, `getProjectActivities(idOrKey, params)` |
-| `GET /activities/:activityId` | read | **unwrapped**: `backlog.request({method:"GET", path:"activities/<id>"})` or raw fetch |
-| `GET /rateLimit` | read; whether it consumes quota is unstated | `getRateLimit()` |
+| Method and path                                                         | Bucket                                      | `backlog-js` 0.20.1                                                                   |
+| ----------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `GET /issues/:issueIdOrKey`                                             | read                                        | `getIssue(idOrKey, params?)`                                                          |
+| `GET /issues`                                                           | **search**                                  | `getIssues(params)`                                                                   |
+| `PATCH /issues/:issueIdOrKey`                                           | update                                      | `patchIssue(idOrKey, params)`                                                         |
+| `GET /issues/:issueIdOrKey/comments`                                    | read                                        | `getIssueComments(idOrKey, {minId,maxId,count,order})`                                |
+| `GET /issues/:issueIdOrKey/comments/count`                              | read                                        | `getIssueCommentsCount(idOrKey)`                                                      |
+| `POST /issues/:issueIdOrKey/comments`                                   | update                                      | `postIssueComments(idOrKey, {content, notifiedUserId?, attachmentId?})`               |
+| `GET /issues/:issueIdOrKey/comments/:commentId`                         | read                                        | `getIssueComment(idOrKey, commentId)`                                                 |
+| `PATCH /issues/:issueIdOrKey/comments/:commentId`                       | update                                      | `patchIssueComment(idOrKey, commentId, {content})`                                    |
+| `DELETE /issues/:issueIdOrKey/comments/:commentId`                      | update                                      | `deleteIssueComment(idOrKey, commentId)`                                              |
+| `GET /issues/:issueIdOrKey/comments/:commentId/notifications`           | read                                        | `getIssueCommentNotifications(idOrKey, commentId)`                                    |
+| `POST /issues/:issueIdOrKey/comments/:commentId/notifications`          | update                                      | `postIssueCommentNotifications(idOrKey, commentId, {notifiedUserId})`                 |
+| `GET /issues/:issueIdOrKey/attachments`                                 | read                                        | `getIssueAttachments(idOrKey)`                                                        |
+| `GET /issues/:issueIdOrKey/attachments/:attachmentId`                   | read                                        | `getIssueAttachment(idOrKey, attachmentId)` → `FileData`                              |
+| `POST /space/attachment`                                                | update                                      | `postSpaceAttachment(formData)`                                                       |
+| `POST /stars`                                                           | update                                      | `postStar({commentId})` → `void`                                                      |
+| `DELETE /stars/:starId`                                                 | update                                      | `removeStar(starId)` → `void`                                                         |
+| `GET /projects/:projectIdOrKey`                                         | read                                        | `getProject(idOrKey)`                                                                 |
+| `GET /projects/:projectIdOrKey/users`                                   | read                                        | `getProjectUsers(idOrKey)`; no `excludeGroupMembers` param                            |
+| `GET /projects/:projectIdOrKey/statuses`                                | read                                        | `getProjectStatuses(idOrKey)`                                                         |
+| `GET /users/:userId`                                                    | read                                        | `getUser(userId)`                                                                     |
+| `GET /users/:userId/icon`                                               | **icon**                                    | `getUserIcon(userId)` → `FileData`                                                    |
+| `GET /projects/:projectIdOrKey/webhooks[/:webhookId]`                   | read                                        | `getWebhooks`, `getWebhook`                                                           |
+| `POST`/`PATCH`/`DELETE /projects/:projectIdOrKey/webhooks[/:webhookId]` | update                                      | `postWebhook`, `patchWebhook`, `deleteWebhook`                                        |
+| `GET /space/activities`, `GET /projects/:projectIdOrKey/activities`     | read                                        | `getSpaceActivities(params)`, `getProjectActivities(idOrKey, params)`                 |
+| `GET /activities/:activityId`                                           | read                                        | **unwrapped**: `backlog.request({method:"GET", path:"activities/<id>"})` or raw fetch |
+| `GET /rateLimit`                                                        | read; whether it consumes quota is unstated | `getRateLimit()`                                                                      |
 
 ## Comment listing and paging
 

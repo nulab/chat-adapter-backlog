@@ -94,96 +94,102 @@ function commentOf(raw: BacklogRawMessage): BacklogRawComment {
   return raw.comment;
 }
 
-describe.skipIf(!configured)('a real Backlog space', { concurrent: false }, () => {
-  const subject: BacklogSubjectRef = { kind: 'issue', issueId };
-  let adapter: ReturnType<typeof createLiveAdapter>;
-  let threadId: string;
-  let channelId: string;
+describe.skipIf(!configured)(
+  'a real Backlog space',
+  { concurrent: false },
+  () => {
+    const subject: BacklogSubjectRef = { kind: 'issue', issueId };
+    let adapter: ReturnType<typeof createLiveAdapter>;
+    let threadId: string;
+    let channelId: string;
 
-  beforeAll(async () => {
-    adapter = createLiveAdapter();
-    const projectId = await projectIdOfLiveIssue();
-    threadId = encodeThreadId({ host: spaceHost, projectId, subject });
-    channelId = encodeChannelId({ host: spaceHost, projectId });
-  });
-
-  it('describes the issue named by BACKLOG_LIVE_ISSUE_ID as a thread', async () => {
-    const thread = await adapter.fetchThread(threadId);
-
-    expect(thread.metadata).toMatchObject({ kind: 'issue', issueId });
-    expect(thread.metadata['issueKey']).toMatch(/^[A-Z0-9_]+-\d+$/);
-  });
-
-  it("describes the issue's project as a channel", async () => {
-    const channel = await adapter.fetchChannelInfo(channelId);
-
-    expect(channel.metadata['projectKey']).toMatch(/^[A-Z0-9_]+$/);
-  });
-
-  it('posts, reads, edits, stars, unstars and deletes one comment', async () => {
-    const posted = await adapter.postMessage(threadId, {
-      markdown:
-        'chat-adapter-backlog live suite: this comment is deleted below.',
-    });
-    const commentId = commentOf(posted.raw).id;
-
-    const page = await adapter.fetchMessages(threadId, { limit: 5 });
-    expect(page.messages.map((message) => message.id)).toContain(posted.id);
-
-    const edited = await adapter.editMessage(threadId, posted.id, {
-      markdown: 'chat-adapter-backlog live suite: edited, and deleted below.',
-    });
-    const editedComment = commentOf(edited.raw);
-    expect(editedComment.content).toContain('edited');
-    expect(Date.parse(editedComment.updated)).toBeGreaterThanOrEqual(
-      Date.parse(editedComment.created)
-    );
-
-    const client = adapter.client();
-    await adapter.addReaction(threadId, posted.id, 'star');
-    const starred = await client.getIssueComment(issueId, commentId);
-    expect(starred.stars.length).toBeGreaterThan(0);
-
-    await adapter.removeReaction(threadId, posted.id, 'star');
-    const unstarred = await client.getIssueComment(issueId, commentId);
-    expect(unstarred.stars).toHaveLength(0);
-
-    await adapter.deleteMessage(threadId, posted.id);
-  });
-
-  it('posts a file with a comment, reads it back as that comment’s attachment, and refuses to delete the comment', async () => {
-    const filename = `live-suite-${Date.now()}.txt`;
-    const posted = await adapter.postMessage(threadId, {
-      markdown: 'chat-adapter-backlog live suite: attachment, left behind.',
-      files: [
-        {
-          filename,
-          data: Buffer.from('chat-adapter-backlog live suite\n'),
-          mimeType: 'text/plain',
-        },
-      ],
+    beforeAll(async () => {
+      adapter = createLiveAdapter();
+      const projectId = await projectIdOfLiveIssue();
+      threadId = encodeThreadId({ host: spaceHost, projectId, subject });
+      channelId = encodeChannelId({ host: spaceHost, projectId });
     });
 
-    const message = await adapter.fetchMessage(threadId, posted.id);
-    const attachment = message?.attachments.find(
-      (candidate) => candidate.name === filename
-    );
-    expect(attachment).toBeDefined();
-    expect(String(await attachment?.fetchData?.())).toBe(
-      'chat-adapter-backlog live suite\n'
-    );
+    it('describes the issue named by BACKLOG_LIVE_ISSUE_ID as a thread', async () => {
+      const thread = await adapter.fetchThread(threadId);
 
-    const failure: unknown = await adapter
-      .deleteMessage(threadId, posted.id)
-      .then(() => undefined)
-      .catch((cause: unknown) => cause);
-    expect(failure).toBeInstanceOf(AdapterError);
-    expect((failure as AdapterError).code).toBe('UNSUPPORTED_OPERATION');
-  });
-});
+      expect(thread.metadata).toMatchObject({ kind: 'issue', issueId });
+      expect(thread.metadata['issueKey']).toMatch(/^[A-Z0-9_]+-\d+$/);
+    });
 
-describe
-  .skipIf(!pullRequestConfigured)('a real Backlog pull request', { concurrent: false }, () => {
+    it("describes the issue's project as a channel", async () => {
+      const channel = await adapter.fetchChannelInfo(channelId);
+
+      expect(channel.metadata['projectKey']).toMatch(/^[A-Z0-9_]+$/);
+    });
+
+    it('posts, reads, edits, stars, unstars and deletes one comment', async () => {
+      const posted = await adapter.postMessage(threadId, {
+        markdown:
+          'chat-adapter-backlog live suite: this comment is deleted below.',
+      });
+      const commentId = commentOf(posted.raw).id;
+
+      const page = await adapter.fetchMessages(threadId, { limit: 5 });
+      expect(page.messages.map((message) => message.id)).toContain(posted.id);
+
+      const edited = await adapter.editMessage(threadId, posted.id, {
+        markdown: 'chat-adapter-backlog live suite: edited, and deleted below.',
+      });
+      const editedComment = commentOf(edited.raw);
+      expect(editedComment.content).toContain('edited');
+      expect(Date.parse(editedComment.updated)).toBeGreaterThanOrEqual(
+        Date.parse(editedComment.created)
+      );
+
+      const client = adapter.client();
+      await adapter.addReaction(threadId, posted.id, 'star');
+      const starred = await client.getIssueComment(issueId, commentId);
+      expect(starred.stars.length).toBeGreaterThan(0);
+
+      await adapter.removeReaction(threadId, posted.id, 'star');
+      const unstarred = await client.getIssueComment(issueId, commentId);
+      expect(unstarred.stars).toHaveLength(0);
+
+      await adapter.deleteMessage(threadId, posted.id);
+    });
+
+    it('posts a file with a comment, reads it back as that comment’s attachment, and refuses to delete the comment', async () => {
+      const filename = `live-suite-${Date.now()}.txt`;
+      const posted = await adapter.postMessage(threadId, {
+        markdown: 'chat-adapter-backlog live suite: attachment, left behind.',
+        files: [
+          {
+            filename,
+            data: Buffer.from('chat-adapter-backlog live suite\n'),
+            mimeType: 'text/plain',
+          },
+        ],
+      });
+
+      const message = await adapter.fetchMessage(threadId, posted.id);
+      const attachment = message?.attachments.find(
+        (candidate) => candidate.name === filename
+      );
+      expect(attachment).toBeDefined();
+      expect(String(await attachment?.fetchData?.())).toBe(
+        'chat-adapter-backlog live suite\n'
+      );
+
+      const failure: unknown = await adapter
+        .deleteMessage(threadId, posted.id)
+        .then(() => undefined)
+        .catch((cause: unknown) => cause);
+      expect(failure).toBeInstanceOf(AdapterError);
+      expect((failure as AdapterError).code).toBe('UNSUPPORTED_OPERATION');
+    });
+  }
+);
+
+describe.skipIf(!pullRequestConfigured)(
+  'a real Backlog pull request',
+  { concurrent: false },
+  () => {
     // `pullRequestConfigured` gates every test, so this is set by the time one
     // runs.
     const coordinates = pullRequestCoordinates as NonNullable<
@@ -313,4 +319,5 @@ describe
         fetchSpy.mockRestore();
       }
     });
-  });
+  }
+);

@@ -70,12 +70,12 @@ the memory state forgets everything on restart.
 Each variable is the fallback for the option of the same meaning. It is used
 only when the option is missing; an explicit empty string is a `ValidationError`.
 
-| Variable                 | Required                 | Meaning                                                                    |
-| ------------------------ | ------------------------ | -------------------------------------------------------------------------- |
-| `BACKLOG_HOST`           | yes                      | Space host without a scheme, e.g. `example.backlog.com`.                   |
-| `BACKLOG_API_KEY`        | yes                      | Personal API key of the bot user.                                          |
-| `BACKLOG_BOT_USER_ID`    | yes                      | Numeric id of the bot user.                                                |
-| `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter; at least 16 bytes.  |
+| Variable                 | Required                 | Meaning                                                                   |
+| ------------------------ | ------------------------ | ------------------------------------------------------------------------- |
+| `BACKLOG_HOST`           | yes                      | Space host without a scheme, e.g. `example.backlog.com`.                  |
+| `BACKLOG_API_KEY`        | yes                      | Personal API key of the bot user.                                         |
+| `BACKLOG_BOT_USER_ID`    | yes                      | Numeric id of the bot user.                                               |
+| `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter; at least 16 bytes. |
 
 ### Options
 
@@ -83,14 +83,14 @@ only when the option is missing; an explicit empty string is a `ValidationError`
 createBacklogAdapter({ host, apiKey, botUserId, webhookSecret });
 ```
 
-| Option                   | Type                                          | Default                  | Notes                                                                    |
-| ------------------------ | --------------------------------------------- | ------------------------ | ------------------------------------------------------------------------ |
-| `host`                   | `string`                                      | `BACKLOG_HOST`           | Spaces also live on `backlog.jp` and `backlogtool.com`.                  |
-| `apiKey`                 | `string \| (() => string \| Promise<string>)` | `BACKLOG_API_KEY`        | Required. A function is called on every request, so a key can rotate.    |
-| `botUserId`              | `number`                                      | `BACKLOG_BOT_USER_ID`    | Required. Recognises the bot's own comments and assignment to it.        |
-| `webhookSecret`          | `string`                                      | `BACKLOG_WEBHOOK_SECRET` | Required unless `webhookVerifier` is set.                                |
-| `webhookVerifier`        | `(request, rawBody) => unknown`               | —                        | Replaces the secret check; a truthy result accepts the delivery.         |
-| `logger`                 | `Logger`                                      | `ConsoleLogger("info")`  | Replaced by `chat.getLogger("backlog")` on `initialize`.                 |
+| Option            | Type                                          | Default                  | Notes                                                                 |
+| ----------------- | --------------------------------------------- | ------------------------ | --------------------------------------------------------------------- |
+| `host`            | `string`                                      | `BACKLOG_HOST`           | Spaces also live on `backlog.jp` and `backlogtool.com`.               |
+| `apiKey`          | `string \| (() => string \| Promise<string>)` | `BACKLOG_API_KEY`        | Required. A function is called on every request, so a key can rotate. |
+| `botUserId`       | `number`                                      | `BACKLOG_BOT_USER_ID`    | Required. Recognises the bot's own comments and assignment to it.     |
+| `webhookSecret`   | `string`                                      | `BACKLOG_WEBHOOK_SECRET` | Required unless `webhookVerifier` is set.                             |
+| `webhookVerifier` | `(request, rawBody) => unknown`               | —                        | Replaces the secret check; a truthy result accepts the delivery.      |
+| `logger`          | `Logger`                                      | `ConsoleLogger("info")`  | Replaced by `chat.getLogger("backlog")` on `initialize`.              |
 
 One adapter serves one Backlog space; a second space is a second adapter behind
 its own webhook URL.
@@ -121,12 +121,12 @@ curl -H "Backlog-API-Key: $BACKLOG_API_KEY" https://$BACKLOG_HOST/api/v2/users/m
    and select these activity types. Leave 21 unchecked (a merge or close
    arrives as a 19), and **never select `allEvent`**:
 
-   | Types      | Events                                              |
-   | ---------- | --------------------------------------------------- |
-   | 1, 2, 3    | issue created, updated, commented                   |
-   | 14         | issues updated in bulk — one message per issue      |
+   | Types      | Events                                               |
+   | ---------- | ---------------------------------------------------- |
+   | 1, 2, 3    | issue created, updated, commented                    |
+   | 14         | issues updated in bulk — one message per issue       |
    | 18, 19, 20 | pull request added, updated (incl. merge), commented |
-   | 4          | issue deleted — optional                            |
+   | 4          | issue deleted — optional                             |
 
 The activity types you select are the only on/off switch. Leave out 18–20 and
 no pull request reaches a handler. Leaving out 14 avoids fanning a bulk update
@@ -210,7 +210,10 @@ import type { BacklogPostableExtras } from '@nulab/chat-adapter-backlog';
 
 await thread.post({ markdown: '<@U100> please take a look' });
 
-const ping: PostableMarkdown & BacklogPostableExtras = { markdown: 'ping', notifiedUserId: [100] };
+const ping: PostableMarkdown & BacklogPostableExtras = {
+  markdown: 'ping',
+  notifiedUserId: [100],
+};
 await thread.post(ping);
 ```
 
