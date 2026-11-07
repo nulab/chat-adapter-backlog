@@ -483,7 +483,7 @@ into them or track them (docs/specs/adapter.md D5).
 
 ## Dependency plan
 
-Build on [`backlog-js`](https://github.com/nulab/backlog-js) (v0.20.1, MIT,
+Build on [`backlog-js`](https://github.com/nulab/backlog-js) (v1.0.2, MIT,
 Nulab's own, tsdown-built, single runtime dependency `qs`), and call its typed
 methods directly — there is no port in front of it. It does not provide, and
 this repo must add:
