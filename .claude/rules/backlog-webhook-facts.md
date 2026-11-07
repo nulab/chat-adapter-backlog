@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/**/*.ts"
+  - 'src/**/*.ts'
 ---
 
 # Backlog webhook facts
@@ -50,7 +50,7 @@ the code toward intuition. Pull-request activities (18–21) are in
   :id/activities` carries `notifications: []`** (measured 2026-08-20,
   2026-09-03 and 2026-09-06), which is also what the Get Recent Updates page
   and `backlog-js`'s `notifications: []` typing describe. So the two bodies
-  are *not* interchangeable in this one field, and the webhook is the only
+  are _not_ interchangeable in this one field, and the webhook is the only
   place the notification list can be read at all. An activity-API body
   replayed as a webhook is still valid — it just says nothing about who was
   notified.
@@ -100,6 +100,7 @@ carries the key in question:
   snapshot's `assignee` already equals that delivery's
   `changes[field="assigner"]` `new_value`. It is a full user object
   (`id`, `userId`, `name`, `roleType`, `lang`), not an `{ id, name }` pair.
+
 - Key convention differs on one field: webhook `externalFileLinks`, activity
   `external_file_links`.
 - `changes[]` entries on the activity form carry an extra `field_text`, the
@@ -228,8 +229,8 @@ carries the key in question:
   repetition, not the array being populated — the webhook form
   fills `notifications[]` on other types too (§ Mentions). An entry has the
   keys `id`, `alreadyRead`, `reason`, `resourceAlreadyRead` and `user` and
-  **nothing that names an issue**, so with the same user repeated, entry *n* is
-  indistinguishable from entry *m*, and the correspondence to `link[]` was only
+  **nothing that names an issue**, so with the same user repeated, entry _n_ is
+  indistinguishable from entry _m_, and the correspondence to `link[]` was only
   ever inferred by reading the issues back over REST. Treat the array as a fact
   about the batch, not about any issue in it.
 - The bulk comment box has no mention autocomplete, and a plain-text `@name`
@@ -246,19 +247,19 @@ One `PATCH /issues/:id` per field, on a development space, 2026-09-06. The
 `field` name is an internal name matching neither the API parameter nor the
 label a user sees, and only three fields carry an id:
 
-| API parameter | `field` | `new_value` | `type` |
-| --- | --- | --- | --- |
-| `priorityId` | `priority` | id string (`"2"`) | `standard` |
-| `statusId` | `status` | id string (`"2"`) | `standard` |
-| `resolutionId` | `resolution` | id string (`"0"`) | `standard` |
-| `categoryId[]` | **`component`** | display name | `standard` |
-| `milestoneId[]` | `milestone` | display name; several joined with `", "`, in an order that was not the display order on the one sample taken — the ordering rule is not established | `standard` |
-| `versionId[]` | `version` | display name | `standard` |
-| `dueDate` | **`limitDate`** | a bare date, `"2026-12-31"` — no time part, no `Z` | `standard` |
-| `issueTypeId` | `issueType` | display name | `standard` |
-| `summary` | `summary` | the whole new summary | `standard` |
-| `assigneeId` | **`assigner`** | display name | `standard` |
-| `customField_<id>` | **the attribute's own name** | the value | **`custom`** |
+| API parameter      | `field`                      | `new_value`                                                                                                                                         | `type`       |
+| ------------------ | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| `priorityId`       | `priority`                   | id string (`"2"`)                                                                                                                                   | `standard`   |
+| `statusId`         | `status`                     | id string (`"2"`)                                                                                                                                   | `standard`   |
+| `resolutionId`     | `resolution`                 | id string (`"0"`)                                                                                                                                   | `standard`   |
+| `categoryId[]`     | **`component`**              | display name                                                                                                                                        | `standard`   |
+| `milestoneId[]`    | `milestone`                  | display name; several joined with `", "`, in an order that was not the display order on the one sample taken — the ordering rule is not established | `standard`   |
+| `versionId[]`      | `version`                    | display name                                                                                                                                        | `standard`   |
+| `dueDate`          | **`limitDate`**              | a bare date, `"2026-12-31"` — no time part, no `Z`                                                                                                  | `standard`   |
+| `issueTypeId`      | `issueType`                  | display name                                                                                                                                        | `standard`   |
+| `summary`          | `summary`                    | the whole new summary                                                                                                                               | `standard`   |
+| `assigneeId`       | **`assigner`**               | display name                                                                                                                                        | `standard`   |
+| `customField_<id>` | **the attribute's own name** | the value                                                                                                                                           | **`custom`** |
 
 - `old_value` is present on every one of them, and is `""` when the field had
   no previous value.
@@ -316,7 +317,7 @@ label a user sees, and only three fields carry an id:
   absent from all three deliveries it should have seen if watching notified:
   a plain comment, a priority-only `PATCH` and a description-only `PATCH`
   arrived with `notifications: []`. The control on the same issue — the same
-  kind of comment addressing a user who was *not* watching — carried that
+  kind of comment addressing a user who was _not_ watching — carried that
   user with `reason: 2` (measured 2026-09-06). So far `notifications[]`
   reports explicit addressing only: every act measured here that put a user
   in it was one somebody performed on that user.
@@ -384,14 +385,14 @@ label a user sees, and only three fields carry an id:
 
 ## Activity type ids that concern issues
 
-| type | name | `content` shape |
-| --- | --- | --- |
-| 1 | Issue Created | `{ id, key_id, summary, description }`; no `comment`, `changes` or `diff` |
-| 2 | Issue Updated | `{ id, key_id, summary, description, comment{id,content}, changes[], attachments[], shared_files[], external_file_links[] }` |
-| 3 | Issue Commented | same as 2; `comment.content` holds the text |
-| 4 | Issue Deleted | `{ id, key_id }` |
-| 14 | Issue Multi Updated | `{ tx_id, comment{content}, link[], individual_update, changes[] }`; no `content.id` (measured 2026-09-06) |
-| 17 | Comment Notification Added | same key set as 2/3, no `link`; `comment` is the target comment unchanged and `changes` is `[]` (measured 2026-09-06; undocumented) |
+| type | name                       | `content` shape                                                                                                                     |
+| ---- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | Issue Created              | `{ id, key_id, summary, description }`; no `comment`, `changes` or `diff`                                                           |
+| 2    | Issue Updated              | `{ id, key_id, summary, description, comment{id,content}, changes[], attachments[], shared_files[], external_file_links[] }`        |
+| 3    | Issue Commented            | same as 2; `comment.content` holds the text                                                                                         |
+| 4    | Issue Deleted              | `{ id, key_id }`                                                                                                                    |
+| 14   | Issue Multi Updated        | `{ tx_id, comment{content}, link[], individual_update, changes[] }`; no `content.id` (measured 2026-09-06)                          |
+| 17   | Comment Notification Added | same key set as 2/3, no `link`; `comment` is the target comment unchanged and `changes` is `[]` (measured 2026-09-06; undocumented) |
 
 Names: https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/
 (filter range `type(1-49)`; ids 27–33 undocumented). Shapes: `backlog-js`

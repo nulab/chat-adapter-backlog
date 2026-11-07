@@ -77,6 +77,9 @@ export function createBacklogClient(
       return response;
     }
 
+    // backlog-js always passes a string URL, so `input` is never a `Request`;
+    // a branch for one would be dead code with no test to reach it.
+    // oxlint-disable-next-line typescript/no-base-to-string
     const url = stripQueryString(String(input));
     const bodyError = await readBodyError(response);
     if (response.status === 429 || bodyError?.code === 13) {

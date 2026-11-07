@@ -29,7 +29,6 @@ names the install command and orchestrates nothing else.
 ```sh
 cd examples/<name>
 npm install
-npm run typecheck
 npm run deploy      # npx vercel deploy
 ```
 

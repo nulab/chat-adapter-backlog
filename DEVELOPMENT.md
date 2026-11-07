@@ -17,7 +17,7 @@ needs nothing else present:
 
 ```sh
 curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=<packageManager version> sh -
-pnpm install     # provisions Node from devEngines.runtime, then `prepare` -> `lefthook install`
+pnpm install     # provisions Node from devEngines.runtime, then `prepare` -> `vp config`
 ```
 
 That is the whole bootstrap. The first install is slower than later ones
@@ -36,43 +36,44 @@ Node or none at all (CLAUDE.md, Quality gates).
   `pnpm-lock.yaml`, provisions no runtime and leaves a `package-lock.json`
   that must not be committed.
 
-## Scripts
+## Commands
 
-| Script              | Command                                            | When to use it                                                            |
-| ------------------- | -------------------------------------------------- | ------------------------------------------------------------------------- |
-| `pnpm build`        | `tsdown && node scripts/check-published-types.mjs` | Produce `dist/`. Fails on a `publint`, `attw` or published-types problem. |
-| `pnpm test`         | `vitest run`                                       | Run the suite once. Needs no credentials.                                 |
-| `pnpm test:watch`   | `vitest`                                           | Watch mode while writing tests.                                           |
-| `pnpm lint`         | `oxlint --max-warnings 0`                          | Lint the whole tree, `examples/` included. Warnings fail.                 |
-| `pnpm lint:fix`     | `oxlint --fix`                                     | Apply the auto-fixable lint results.                                      |
-| `pnpm format`       | `oxfmt <paths>`                                    | Format `src`, `examples` and the two config files.                        |
-| `pnpm format:check` | `oxfmt --check <paths>`                            | The same paths, without writing. This is what CI runs.                    |
-| `pnpm typecheck`    | `tsc --noEmit`                                     | Type check. `tsconfig.json` never emits; tsdown builds.                   |
+The gates are [Vite+](https://viteplus.dev/guide/) built-ins, configured in
+`vite.config.ts` and run through pnpm until `vp` is installed another way
+(`pnpm exec vp …`). There are no wrapper scripts; `package.json` keeps only
+`prepare`, which installs the git hooks.
 
-The five gates CI enforces, and what each one catches, are in CLAUDE.md
-"Quality gates". Root-level JSON, YAML and Markdown are formatted by the
-pre-commit hook but not checked in CI. oxfmt exits 2 on a path that does not
-exist, so removing `examples/` means removing it from the two `format`
-scripts.
+| Command    | When to use it                                                                                                        |
+| ---------- | --------------------------------------------------------------------------------------------------------------------- |
+| `vp check` | Format check, lint and type check in one run. This is what CI runs. `vp check --fix` writes the formatting and fixes. |
+| `vp test`  | Run the suite once. Needs no credentials. `vp test watch` is watch mode while writing tests.                          |
+| `vp pack`  | Produce `dist/`. Fails on a `publint`, `attw` or published-types problem.                                             |
+
+The three gates CI enforces, and what each one catches, are in CLAUDE.md
+"Quality gates". Formatting covers the whole repository except the generated
+`sample-messages.md`, `pnpm-lock.yaml`, build output and `examples/**`, which
+the root toolchain does not touch at all (CLAUDE.md, `examples/`); linting and
+type checking also skip `scripts/consumer-smoke`.
 
 ## Pre-commit hook
 
-[lefthook](https://lefthook.dev/) runs two commands in parallel on staged files
-(`lefthook.yml`):
+`vp config` (run by `prepare` on every install) installs the Vite+ git hook
+dispatcher, and `.vite-hooks/pre-commit` runs `vp staged`, which runs
+`vp check --fix` on the staged files (the `staged` block in `vite.config.ts`;
+see [Commit Hooks](https://viteplus.dev/guide/commit-hooks)). Unlike the hook
+it replaces, **this one blocks the commit** when a check fails after the fixes
+are applied. `VP_GIT_HOOKS=0 git commit …` skips it for one commit.
 
-- **oxlint** — `oxlint --fix` on staged `*.{js,ts,jsx,tsx}`, then re-stages
-  what it fixed. It never blocks a commit (CLAUDE.md "Quality gates"), so run
-  `pnpm lint` yourself.
-- **oxfmt** — formats staged `*.{js,ts,jsx,tsx,json,css,html,yaml,yml}`
-  (excluding `pnpm-lock.yaml`) and re-stages the result.
-
-Local-only hook tweaks go in `lefthook-local.yml`, which is gitignored.
+`prepare` writes `core.hooksPath` into the clone's shared `.git/config`, so
+every worktree of the clone switches to the Vite+ hooks at once, and a worktree
+that is on a branch from before this change, or has not run an install yet
+(`.vite-hooks/_` is generated and git-ignored), runs no hook at all.
 
 ## Tests
 
-Vitest, `environment: 'node'`, files colocated as `src/**/*.test.ts`; coverage
-is measured over `src/**/*.ts` minus tests and declarations. How tests are
-written here is CLAUDE.md "Test strategy".
+Vitest, bundled with Vite+ and imported from `vite-plus/test`, `environment:
+'node'`, files colocated as `src/**/*.test.ts`. How tests are written here is
+CLAUDE.md "Test strategy".
 
 ### Opt-in live suite
 
@@ -140,16 +141,14 @@ real key, and never put it in a URL query string
 whatever its base, and as a reusable workflow called by the release. Why each
 step is shaped as it is lives in the comments beside it.
 
-| Job         | What it does                                                                                                                                                                                                                                         |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lint`      | `pnpm lint`, then `pnpm format:check`.                                                                                                                                                                                                               |
-| `typecheck` | `pnpm typecheck`.                                                                                                                                                                                                                                    |
-| `consumer`  | `pnpm build` and `pnpm pack`; installs the tarball with npm outside the repository; runs `scripts/consumer-smoke/smoke.mjs` on Node 22; type checks `documented-usage.ts` and every `examples/*` against the tarball (CLAUDE.md, State of the repo). |
-| `test`      | The suite on Node 22, 24 and 26, each asserted to be the Node that actually ran.                                                                                                                                                                 |
+| Job        | What it does                                                                                                                                                                                                               |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `check`    | `vp check`: format check, lint and type check.                                                                                                                                                                             |
+| `consumer` | `vp pack` and `pnpm pack`; installs the tarball with npm outside the repository; runs `scripts/consumer-smoke/smoke.mjs` on Node 22; type checks `documented-usage.ts` against the tarball (CLAUDE.md, State of the repo). |
+| `test`     | The suite on Node 22, 24 and 26, each asserted to be the Node that actually ran.                                                                                                                                           |
 
 Installs are `--frozen-lockfile`, so commit `pnpm-lock.yaml` with any
-`package.json` change. An example is checked by hand the way its README says:
-`npm install` and `npm run typecheck` inside its own directory.
+`package.json` change.
 
 ## Releasing
 

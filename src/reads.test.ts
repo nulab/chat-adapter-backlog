@@ -1,6 +1,6 @@
 import { ResourceNotFoundError, ValidationError } from '@chat-adapter/shared';
 import { Message as MessageCtor } from 'chat';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
 
 import { encodeMessageId } from './ids';
 import {

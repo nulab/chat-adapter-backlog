@@ -7,10 +7,16 @@ import {
   selfMessageContract,
   threadIdContract,
 } from '@chat-adapter/tests';
-import type { ChatHandler } from '@chat-adapter/tests/matchers';
 import { Chat } from 'chat';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Mock } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test';
+import type { Mock } from 'vite-plus/test';
 
 import { BacklogAdapter, createBacklogAdapter } from './adapter';
 import { encodeMessageId } from './ids';
@@ -43,16 +49,6 @@ import type {
   BacklogUser,
 } from './types';
 import type { Adapter, ChatInstance, FormattedContent, Message } from 'chat';
-
-// `@chat-adapter/tests` declares its matchers on vitest 5's `Matchers<R, T>`, which
-// cannot merge with the `Matchers<T>` of the vitest 4 installed here, so
-// `toHaveDispatched` is declared again on `Assertion`. Drop this when vitest moves to 5.
-declare module 'vitest' {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- must match `Assertion<T = any>` exactly for declaration merging.
-  interface Assertion<T = any> {
-    toHaveDispatched(handler: ChatHandler): T;
-  }
-}
 
 const ENV_KEYS = [
   'BACKLOG_HOST',

@@ -1,5 +1,5 @@
 import { AdapterError, ResourceNotFoundError } from '@chat-adapter/shared';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
 
 import {
   ALICE,

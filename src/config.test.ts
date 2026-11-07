@@ -1,5 +1,5 @@
 import { ValidationError } from '@chat-adapter/shared';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vite-plus/test';
 
 import { parseConfig } from './config';
 import type { BacklogAdapterConfig } from './types';

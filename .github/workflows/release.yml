@@ -38,8 +38,6 @@ jobs:
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
-    with:
-      skip-examples: true
 
   # Everything that runs this repository's code — the install, its lifecycle
   # scripts, the build — happens here, without `id-token: write` or
@@ -186,10 +184,10 @@ jobs:
           fi
 
       - name: Build
-        run: pnpm run build
+        run: pnpm exec vp pack
 
       # `--ignore-scripts` because the build has already run and the only
-      # lifecycle script left, `prepare`, installs lefthook's git hooks.
+      # lifecycle script left, `prepare`, installs the git hooks.
       - name: Pack
         id: pack
         run: |

@@ -1,8 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vite-plus/test';
 
 import { decideRetry } from './rate-limit';
 
-import type { MockInstance } from 'vitest';
+import type { MockInstance } from 'vite-plus/test';
 
 const now = 1_000_000_000_000;
 

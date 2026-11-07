@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/**/*.ts"
+  - 'src/**/*.ts'
 ---
 
 # Chat SDK core facts (`chat@4.40.0`)
@@ -34,7 +34,7 @@ wins, so re-verify against the tag before changing code.
 ## Webhook ingress and routing
 
 - `handleWebhook` convention: 401 on failed verification, 400 on unparseable
-  JSON, 200 after *scheduling* work; irrelevant events also get 200
+  JSON, 200 after _scheduling_ work; irrelevant events also get 200
   (`packages/adapter-github/src/index.ts:623-658, 702`).
 - `chat.processMessage(adapter, threadId, messageOrFactory, options)` resolves
   the factory and registers the promise with `options.waitUntil` itself

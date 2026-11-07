@@ -51,9 +51,6 @@ vite.config.ts.timestamp-*
 # Git worktrees
 .worktrees/
 
-# Lefthook local overrides
-lefthook-local.yml
-
 # `vercel link` writes the project and org ids here, per example directory.
 .vercel/
 
