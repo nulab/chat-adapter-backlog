@@ -199,8 +199,7 @@ The full grammar is in the spec's
 
 A message is a mention when the webhook lists the bot among the notified users,
 or when it assigns the subject to the bot at creation. Read
-`message.isMention` rather than matching the text yourself. The rules
-are in
+`message.isMention` rather than matching the text yourself. The rules are in
 [Mention detection](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#54-mention-detection-d9).
 
 To mention someone, write Backlog's mention syntax — `<@U<userId>>`, `<@T<teamId>>`

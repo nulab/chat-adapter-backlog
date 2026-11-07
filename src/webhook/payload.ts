@@ -99,8 +99,8 @@ const activitySchema = z.discriminatedUnion('type', [
     content: z.looseObject({
       link: z.array(
         z.looseObject({
-          // A decimal string over the webhook, a number from the activity API
-          // (measured).
+          // A decimal string over the webhook (measured); `coerce` keeps the
+          // numeric id the rest of the adapter reads.
           id: z.coerce.number(),
           comment: commentSchema,
         })

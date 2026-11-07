@@ -143,28 +143,6 @@ export function issueCreated(
   return envelope(1, content, options);
 }
 
-/**
- * Type 1 as the activity API returns it: `backlog-webhook-facts.md` § What each
- * issue operation emits.
- */
-export function issueCreatedFromActivityApi(
-  options: ActivityOptions & {
-    summary?: string;
-    description?: string | null;
-  } = {}
-): Record<string, unknown> {
-  return envelope(
-    1,
-    {
-      id: options.issueId ?? FIXTURE.issueId,
-      key_id: FIXTURE.issueKeyId,
-      summary: options.summary ?? 'Deploy fails on the staging space',
-      description: options.description ?? 'Reproduces on every push to main.',
-    },
-    options
-  );
-}
-
 /** Type 3 — Issue Commented. */
 export function issueCommented(
   options: ActivityOptions & {

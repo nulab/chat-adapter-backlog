@@ -5,7 +5,6 @@ import {
   gitPushed,
   issueCommented,
   issueCreated,
-  issueCreatedFromActivityApi,
   issueDeleted,
   issueMultiUpdated,
   issueUpdated,
@@ -132,12 +131,15 @@ describe('parseDelivery', () => {
   });
 
   it('reads an absent comment, assignee, changes[] and attachments[] as null and empty', () => {
-    const created = subjectActivity(issueCreatedFromActivityApi());
+    const created = issueCreated();
+    delete content(created)['assignee'];
+    delete content(created)['attachments'];
     const updated = issueUpdated();
     delete content(updated)['comment'];
     delete content(updated)['changes'];
 
-    expect(created.type === 1 && created.content).toMatchObject({
+    const parsed = subjectActivity(created);
+    expect(parsed.type === 1 && parsed.content).toMatchObject({
       assignee: null,
       attachments: [],
     });

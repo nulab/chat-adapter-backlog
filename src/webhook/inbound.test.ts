@@ -134,8 +134,7 @@ function mapped(activity: MessageActivity, { subject }: Input) {
     messageId: message.id,
     text: message.text,
     attachments: message.attachments,
-    isMention: message.isMention === true,
-    messageIsMention: message.isMention,
+    isMention: message.isMention,
     changes: message.raw.changes,
   };
 }
@@ -207,7 +206,7 @@ describe('buildInboundMessage — type 1 Issue Created', () => {
     expect(fields.isMention).toBe(true);
   });
 
-  it('creating an issue assigned to someone else is not a mention', () => {
+  it('creating an issue assigned to someone else leaves the decision to the core', () => {
     const activity = created(
       issueCreated({
         assignee: { id: FIXTURE.alice.id, name: FIXTURE.alice.name },
@@ -216,15 +215,15 @@ describe('buildInboundMessage — type 1 Issue Created', () => {
 
     const fields = mapped(activity, input());
 
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
   it.each([null, undefined])(
-    'creating an issue with assignee %s is not a mention',
+    'creating an issue with assignee %s leaves the decision to the core',
     (assignee) => {
       const payload = issueCreated(assignee === undefined ? {} : { assignee });
 
-      expect(mapped(created(payload), input()).isMention).toBe(false);
+      expect(mapped(created(payload), input()).isMention).toBeUndefined();
     }
   );
 
@@ -395,31 +394,22 @@ describe('buildInboundMessage — type 18 Pull Request Added', () => {
     expect(fields.isMention).toBe(true);
   });
 
-  it('opening a pull request assigned to someone else is not a mention', () => {
+  it('opening a pull request assigned to someone else leaves the decision to the core', () => {
     const fields = mapped(
       activityOfType(18, pullRequestAdded({ assignee: FIXTURE.alice })),
       pullRequestInput()
     );
 
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
-  it('opening a pull request assigned to nobody is not a mention', () => {
+  it('opening a pull request assigned to nobody leaves the decision to the core', () => {
     const fields = mapped(
       activityOfType(18, pullRequestAdded({ assignee: null })),
       pullRequestInput()
     );
 
-    expect(fields.isMention).toBe(false);
-  });
-
-  it('opening a pull request whose body carries no assignee key at all is not a mention', () => {
-    const payload = pullRequestAdded();
-    delete (payload['content'] as Record<string, unknown>)['assignee'];
-
-    const fields = mapped(activityOfType(18, payload), pullRequestInput());
-
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
   it('attachments a webhook body turns out to carry map through the subject', () => {
@@ -492,20 +482,20 @@ describe('buildInboundMessage — types 19 and 20, comment id present', () => {
     expect(fields.changes).toEqual([
       { field: 'status', newValue: '3', oldValue: '1' },
     ]);
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
-  it('editing a field of a pull request the bot is assigned to is not a mention', () => {
+  it('editing a field of a pull request the bot is assigned to leaves the decision to the core', () => {
     const fields = mapped(
       activityOfType(19, pullRequestUpdated({ assignee: FIXTURE.bot })),
       pullRequestInput()
     );
 
     expect(fields.changes.map((change) => change.field)).toEqual(['summary']);
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
-  it('a description edit carries its diff and mentions nobody', () => {
+  it('a description edit carries its diff and leaves the decision to the core', () => {
     const fields = mapped(
       activityOfType(
         19,
@@ -517,10 +507,10 @@ describe('buildInboundMessage — types 19 and 20, comment id present', () => {
     expect(fields.changes.map((change) => change.field)).toEqual([
       'description',
     ]);
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
-  it('a multi-field update that changed no assignee and notified nobody is not a mention', () => {
+  it('a multi-field update that changed no assignee and notified nobody leaves the decision to the core', () => {
     const fields = mapped(
       activityOfType(
         19,
@@ -534,7 +524,7 @@ describe('buildInboundMessage — types 19 and 20, comment id present', () => {
       'description',
       'issue',
     ]);
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
   it('a multi-field update naming no assignee change is a mention when the delivery notified the bot', () => {
@@ -555,26 +545,26 @@ describe('buildInboundMessage — types 19 and 20, comment id present', () => {
     expect(fields.isMention).toBe(true);
   });
 
-  it('a comment on a pull request the bot is assigned to is not a mention', () => {
+  it('a comment on a pull request the bot is assigned to leaves the decision to the core', () => {
     const fields = mapped(
       activityOfType(20, pullRequestCommented({ assignee: FIXTURE.bot })),
       pullRequestInput()
     );
 
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
-  it('merging a pull request the bot is assigned to is not a mention', () => {
+  it('merging a pull request the bot is assigned to leaves the decision to the core', () => {
     const fields = mapped(
       activityOfType(19, pullRequestStatusChanged({ assignee: FIXTURE.bot })),
       pullRequestInput()
     );
 
     expect(fields.changes.map((change) => change.field)).toEqual(['status']);
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
-  it('unassigning the bot from a pull request is not a mention', () => {
+  it('unassigning the bot from a pull request leaves the decision to the core', () => {
     const fields = mapped(
       activityOfType(
         19,
@@ -587,10 +577,10 @@ describe('buildInboundMessage — types 19 and 20, comment id present', () => {
       pullRequestInput()
     );
 
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
-  it('an issue update carrying the standing bot assignee and no notification is not a mention', () => {
+  it('an issue update carrying the standing bot assignee and no notification leaves the decision to the core', () => {
     // An issue webhook does carry the standing `content.assignee` on type 2
     // (measured 2026-09-06), but the issue fixtures model the key set the
     // adapter's issue tests were written against, so it is added by hand: an
@@ -603,7 +593,7 @@ describe('buildInboundMessage — types 19 and 20, comment id present', () => {
 
     const fields = mapped(updated(payload), input());
 
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
   it('a file posted with a pull request comment reaches the webhook message as an attachment', () => {
@@ -716,7 +706,7 @@ describe('mention detection from notifications[]', () => {
     expect(fields.isMention).toBe(true);
   });
 
-  it('a comment that notified only other users is not a mention', () => {
+  it('a comment that notified only other users leaves the decision to the core', () => {
     const activity = commented(
       issueCommented({
         text: 'notify via the picker only',
@@ -729,7 +719,7 @@ describe('mention detection from notifications[]', () => {
 
     const fields = mapped(activity, input());
 
-    expect(fields.isMention).toBe(false);
+    expect(fields.isMention).toBeUndefined();
   });
 
   it.each([[1], [2], [10]])(
@@ -762,22 +752,22 @@ describe('mention detection from notifications[]', () => {
     expect(fields.changes[0]).toMatchObject({ field: 'assigner' });
   });
 
-  it('a delivery that notified nobody is not a mention, comment or field-only update alike', () => {
+  it('a delivery that notified nobody leaves the decision to the core, comment or field-only update alike', () => {
     const comment = commented(
       issueCommented({ text: 'no @ here', notifications: [] })
     );
     const fieldOnlyUpdate = updated(descriptionEdited({ notifications: [] }));
 
-    expect(mapped(comment, input()).isMention).toBe(false);
-    expect(mapped(fieldOnlyUpdate, input()).isMention).toBe(false);
+    expect(mapped(comment, input()).isMention).toBeUndefined();
+    expect(mapped(fieldOnlyUpdate, input()).isMention).toBeUndefined();
   });
 
-  it('a message with no evidence leaves isMention unset so the core can match the typed name', () => {
+  it('a typed @name without a notification leaves the decision to the core', () => {
     const comment = commented(
       issueCommented({ text: `@${FIXTURE.bot.name} hi`, notifications: [] })
     );
 
-    expect(mapped(comment, input()).messageIsMention).toBeUndefined();
+    expect(mapped(comment, input()).isMention).toBeUndefined();
   });
 });
 
@@ -881,7 +871,7 @@ describe('buildBulkUpdateMessage', () => {
     expect(built.map((message) => message.isMention)).toEqual([true, true]);
   });
 
-  it('does not mention the bot for a batch that neither names nor notifies it', () => {
+  it('a batch that neither names nor notifies the bot leaves the decision to the core', () => {
     expect(
       messages(issueMultiUpdated()).map((message) => message.isMention)
     ).toEqual([undefined, undefined]);

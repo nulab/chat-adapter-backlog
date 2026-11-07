@@ -433,8 +433,8 @@ A webhook body names the users the activity notified in the top-level
 `notifications[]`. A message is a mention when either rule holds:
 
 1. **Notification.** Any `notifications[]` entry with `user.id === botUserId`,
-   whatever its `reason`. A `<@U<id>>` written in text always creates one, and
-   it is the only signal for recipients chosen in the notification field,
+   whatever its `reason`. A `<@U<id>>` in a description or comment always
+   creates one, and it is the only signal for recipients chosen in the notification field,
    which leave no `@name` in the text, and for an assignment a multi-field
    `PATCH` left out of `changes[]`.
 2. **Assignment at creation.** Types 1 and 18: `content.assignee?.id === botUserId`.
@@ -449,7 +449,9 @@ leaves it unset. The core fills an unset value with its own `@<userName>`
 match, case-insensitive (`.claude/rules/chat-sdk-core-facts.md`), so a typed
 `@Chatbot` or `@chatbot` reaches a handler as a mention; an explicit `false`
 would switch that match off. A display name another user shares is an accepted
-false positive.
+false positive. A `<@U…>` written only in a pull-request summary is not a
+mention: Backlog leaves it unrewritten there, and whether the type-18
+`notifications[]` carries it is unmeasured.
 
 Outbound, a consumer writes Backlog's mention syntax itself; the package
 exports no helper. `<@U<id>>` in content notifies the user without `notifiedUserId`;
@@ -860,7 +862,7 @@ evidence for a measured reason is in the rules file named.
 | D6 | Error class from `errors[].code` first, the status second; the detail as `cause` | Backlog maps meaning to codes and reuses statuses. | Status-only mapping; re-exporting `backlog-js` errors. |
 | D7 | No host-application hooks; `client()` is the only escape hatch | Engagement and subscription state is the `StateAdapter`'s. | An engagement callback, an inbound observer, dedupe-key helpers. |
 | D8 | Numeric ids; the host inside message and user ids | A project-key rename rewrites issue keys (`backlog-webhook-facts.md`); the core's dedupe key has no thread component. | Issue keys in ids; host-less message ids. |
-| D9 | A mention is a notification naming the bot (any `reason`) or, at creation, an assignment to the bot; a typed `@name` is left to the core, by leaving `isMention` unset otherwise | The notification list is the only signal for recipients chosen in the notification field, a visible mention always notifies, and the core already matches the name in text when `isMention` is unset (`chat-sdk-core-facts.md`). | The adapter's own case-sensitive text match (duplicated the core's); a raw `<@U…>` rule for a pull-request summary (the notification covers it); a display-name `changes[]` rule (served only an activity-API body fed to the webhook); filtering on `reason: 2`. |
+| D9 | A mention is a notification naming the bot (any `reason`) or, at creation, an assignment to the bot; a typed `@name` is left to the core, by leaving `isMention` unset otherwise | The notification list is the only signal for recipients chosen in the notification field, a visible mention in a description or comment always notifies, and the core already matches the name in text when `isMention` is unset (`chat-sdk-core-facts.md`). | The adapter's own case-sensitive text match (duplicated the core's); a raw `<@U…>` rule for a pull-request summary (a `<@U…>` written only there is an accepted miss: whether the type-18 `notifications[]` carries it is unmeasured); a display-name `changes[]` rule (served only an activity-API body fed to the webhook); filtering on `reason: 2`. |
 | D10 | Types 1–4, 14 and 18–20 are processed and the rest ignored; `allEvent` is never registered | Only issue and pull-request activity maps to a thread. Type 17 carries the original comment under the id already dispatched, and dedupe holds only for `dedupeTtlMs`, so a recipient added later would redeliver the same message (`backlog-webhook-facts.md`). The accepted cost: adding the bot as a recipient to an existing comment is never a mention. | `allEvent`; dispatching 17. |
 | D11 | Uploads in two steps; downloads through the client; `rehydrateAttachment` from the API URL | A Backlog attachment needs authentication, and a URL is the only handle that survives a queue. | Public URLs (none exist); `fetchMetadata` blobs. |
 | D12 | Root and update messages cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Editing what the bot posted does not extend to rewriting a person's issue, and an update has no resource. | `editMessage(:r)` as Update Issue. |
