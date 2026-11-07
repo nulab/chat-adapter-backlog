@@ -63,6 +63,11 @@ see [Commit Hooks](https://viteplus.dev/guide/commit-hooks)). Unlike the hook
 it replaces, **this one blocks the commit** when a check fails after the fixes
 are applied. `VP_GIT_HOOKS=0 git commit …` skips it for one commit.
 
+`prepare` writes `core.hooksPath` into the clone's shared `.git/config`, so
+every worktree of the clone switches to the Vite+ hooks at once, and a worktree
+that is on a branch from before this change, or has not run an install yet
+(`.vite-hooks/_` is generated and git-ignored), runs no hook at all.
+
 ## Tests
 
 Vitest, bundled with Vite+ and imported from `vite-plus/test`, `environment:

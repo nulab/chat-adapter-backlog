@@ -154,7 +154,7 @@ jobs:
           BACKLOG_WEBHOOK_SECRET: consumer-smoke-webhook-secret
         run: node smoke.mjs
 
-      # attw and check-published-types.mjs prove the declarations resolve and
+      # attw and check-published-types.ts prove the declarations resolve and
       # import nothing a consumer lacks; neither proves the calls README.md
       # documents compile. Those are written out in documented-usage.ts and
       # compiled here, against the declarations that shipped.

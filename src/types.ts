@@ -297,6 +297,9 @@ export interface BacklogPostableExtras {
   notifiedUserId?: number[];
 }
 
+// `unknown` alone is the same type, but the union tells a consumer's editor
+// that the verifier may be async.
+// oxlint-disable typescript/no-redundant-type-constituents
 /**
  * Replaces the `?token=` check: a request is accepted when this returns or
  * resolves a truthy value, and answered 401 otherwise or when it throws.
@@ -306,7 +309,8 @@ export interface BacklogPostableExtras {
 export type BacklogWebhookVerifier = (
   request: Request,
   rawBody: string
-) => unknown;
+) => unknown | Promise<unknown>;
+// oxlint-enable typescript/no-redundant-type-constituents
 
 /**
  * A credential given as a string or as a function the adapter calls before
