@@ -219,8 +219,7 @@ pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
   after tsdown, on a `dist/index.d.ts` that imports any module but `chat` and
   `backlog-js`. Touching `exports`, `files`, `scripts` or the build config
   means running the build, not just the type check.
-- `engines.node` is `">=22"` (Node 20 reached end of life on 2026-04-30, and
-  Vitest 5 no longer runs on it), so do not use APIs newer than Node 22 in
+- `engines.node` is `">=22"`, so do not use APIs newer than Node 22 in
   shipped code. The test matrix runs the suite on Node 22, 24 and 26, so a
   26-only API now fails a job rather than reaching a consumer — but `pnpm typecheck` and `pnpm build` still only ever see the
   pinned runtime, so a type-level or build-time 26-ism is caught by `test`
