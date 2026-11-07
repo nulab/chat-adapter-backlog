@@ -366,7 +366,7 @@ describe('fetchMessage', () => {
       threadId: THREAD_ID,
       messageId: ROOT_MESSAGE_ID,
       subject: issueSubject(issueClient()),
-      builders: async () => builders(),
+      builders: builders(),
     });
 
     expect(message?.text).toBe(`${ROOT.summary}\n\n${ROOT.description}`);
@@ -380,7 +380,7 @@ describe('fetchMessage', () => {
       threadId: THREAD_ID,
       messageId: commentMessageId(2),
       subject: issueSubject(stubClient({ getIssueComment })),
-      builders: async () => builders(),
+      builders: builders(),
     });
 
     expect(getIssueComment).toHaveBeenCalledWith(ISSUE_ID, 2);
@@ -388,9 +388,7 @@ describe('fetchMessage', () => {
     expect(message?.text).toBe('Comment 2');
   });
 
-  it('a message id from another issue is null without an API call, the bot identity included', async () => {
-    const resolveBuilders = vi.fn(async () => builders());
-
+  it('a message id from another issue is null without an API call', async () => {
     const message = await fetchMessage({
       threadId: THREAD_ID,
       messageId: encodeMessageId({
@@ -400,11 +398,10 @@ describe('fetchMessage', () => {
         commentId: 1,
       }),
       subject: issueSubject(stubClient({})),
-      builders: resolveBuilders,
+      builders: builders(),
     });
 
     expect(message).toBeNull();
-    expect(resolveBuilders).not.toHaveBeenCalled();
   });
 
   it('a fieldchange update id is null, since no single-fetch API exists for it', async () => {
@@ -417,7 +414,7 @@ describe('fetchMessage', () => {
         created: '2026-09-03T04:05:06Z',
       }),
       subject: issueSubject(stubClient({})),
-      builders: async () => builders(),
+      builders: builders(),
     });
 
     expect(message).toBeNull();
@@ -436,7 +433,7 @@ describe('fetchMessage', () => {
             ),
         })
       ),
-      builders: async () => builders(),
+      builders: builders(),
     });
 
     expect(message).toBeNull();

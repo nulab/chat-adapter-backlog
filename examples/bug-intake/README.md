@@ -159,7 +159,7 @@ Then set:
 | `BACKLOG_HOST`           | yes      | Space host, no scheme — `example.backlog.com`.                                 |
 | `BACKLOG_API_KEY`        | yes      | The bot user's API key. Also used for the reassignment.                        |
 | `BACKLOG_BOT_USER_ID`    | yes      | The bot user's numeric id.                                                     |
-| `BACKLOG_BOT_USER_NAME`  | no       | The bot user's display name.                                                   |
+| `BACKLOG_BOT_USER_NAME`  | yes      | The bot user's display name.                                                   |
 | `BACKLOG_WEBHOOK_SECRET` | yes      | The secret that also sits in the hook URL.                                     |
 | `INTAKE_CONTACT_USER_ID` | yes      | Numeric user id a closed bug is handed to. Startup fails if this is not an id. |
 | `BUG_ISSUE_TYPE_NAME`    | no       | Issue type to triage. Defaults to `Bug`; use `バグ` on a Japanese space.       |

@@ -75,8 +75,8 @@ only when the option is missing; an explicit empty string is a `ValidationError`
 | `BACKLOG_HOST`           | yes                      | Space host without a scheme, e.g. `example.backlog.com`.                   |
 | `BACKLOG_API_KEY`        | one of the two           | Personal API key of the bot user.                                          |
 | `BACKLOG_ACCESS_TOKEN`   | one of the two           | OAuth 2.0 access token, instead of a key.                                  |
-| `BACKLOG_BOT_USER_ID`    | recommended              | Numeric id of the bot user. When unset, read once from `GET /users/myself`. |
-| `BACKLOG_BOT_USER_NAME`  | for `@name` mentions     | The bot's display name, matched against a typed `@name`.                   |
+| `BACKLOG_BOT_USER_ID`    | yes                      | Numeric id of the bot user. |
+| `BACKLOG_BOT_USER_NAME`  | yes                      | The bot's display name, exposed as `adapter.userName`.                   |
 | `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter; at least 16 bytes.  |
 
 ### Options
@@ -89,8 +89,8 @@ createBacklogAdapter({ host, apiKey, botUserId, botUserName, webhookSecret });
 | ------------------------ | --------------------------------------------- | ------------------------ | ------------------------------------------------------------------------ |
 | `host`                   | `string`                                      | `BACKLOG_HOST`           | Spaces also live on `backlog.jp` and `backlogtool.com`.                  |
 | `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | `BACKLOG_API_KEY` / `BACKLOG_ACCESS_TOKEN` | Exactly one. A function is called on every request, so a token can rotate. |
-| `botUserId`              | `number`                                      | `BACKLOG_BOT_USER_ID`, else `GET /users/myself` | Recognises the bot's own comments and assignment to it.                  |
-| `botUserName`            | `string`                                      | `BACKLOG_BOT_USER_NAME`, else `GET /users/myself` | Fetched only when `botUserId` is unset too. Exposed as `adapter.userName`. |
+| `botUserId`              | `number`                                      | `BACKLOG_BOT_USER_ID` | Required. Recognises the bot's own comments and assignment to it.                  |
+| `botUserName`            | `string`                                      | `BACKLOG_BOT_USER_NAME` | Required. Exposed as `adapter.userName`. |
 | `webhookSecret`          | `string`                                      | `BACKLOG_WEBHOOK_SECRET` | Required unless `webhookVerifier` is set.                                |
 | `webhookVerifier`        | `(request, rawBody) => unknown`               | —                        | Replaces the secret check; a truthy result accepts the delivery.         |
 | `logger`                 | `Logger`                                      | `ConsoleLogger("info")`  | Replaced by `chat.getLogger("backlog")` on `initialize`.                 |
@@ -98,21 +98,21 @@ createBacklogAdapter({ host, apiKey, botUserId, botUserName, webhookSecret });
 One adapter serves one Backlog space; a second space is a second adapter behind
 its own webhook URL.
 
-**Set `BACKLOG_BOT_USER_ID`.** Without it, every cold start spends a request on
-`GET /users/myself`, and a webhook that arrives while that lookup fails gets a
-503. **Always give `new Chat({ userName })` a non-empty value**: when
-both it and `botUserName` are empty, every stray `@` in a comment becomes a
-mention. With `botUserId` set and `botUserName` unset, `initialize` logs one
-warning: a typed `@name` then no longer counts as a mention, while
-notifications and assignment to the bot still do.
+Both `botUserId` and `botUserName` must be configured, directly or through
+`BACKLOG_BOT_USER_ID` and `BACKLOG_BOT_USER_NAME`. Find the numeric `id` and
+`name` once with `GET /users/myself` using the bot's API key, for example:
+
+```sh
+curl "https://<host>/api/v2/users/myself?apiKey=…"
+```
 
 ## Webhook setup
 
 1. Create a bot user. Add it to every project it should answer in, with
    permission to comment.
 2. Issue an API key as that user (**Personal Settings → API**; if the section
-   is missing, an administrator must enable API access) and read its numeric
-   `id` and `name` from `GET /api/v2/users/myself`.
+   is missing, an administrator must enable API access), then configure its
+   numeric `id` and display `name` as described under Configuration.
 3. Generate a secret: `openssl rand -hex 32`.
 4. In each project, add a webhook (**Project Settings → Integrations →
    Webhook**). Point it at

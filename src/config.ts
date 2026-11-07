@@ -61,14 +61,16 @@ const configSchema = z
       ),
     apiKey: resolvable('apiKey').optional(),
     accessToken: resolvable('accessToken').optional(),
-    botUserId: botUserId.optional(),
-    // Not trimmed: the name is matched against comment text as Backlog wrote it.
+    botUserId: botUserId,
+    // Not trimmed: this is the display name Backlog wrote.
     botUserName: z
-      .string()
+      .string({
+        error:
+          'botUserName is required: set config.botUserName or BACKLOG_BOT_USER_NAME',
+      })
       .refine((name) => name.trim().length > 0, {
         error: 'botUserName (BACKLOG_BOT_USER_NAME) must not be blank',
-      })
-      .optional(),
+      }),
     webhookSecret: z
       .string()
       .refine(
@@ -139,8 +141,8 @@ function resolve(value: Resolvable): string | Promise<string> {
  * replaces the secret, so a short one left in the environment would otherwise
  * fail a deployment that never uses it.
  *
- * A blank `BACKLOG_BOT_*` counts as unset because a copied `.env.example`
- * leaves those lines blank; a blank required variable stays an error.
+ * A blank `BACKLOG_BOT_*` is missing, and missing is an error: a copied
+ * `.env.example` leaves those lines blank.
  */
 function withEnvironment(config: BacklogAdapterConfig): unknown {
   const env = process.env;

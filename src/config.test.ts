@@ -224,13 +224,28 @@ describe('parseConfig', () => {
     expect(rejection({ ...valid, botUserName: '  ' })).toMatch(/botUserName/);
   });
 
-  it('leaves the bot identity unset for blank BACKLOG_BOT_* variables copied from .env.example', () => {
-    setEnv({ BACKLOG_BOT_USER_ID: '', BACKLOG_BOT_USER_NAME: '' });
+  it.each([
+    ['botUserId', 'BACKLOG_BOT_USER_ID'],
+    ['botUserName', 'BACKLOG_BOT_USER_NAME'],
+  ] as const)('requires %s from config or %s', (field, variable) => {
+    expect(rejection(without(field))).toContain(variable);
+  });
 
-    const parsed = parseConfig(without('botUserId', 'botUserName'));
+  it.each([
+    ['botUserId', 'BACKLOG_BOT_USER_ID'],
+    ['botUserName', 'BACKLOG_BOT_USER_NAME'],
+  ] as const)(
+    'rejects a blank %s variable copied from .env.example',
+    (field, variable) => {
+      setEnv({ [variable]: '' });
+      expect(rejection(without(field))).toContain(variable);
+    }
+  );
 
-    expect(parsed.botUserId).toBeUndefined();
-    expect(parsed.botUserName).toBeUndefined();
+  it('preserves whitespace around a nonblank botUserName', () => {
+    expect(
+      parseConfig({ ...valid, botUserName: ' Chatbot ' }).botUserName
+    ).toBe(' Chatbot ');
   });
 
   it('rejects an option it does not know, so a removed one is not silently ignored', () => {

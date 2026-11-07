@@ -18,6 +18,8 @@ import type {
  *
  *   BACKLOG_HOST=example.backlog.com \
  *   BACKLOG_API_KEY=... \
+ *   BACKLOG_BOT_USER_ID=999 \
+ *   BACKLOG_BOT_USER_NAME=Chatbot \
  *   BACKLOG_LIVE_ISSUE_ID=8001 \
  *   BACKLOG_LIVE_PULL_REQUEST=700:12 \
  *   pnpm test
@@ -51,7 +53,13 @@ const apiKey = process.env['BACKLOG_API_KEY'];
 const liveIssueId = process.env['BACKLOG_LIVE_ISSUE_ID'];
 const livePullRequest = process.env['BACKLOG_LIVE_PULL_REQUEST'];
 
-const configured = Boolean(host && apiKey && liveIssueId);
+const configured = Boolean(
+  host &&
+  apiKey &&
+  liveIssueId &&
+  process.env.BACKLOG_BOT_USER_ID &&
+  process.env.BACKLOG_BOT_USER_NAME
+);
 
 function parsePullRequestCoordinates(
   value: string | undefined
@@ -71,7 +79,6 @@ const pullRequestConfigured = configured && pullRequestCoordinates !== null;
 const spaceHost = host as string;
 const issueId = Number(liveIssueId);
 
-/** No bot identity is configured, so reactions compare stars against the key's own user from `GET /users/myself`. */
 function createLiveAdapter() {
   return createBacklogAdapter({
     host: spaceHost,

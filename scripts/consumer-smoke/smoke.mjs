@@ -57,10 +57,6 @@ assert.ok(
  * `fetch` states that as a guarantee instead of a belief — if construction
  * ever grows an eager request, this fails here rather than by hanging against
  * a host that does not exist.
- *
- * The attempts are counted as well as refused, because `initialize` catches a
- * failed `GET /users/myself` and logs it rather than rejecting: a throw alone
- * would let an unwanted lookup pass as a warning.
  */
 let networkAttempts = 0;
 globalThis.fetch = () => {
@@ -83,8 +79,6 @@ const adapter = adapterModule.createBacklogAdapter();
 assert.equal(adapter.name, 'backlog');
 assert.equal(adapter.userName, process.env.BACKLOG_BOT_USER_NAME);
 
-// BACKLOG_BOT_USER_ID is set, so `initialize` has nothing to ask
-// `GET /users/myself` for — with the name set, and again without it.
 const silentLogger = {
   debug() {},
   info() {},
@@ -101,22 +95,17 @@ assert.equal(
   'initialize reached the network although botUserId was configured'
 );
 
-delete process.env.BACKLOG_BOT_USER_NAME;
-await adapterModule
-  .createBacklogAdapter()
-  .initialize({ getLogger: () => silentLogger });
-assert.equal(
-  networkAttempts,
-  0,
-  'initialize reached the network to learn only the bot name'
-);
-
-// The three variables README.md calls required, and nothing else: the bot
-// identity is left to `GET /users/myself`, which `initialize` would make —
-// construction still must not.
-delete process.env.BACKLOG_BOT_USER_ID;
-assert.equal(adapterModule.createBacklogAdapter().name, 'backlog');
-assert.equal(networkAttempts, 0, 'construction reached the network');
+for (const variable of ['BACKLOG_BOT_USER_NAME', 'BACKLOG_BOT_USER_ID']) {
+  const value = process.env[variable];
+  delete process.env[variable];
+  assert.throws(
+    () => adapterModule.createBacklogAdapter(),
+    (error) => error.name === 'ValidationError' && error.message.includes(variable),
+    `construction accepted a missing ${variable}`
+  );
+  assert.equal(networkAttempts, 0, 'construction reached the network');
+  process.env[variable] = value;
+}
 
 // `console.error`, not `console.log`: oxlint's `no-console` allows `warn` and
 // `error` only, and `--max-warnings 0` makes the difference a failing lint.
