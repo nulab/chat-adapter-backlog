@@ -51,17 +51,17 @@
   },
   "devDependencies": {
     "@arethetypeswrong/core": "^0.18.5",
-    "@chat-adapter/state-memory": "^4.41.0",
-    "@chat-adapter/tests": "^4.41.0",
-    "@types/node": "^26.6.1",
-    "chat": "^4.41.0",
-    "lefthook": "^2.1.14",
-    "oxfmt": "^0.70.0",
-    "oxlint": "^1.83.0",
-    "publint": "^0.3.24",
-    "tsdown": "^0.23.0",
+    "@chat-adapter/state-memory": "^4.44.0",
+    "@chat-adapter/tests": "^4.44.0",
+    "@types/node": "^26.6.6",
+    "chat": "^4.44.0",
+    "lefthook": "^2.2.2",
+    "oxfmt": "^0.74.0",
+    "oxlint": "^1.91.0",
+    "publint": "^0.3.25",
+    "tsdown": "^0.23.5",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "packageManager": "pnpm@12.2.1+sha512.f55ca68aacb9eb5ab69c66f828a98af89a32286703aef1f8da131ca7eab4d677f34bfa85e186467a919c0799df8b6f4aa240f7dc2919b33b3273190104162616",
   "engines": {
@@ -78,8 +78,8 @@
     "access": "public"
   },
   "dependencies": {
-    "@chat-adapter/shared": "^4.41.0",
-    "backlog-js": "^0.20.1",
-    "zod": "^4.6.5"
+    "@chat-adapter/shared": "^4.44.0",
+    "backlog-js": "^0.20.2",
+    "zod": "^4.6.7"
   }
 }
