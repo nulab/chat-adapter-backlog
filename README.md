@@ -29,7 +29,7 @@ npm i @nulab/chat-adapter-backlog chat
 npm i @chat-adapter/state-memory @vercel/functions # used by the Quick start below
 ```
 
-`chat` is a peer dependency (`^4.40.0`). You need Node.js 20 or newer. The
+`chat` is a peer dependency (`^4.41.0`). You need Node.js 20 or newer. The
 package is ESM-only and includes its own types.
 
 While the version is `0.x`, a breaking change ships as a minor release.
@@ -73,7 +73,7 @@ only when the option is missing; an explicit empty string is a `ValidationError`
 | Variable                 | Required                 | Meaning                                                                    |
 | ------------------------ | ------------------------ | -------------------------------------------------------------------------- |
 | `BACKLOG_HOST`           | yes                      | Space host without a scheme, e.g. `example.backlog.com`.                   |
-| `BACKLOG_API_KEY`        | yes                     | Personal API key of the bot user.                                          |
+| `BACKLOG_API_KEY`        | yes                      | Personal API key of the bot user.                                          |
 | `BACKLOG_BOT_USER_ID`    | yes                      | Numeric id of the bot user.                                                |
 | `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter; at least 16 bytes.  |
 

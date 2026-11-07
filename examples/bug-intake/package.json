@@ -9,11 +9,11 @@
     "deploy:prod": "npx vercel deploy --prod"
   },
   "dependencies": {
-    "@chat-adapter/state-memory": "^4.40.0",
+    "@chat-adapter/state-memory": "^4.41.0",
     "@nulab/chat-adapter-backlog": "^0.1.0",
     "@vercel/functions": "^3.9.5",
     "ai": "^6.0.276",
-    "chat": "^4.40.0",
+    "chat": "^4.41.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {

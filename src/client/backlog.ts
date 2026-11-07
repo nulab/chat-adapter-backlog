@@ -27,7 +27,6 @@ export interface CreateBacklogClientOptions {
   logger: () => Logger;
 }
 
-/** https://developer.nulab.com/docs/backlog/error-response/ */
 const errorBodySchema = z.object({
   errors: z.tuple(
     [

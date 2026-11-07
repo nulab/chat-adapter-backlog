@@ -101,18 +101,25 @@ if (leaked.length > 0) {
  * barrel forgets still ships, as a declaration nobody can import (#113).
  */
 const DECLARED_TYPE_PATTERN = /^(?:declare )?(?:interface|type) (\w+)/gm;
-const TYPE_EXPORT_PATTERN = /^export type \{([^}]*)\}/gm;
+const EXPORT_LIST_PATTERN = /^export (type )?\{([^}]*)\}/gm;
 
-const exportedTypes = new Set(
-  [...declarations.matchAll(TYPE_EXPORT_PATTERN)].flatMap((match) =>
-    match[1].split(',').map((name) =>
-      name
-        .trim()
-        .split(/\s+as\s+/)
-        .pop()
-    )
-  )
-);
+function exportedNames(source, { typesOnly = false } = {}) {
+  return new Set(
+    [...source.matchAll(EXPORT_LIST_PATTERN)]
+      .filter((match) => !typesOnly || match[1] !== undefined)
+      .flatMap((match) => match[2].split(','))
+      .map((name) =>
+        name
+          .trim()
+          .replace(/^type\s+/, '')
+          .split(/\s+as\s+/)
+          .pop()
+      )
+      .filter((name) => name !== '')
+  );
+}
+
+const exportedTypes = exportedNames(declarations, { typesOnly: true });
 const unnameable = [...declarations.matchAll(DECLARED_TYPE_PATTERN)]
   .map((match) => match[1])
   .filter((name) => !exportedTypes.has(name))
@@ -124,5 +131,35 @@ if (unnameable.length > 0) {
       'a consumer receives values of those types but cannot name them. ' +
       'Export them from src/index.ts, or stop an exported type from ' +
       'referencing them (docs/specs/adapter.md D-API1).'
+  );
+}
+
+/**
+ * Fails the build when the bundle exports a different set of names from the
+ * barrel, runtime and type alike: an edit of `src/index.ts` that drops a name
+ * must not ship as a quietly smaller package.
+ */
+const barrelNames = exportedNames(
+  readFileSync(path.join(ROOT, 'src/index.ts'), 'utf8')
+);
+const publishedNames = new Set([
+  ...exportedNames(declarations),
+  ...[
+    ...declarations.matchAll(
+      /^export declare (?:async )?(?:class|function|const) (\w+)/gm
+    ),
+  ].map((match) => match[1]),
+]);
+const dropped = [...barrelNames].filter((name) => !publishedNames.has(name));
+const unexpected = [...publishedNames].filter((name) => !barrelNames.has(name));
+
+if (dropped.length > 0 || unexpected.length > 0) {
+  throw new Error(
+    `${entry} exports a different set of names from src/index.ts` +
+      (dropped.length > 0 ? `; missing: ${dropped.sort().join(', ')}` : '') +
+      (unexpected.length > 0
+        ? `; not in the barrel: ${unexpected.sort().join(', ')}`
+        : '') +
+      '.'
   );
 }
