@@ -1,5 +1,4 @@
 import {
-  AdapterError,
   ResourceNotFoundError,
   toBuffer,
   ValidationError,
@@ -10,7 +9,7 @@ import { createBacklogClient } from './client/backlog';
 import { errorMessage } from './client/errors';
 import { parseConfig } from './config';
 import type { SpaceConfig } from './config';
-import { readGitRepository, readProject, readUser } from './client/responses';
+import { readGitRepository, readProject } from './client/responses';
 import type { Backlog } from 'backlog-js';
 import {
   addReaction as addReactionToComment,
@@ -84,12 +83,6 @@ import type {
   WebhookOptions,
 } from 'chat';
 
-/** The name is absent when only the id was configured (see `initialize`). */
-interface BotIdentity {
-  id: number;
-  name: string | undefined;
-}
-
 function subjectOfRaw(raw: BacklogRawMessage): {
   projectId: number;
   subject: BacklogSubjectRef;
@@ -140,10 +133,6 @@ export class BacklogAdapter implements Adapter<
   readonly name = 'backlog';
 
   private readonly space: SpaceConfig;
-  /**
-   * Left `undefined` by a failed lookup, so the next caller asks again (D23).
-   */
-  private identity: BotIdentity | undefined;
   private readonly backlog: Backlog;
   /** The two halves of a pull request's web URL, which its object lacks. */
   private readonly projectKeyCache = new Map<string, string>();
@@ -154,10 +143,6 @@ export class BacklogAdapter implements Adapter<
 
   constructor(config: BacklogAdapterConfig = {}) {
     this.space = parseConfig(config);
-    const { botUserId, botUserName } = this.space;
-    if (botUserId !== undefined) {
-      this.identity = { id: botUserId, name: botUserName };
-    }
     this.logger =
       this.space.logger ?? new ConsoleLogger('info').child('backlog');
     this.backlog = createBacklogClient({
@@ -167,56 +152,15 @@ export class BacklogAdapter implements Adapter<
     });
   }
 
-  /** `""` when the name is unknown: the core then falls back to `chat.userName`. */
+  // Empty: the core reads it only for a text match the adapter overrides by
+  // always setting isMention (chat-sdk-core-facts.md, D23).
   get userName(): string {
-    return this.identity?.name ?? this.space.botUserName ?? '';
+    return '';
   }
 
-  /**
-   * Makes no request when `botUserId` is configured, even without the name.
-   * Otherwise the bot is read from `GET /users/myself`, and a failure is
-   * logged rather than thrown: the core never retries a rejected
-   * `initialize` (D23).
-   */
   async initialize(chat: ChatInstance): Promise<void> {
     this.chat = chat;
     this.logger = chat.getLogger('backlog');
-    if (this.identity === undefined) {
-      await this.botIdentity().catch((cause: unknown) => {
-        this.logger.warn('bot identity lookup failed; retried on demand', {
-          host: this.space.host,
-          error: errorMessage(cause),
-        });
-      });
-    } else if (this.identity.name === undefined) {
-      this.logger.warn(
-        'botUserName is not set: the adapter does not detect a typed @name in comment text, nor an assignment in a body replayed from the activity API (its changes name the assignee by display name); notifications and the assignee id still count. The Chat SDK core still matches @<chat.userName>. Set BACKLOG_BOT_USER_NAME to enable both rules.'
-      );
-    }
-  }
-
-  private async botIdentity(): Promise<BotIdentity> {
-    if (this.identity !== undefined) {
-      return this.identity;
-    }
-    const myself = await readUser(this.backlog.getMyself());
-    this.identity = {
-      id: myself.id,
-      name: this.space.botUserName ?? myself.name,
-    };
-    return this.identity;
-  }
-
-  /** For the synchronous members, which cannot await `botIdentity`. */
-  private knownBotIdentity(): BotIdentity {
-    if (this.identity === undefined) {
-      throw new AdapterError(
-        'the bot identity is not known yet: configure botUserId, or let initialize() read it from GET /users/myself',
-        'backlog',
-        'BOT_IDENTITY_UNRESOLVED'
-      );
-    }
-    return this.identity;
   }
 
   encodeThreadId(platformData: BacklogThreadId): string {
@@ -278,12 +222,11 @@ export class BacklogAdapter implements Adapter<
   }
 
   private messageBuilders(
-    host: string,
-    identity: BotIdentity
+    host: string
   ): Omit<MessageBuilders, 'projectId' | 'subject'> {
     return {
       host,
-      botUserId: identity.id,
+      botUserId: this.space.botUserId,
       format: (text) => converter.toAst(text),
       MessageCtor,
     };
@@ -451,18 +394,7 @@ export class BacklogAdapter implements Adapter<
       return new Response('Adapter not initialized', { status: 503 });
     }
 
-    let identity: BotIdentity;
-    try {
-      identity = await this.botIdentity();
-    } catch (cause) {
-      this.logger.error('webhook rejected: bot identity unavailable', {
-        host,
-        error: errorMessage(cause),
-      });
-      return new Response('Bot identity unavailable', { status: 503 });
-    }
-
-    if (activity.createdUser.id === identity.id) {
+    if (activity.createdUser.id === this.space.botUserId) {
       this.logger.debug('self message skipped', { host, type: activity.type });
       return new Response('OK', { status: 200 });
     }
@@ -500,7 +432,7 @@ export class BacklogAdapter implements Adapter<
       threadId: string,
       build: (context: InboundContext) => Message<BacklogRawMessage>
     ): void => {
-      const factory = async () => build(this.inboundContext(host, identity));
+      const factory = async () => build(this.inboundContext(host));
       chat
         .processMessage(this, threadId, factory, options)
         .catch((cause: unknown) =>
@@ -552,11 +484,10 @@ export class BacklogAdapter implements Adapter<
     });
   }
 
-  private inboundContext(host: string, identity: BotIdentity): InboundContext {
+  private inboundContext(host: string): InboundContext {
     return {
       host,
-      botUserId: identity.id,
-      botUserName: identity.name,
+      botUserId: this.space.botUserId,
       format: (text) => converter.toAst(text),
     };
   }
@@ -573,7 +504,7 @@ export class BacklogAdapter implements Adapter<
       );
     }
     const activity = activityOf(raw.payload);
-    const context = this.inboundContext(raw.host, this.knownBotIdentity());
+    const context = this.inboundContext(raw.host);
     if (activity.type === 14) {
       const issueId = raw.kind === 'bulkUpdate' ? raw.issueId : undefined;
       const link = activity.content.link.find((entry) => entry.id === issueId);
@@ -680,7 +611,7 @@ export class BacklogAdapter implements Adapter<
       client: this.clientFor(host),
       subject: this.subjectClient(host, projectId, subject),
       commentId,
-      botUserId: (await this.botIdentity()).id,
+      botUserId: this.space.botUserId,
     });
   }
 
@@ -698,7 +629,7 @@ export class BacklogAdapter implements Adapter<
       client: this.clientFor(host),
       subject: this.subjectClient(host, projectId, subject),
       commentId,
-      botUserId: (await this.botIdentity()).id,
+      botUserId: this.space.botUserId,
     });
   }
 
@@ -711,7 +642,7 @@ export class BacklogAdapter implements Adapter<
       threadId,
       options,
       subject,
-      builders: this.messageBuilders(host, await this.botIdentity()),
+      builders: this.messageBuilders(host),
     });
   }
 
@@ -724,10 +655,7 @@ export class BacklogAdapter implements Adapter<
       threadId,
       messageId,
       subject,
-      // Deferred: learning the bot identity can cost a GET /users/myself, and
-      // an id answered `null` must cost nothing.
-      builders: async () =>
-        this.messageBuilders(host, await this.botIdentity()),
+      builders: this.messageBuilders(host),
     });
   }
 
@@ -749,7 +677,7 @@ export class BacklogAdapter implements Adapter<
       channelId,
       options,
       client: this.clientFor(host),
-      builders: this.messageBuilders(host, await this.botIdentity()),
+      builders: this.messageBuilders(host),
       // Every thread this lists is an issue: a pull-request list is per
       // repository, a coordinate a channel id does not carry (D-PR7), so the
       // subject of each row is known before the row is read.
@@ -767,7 +695,7 @@ export class BacklogAdapter implements Adapter<
     return getUserRead({
       userId,
       client: this.clientFor(host),
-      botUserId: (await this.botIdentity()).id,
+      botUserId: this.space.botUserId,
     });
   }
 

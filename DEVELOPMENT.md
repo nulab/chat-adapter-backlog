@@ -80,6 +80,8 @@ written here is CLAUDE.md "Test strategy".
 its variables are set; what it calls and the write budget it keeps are in that
 file's header. Two things to know before setting them:
 
+- `BACKLOG_BOT_USER_ID` must be the id of the API key's owner:
+  `removeReaction` compares the presenter's id with it.
 - `BACKLOG_LIVE_ISSUE_ID` names an issue the suite comments on. Use a scratch
   issue: each run leaves a comment with a file on it, which Backlog does not
   let anyone delete.
@@ -96,6 +98,7 @@ plan and far smaller on a free one (`.claude/rules/backlog-api-facts.md`).
 const liveCredentialsPresent = Boolean(
   process.env.BACKLOG_HOST &&
   process.env.BACKLOG_API_KEY &&
+  process.env.BACKLOG_BOT_USER_ID &&
   process.env.BACKLOG_LIVE_ISSUE_ID
 );
 

@@ -161,16 +161,15 @@ jobs:
       # environment is the zero-config construction consumers are promised.
       # The values are the sample-messages.md vocabulary; the secret is dummy
       # but not short, since under 16 bytes construction is a ValidationError.
-      # BACKLOG_BOT_USER_ID is optional to a consumer but not to this job: it
-      # is what keeps `initialize` off GET /users/myself, and the job has no
-      # network to answer it (spec D23).
+      # BACKLOG_BOT_USER_ID is required: without it construction
+      # throws, and with it `initialize` makes no request,
+      # which this job has no network to answer (spec D23).
       - name: Construct the adapter from the environment alone
         working-directory: ${{ runner.temp }}/consumer
         env:
           BACKLOG_HOST: example.backlog.com
           BACKLOG_API_KEY: consumer-smoke-api-key
           BACKLOG_BOT_USER_ID: '999'
-          BACKLOG_BOT_USER_NAME: Chatbot
           BACKLOG_WEBHOOK_SECRET: consumer-smoke-webhook-secret
         run: node smoke.mjs
 

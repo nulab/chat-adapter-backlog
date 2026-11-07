@@ -9,7 +9,6 @@ const ENV_KEYS = [
   'BACKLOG_API_KEY',
   'BACKLOG_ACCESS_TOKEN',
   'BACKLOG_BOT_USER_ID',
-  'BACKLOG_BOT_USER_NAME',
   'BACKLOG_WEBHOOK_SECRET',
 ] as const;
 
@@ -37,7 +36,6 @@ const valid = {
   host: 'example.backlog.com',
   apiKey: 'test-api-key',
   botUserId: 999,
-  botUserName: 'Chatbot',
   webhookSecret: 'test-webhook-secret',
 } satisfies BacklogAdapterConfig;
 
@@ -73,14 +71,12 @@ describe('parseConfig', () => {
       BACKLOG_HOST: 'example.backlog.com',
       BACKLOG_API_KEY: 'env-api-key',
       BACKLOG_BOT_USER_ID: '999',
-      BACKLOG_BOT_USER_NAME: 'Chatbot',
       BACKLOG_WEBHOOK_SECRET: 'env-webhook-secret',
     });
 
     expect(parseConfig({})).toMatchObject({
       host: 'example.backlog.com',
       botUserId: 999,
-      botUserName: 'Chatbot',
       webhookSecret: 'env-webhook-secret',
     });
   });
@@ -220,17 +216,17 @@ describe('parseConfig', () => {
     expect(rejection(without('botUserId'))).toMatch(/BACKLOG_BOT_USER_ID/);
   });
 
-  it('rejects a blank botUserName in config', () => {
-    expect(rejection({ ...valid, botUserName: '  ' })).toMatch(/botUserName/);
+  it('requires botUserId from config or BACKLOG_BOT_USER_ID', () => {
+    const message = rejection(without('botUserId'));
+    expect(message).toContain('required');
+    expect(message).toContain('BACKLOG_BOT_USER_ID');
   });
 
-  it('leaves the bot identity unset for blank BACKLOG_BOT_* variables copied from .env.example', () => {
-    setEnv({ BACKLOG_BOT_USER_ID: '', BACKLOG_BOT_USER_NAME: '' });
-
-    const parsed = parseConfig(without('botUserId', 'botUserName'));
-
-    expect(parsed.botUserId).toBeUndefined();
-    expect(parsed.botUserName).toBeUndefined();
+  it('rejects a blank BACKLOG_BOT_USER_ID copied from .env.example as missing', () => {
+    setEnv({ BACKLOG_BOT_USER_ID: '' });
+    const message = rejection(without('botUserId'));
+    expect(message).toContain('required');
+    expect(message).toContain('BACKLOG_BOT_USER_ID');
   });
 
   it('rejects an option it does not know, so a removed one is not silently ignored', () => {

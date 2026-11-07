@@ -262,12 +262,7 @@ export interface FetchMessageInput {
   threadId: string;
   messageId: string;
   subject: SubjectClient;
-  /**
-   * Deferred rather than passed as a value: building it can cost a Get
-   * Project, and an id that cannot name a message in this thread is answered
-   * `null` without any call.
-   */
-  builders: () => Promise<Omit<MessageBuilders, 'projectId' | 'subject'>>;
+  builders: Omit<MessageBuilders, 'projectId' | 'subject'>;
 }
 
 /**
@@ -286,7 +281,7 @@ export async function fetchMessage(
   }
 
   const messageBuilders: MessageBuilders = {
-    ...(await builders()),
+    ...builders,
     projectId: thread.projectId,
     subject,
   };

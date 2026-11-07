@@ -36,6 +36,9 @@ const botUserIdMessage =
   'botUserId (BACKLOG_BOT_USER_ID) must be a positive integer, at most 2^53-1';
 
 // `z.int()` stops at 2^53-1: a larger id would not survive a user id string.
+const botUserIdRequired =
+  'botUserId is required: set config.botUserId or BACKLOG_BOT_USER_ID';
+
 const botUserId = z.union(
   [
     z.int({ error: botUserIdMessage }).positive({ error: botUserIdMessage }),
@@ -45,7 +48,10 @@ const botUserId = z.union(
       .transform(Number)
       .pipe(z.int({ error: botUserIdMessage })),
   ],
-  { error: botUserIdMessage }
+  {
+    error: (issue) =>
+      issue.input === undefined ? botUserIdRequired : botUserIdMessage,
+  }
 );
 
 const configSchema = z
@@ -61,14 +67,7 @@ const configSchema = z
       ),
     apiKey: resolvable('apiKey').optional(),
     accessToken: resolvable('accessToken').optional(),
-    botUserId: botUserId.optional(),
-    // Not trimmed: the name is matched against comment text as Backlog wrote it.
-    botUserName: z
-      .string()
-      .refine((name) => name.trim().length > 0, {
-        error: 'botUserName (BACKLOG_BOT_USER_NAME) must not be blank',
-      })
-      .optional(),
+    botUserId: botUserId,
     webhookSecret: z
       .string()
       .refine(
@@ -139,8 +138,8 @@ function resolve(value: Resolvable): string | Promise<string> {
  * replaces the secret, so a short one left in the environment would otherwise
  * fail a deployment that never uses it.
  *
- * A blank `BACKLOG_BOT_*` counts as unset because a copied `.env.example`
- * leaves those lines blank; a blank required variable stays an error.
+ * A blank `BACKLOG_BOT_*` is missing, and missing is an error: a copied
+ * `.env.example` leaves those lines blank.
  */
 function withEnvironment(config: BacklogAdapterConfig): unknown {
   const env = process.env;
@@ -154,7 +153,6 @@ function withEnvironment(config: BacklogAdapterConfig): unknown {
       ? config.accessToken
       : env.BACKLOG_ACCESS_TOKEN,
     botUserId: config.botUserId ?? (env.BACKLOG_BOT_USER_ID || undefined),
-    botUserName: config.botUserName ?? (env.BACKLOG_BOT_USER_NAME || undefined),
     webhookSecret:
       config.webhookSecret ??
       (config.webhookVerifier === undefined

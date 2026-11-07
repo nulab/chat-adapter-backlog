@@ -141,7 +141,6 @@ interface BacklogAdapterConfig {
   apiKey?: Resolvable;      // exactly one of apiKey / accessToken
   accessToken?: Resolvable;
   botUserId?: number;
-  botUserName?: string;
   webhookSecret?: string;   // required unless webhookVerifier is set
   webhookVerifier?: BacklogWebhookVerifier;
   logger?: Logger;
@@ -154,16 +153,15 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 | `host` | — | `BACKLOG_HOST` | Matches the `host` grammar after lowercasing; a scheme, port, path or whitespace is rejected. |
 | `apiKey` | — | `BACKLOG_API_KEY` | Non-empty when a string. Exactly one of `apiKey` / `accessToken`. |
 | `accessToken` | — | `BACKLOG_ACCESS_TOKEN` | As above. Refreshing it is the caller's job, through the resolver form. |
-| `botUserId` | `GET /users/myself` → `id` | `BACKLOG_BOT_USER_ID` | A `posint`; the env value must be one in decimal. |
-| `botUserName` | `GET /users/myself` → `name`, only when `botUserId` is also unset | `BACKLOG_BOT_USER_NAME` | Not blank (an empty name would make every `@` a mention). |
+| `botUserId` | — | `BACKLOG_BOT_USER_ID` | Required. A `posint`; the env value must be one in decimal. |
 | `webhookSecret` | — | `BACKLOG_WEBHOOK_SECRET`, not read when `webhookVerifier` is set | At least **16 bytes** (UTF-8), validated even beside a verifier (D2). |
 | `webhookVerifier` | — | none | Replaces the secret check (D2). |
 | `logger` | `new ConsoleLogger("info").child("backlog")` | none | Replaced by `chat.getLogger("backlog")` in `initialize`. |
 
 - A fallback applies only when the field is absent from `config`; an explicit
-  empty string is a validation error. The exception is a blank
-  `BACKLOG_BOT_USER_ID=` or `BACKLOG_BOT_USER_NAME=`, which counts as unset,
-  because a copied `.env.example` leaves those lines blank.
+  empty string is a validation error. A blank `BACKLOG_BOT_USER_ID=` is
+  reported as missing, not as an invalid value, because a copied
+  `.env.example` leaves that line blank.
 - `apiKey` and `accessToken` fall back as a **pair**: either one in `config`
   suppresses both variables. Both given, from any source, is an error, never
   a silent preference for one.
@@ -172,29 +170,14 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
   result is never cached. One that throws makes that call reject with
   `AuthenticationError` wrapping the cause.
 
-**Bot identity (D23).** The id recognises the bot's own activity and an
-assignment to it; the name only recognises a hand-typed `@name` (§5.4).
-
-- `botUserId` configured → no request, ever, with or without the name.
-- Id configured, name missing → one `warn` from `initialize`. The two rules
-  that compare the name are off — the typed `@name` and an assignment reported
-  by display name in `changes[]` — while notifications and the assignee id
-  still count. `userName` is then `""`, which the core reads as "use
-  `chat.userName`", so a consumer must give `Chat` a non-empty `userName` or
-  the core's pattern matches every bare `@`.
-- Id missing → one `GET /users/myself` from `initialize`, filling the id and,
-  when unset, the name.
-- A failed lookup does not reject `initialize`: it logs `warn`
-  `bot identity lookup failed; retried on demand` and caches nothing, and the
-  next caller that needs the id asks again. A webhook whose id still cannot be
-  learned is answered 503 and not dispatched (§5.1 row 7). The async members
-  that read the id reject with the lookup's error, and the synchronous
-  `parseMessage` throws `AdapterError(…, "BOT_IDENTITY_UNRESOLVED")`.
+**Bot identity (D23).** `botUserId` is required, from config or its
+environment variable; there is no bot name. The id recognises the bot's own
+activity and assignment to it. `initialize` only stores the chat instance and
+its logger and makes no request.
 
 ### 3.3 Other public members of `BacklogAdapter`
 
-- `readonly name = "backlog"`; `userName`, the configured or fetched
-  `botUserName`, `""` while there is none.
+- `readonly name = "backlog"`; `userName` is `""`: the core reads it only for an `@<userName>` text match, which the adapter overrides by always setting `isMention` (D23).
 - `client(): Backlog` — the `backlog-js` client the adapter speaks through,
   for every endpoint the `Adapter` interface does not cover. It carries the
   adapter's 429 retry, error mapping and per-request credential (§8), and
@@ -202,7 +185,7 @@ assignment to it; the name only recognises a hand-typed `@name` (§5.4).
 - `renderFormatted(content)` — §9.
 
 `botUserId` is not exposed: the core's only use of it is an `@<id>` mention
-pattern no Backlog text contains, and it may not be known before `initialize`.
+pattern no Backlog text contains.
 
 ### 3.4 Postable extras
 
@@ -286,7 +269,7 @@ says otherwise.
 | --- | --- | --- | --- |
 | `name` | implemented | `"backlog"`. The key in `new Chat({ adapters: { backlog } })` MUST equal it (thread-id prefix routing). | dedupe key, `Thread.toJSON`, logs |
 | `userName` | implemented | §3.3. | fallback mention regex, `SentMessage.author` |
-| `initialize(chat)` | implemented | Stores the `ChatInstance`, swaps the logger for `chat.getLogger("backlog")`, and resolves the bot identity (§3.2). Never rejects. | first webhook / `chat.initialize()` |
+| `initialize(chat)` | implemented | Stores the `ChatInstance`, swaps the logger for `chat.getLogger("backlog")`, and makes no request (§3.2). | first webhook / `chat.initialize()` |
 | `handleWebhook(request, options?)` | implemented | §5. | `chat.webhooks.backlog(req)` |
 | `encodeThreadId` / `decodeThreadId` | implemented | §2; exact round trip of `{ host, projectId, subject }`. | never |
 | `channelIdFromThreadId` | implemented | The first three segments, `backlog:<host>:<projectId>`. | `createThread`, lock key, history |
@@ -341,9 +324,8 @@ secret from a wrong one (D2).
 | 4 | `type ∈ {1, 2, 3, 4, 14, 18, 19, 20}` (D10) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
 | 5 | The schema for that type (§5.2) | 400 `Invalid payload` | as row 3 |
 | 6 | `initialize()` has run | 503 `Adapter not initialized` | error `webhook rejected: adapter not initialized` |
-| 7 | The bot identity is known, or one `GET /users/myself` learns it now (D23) | 503 `Bot identity unavailable`: without the id row 8 cannot run, and dispatching anyway would let the bot answer itself | error `webhook rejected: bot identity unavailable` `{host, error}` |
-| 8 | `createdUser.id` is not the bot | 200 `OK`, nothing dispatched | debug `self message skipped` |
-| 9 | — | 200 `OK`, returned **before** processing completes | — |
+| 7 | `createdUser.id` is not the bot | 200 `OK`, nothing dispatched | debug `self message skipped` |
+| 8 | — | 200 `OK`, returned **before** processing completes | — |
 
 A 5xx is the only answer that could make Backlog redeliver; whether it does is
 undocumented and was not observed (§5.5). The request method is not checked:
@@ -722,7 +704,6 @@ spends:
 
 | Member | Calls | Limit |
 | --- | --- | --- |
-| `initialize`, `handleWebhook` | `getMyself` when the bot id is not configured (D23) | read |
 | `fetchThread`, `fetchSubject` on a pull request | `getProject`, once per project per process (§7.3) | read |
 | `postMessage` | `postSpaceAttachment` per file; `postIssueComments` / `postPullRequestComments` | update |
 | `editMessage` | `patchIssueComment` / `patchPullRequestComments` | update |
@@ -845,8 +826,7 @@ A single-column table's dash row turns the line above into a setext heading.
 - `debug` for per-request flow (a skipped self message); `info` for ignored
   activity types; `warn` for rejected webhooks, a name lookup that left a URL
   out and the two rate-limit outcomes; `error` for processing
-  failures after the 200 (their only carrier), a webhook before `initialize`,
-  and one whose bot identity could not be learned.
+  failures after the 200 (their only carrier), and a webhook before `initialize`.
 - Structured fields only — `host`, `projectId`, `repositoryId`, `type`,
   `threadId`, `issuePaths`, `remaining`, `resetAt`, `waitMs`, `attempt`, and
   `error` as the caught error's message. Never a body, comment text, token,
@@ -907,7 +887,7 @@ evidence for a measured reason is in the rules file named.
 | D18 | No `processMessageUpdated` | A comment edit emits no webhook (`backlog-webhook-facts.md`). | Polling for edits. |
 | D19 | Every authentic delivery is taken to be from the configured space | No body field identifies a space, and `projectKey` changes on a rename (`backlog-webhook-facts.md`). | Cross-checking `projectKey` (drops events after a rename). |
 | D22 | A type 14 fans out to one message per `content.link[]` entry, always; its `notifications[]` is carried whole | Each entry is a real comment `fetchMessages` returns, so ignoring 14 loses changes, and leaving it out of the subscription is the switch. An entry of `notifications[]` names no issue, so pairing by order would rest on nothing Backlog documents (`backlog-webhook-facts.md`). | Ignoring 14; a config flag; one summary message; capping the batch; a single-entry batch as a type 2; pairing `notifications[i]` with `link[i]`; dropping `notifications` from `raw.payload`. |
-| D23 | The bot identity is optional: without `botUserId`, one `GET /users/myself`; with it, no request; a failed lookup is retried on demand, and a webhook without an id is 503 | Every serverless cold start runs `initialize`; the core never retries a rejected `initialize`; dispatching without the id lets the bot answer itself. | Both fields required; always looking up a missing name; a lazy lookup on the first webhook only; rejecting `initialize`; dispatching without the id. |
+| D23 | `botUserId` is required, from config or environment, and there is no bot name; `userName` is `""`; initialization makes no network call. | Every deployment can configure the id, which suppresses the bot's own activity. The core reads `adapter.userName` only for its own `@<userName>` text match, and the adapter always sets `isMention` to a boolean, so the name is never read. A hand-typed `@name` without Backlog's autocomplete creates no notification and is therefore not a mention, as in Backlog itself. | Optional identity with a current-user lookup, retry on demand and a webhook 503: a state machine for a value every deployment can configure; a required `botUserName` that nothing reads; always looking up the id; a lazy lookup on the first webhook; rejecting initialization; dispatching without the id. |
 | D24 | No `postChannelMessage`, no `markAsRead`; `ThreadInfo.metadata` names the thread only | No consumer needs them and neither first-party reference adapter has them; an issue created from a message had to guess its type and priority; a full copy in `metadata` duplicated `fetchSubject().raw`. | Keeping them because Backlog makes them possible. |
 | D25 | `raw.payload` is typed as `backlog-js`'s `Entity.Activity` with the measured deviations overlaid, discriminated on `type` | One type follows `backlog-js`, and only a measured deviation is declared here. | A loose envelope with `Record<string, unknown>`; hand-written per-type interfaces. |
 | D26 | Card fallback text renders a link as a Markdown link and drops a divider | The card walk `chat` uses drops a link's URL, which loses content. A dropped divider loses none, and the `---` the adapter used to emit turned the line above it into a setext heading. | Leaving `link` to `chat`; `---` or `***` for the divider. |
