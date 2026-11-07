@@ -117,8 +117,8 @@ function resolve(value: Resolvable): string | Promise<string> {
  * replaces the secret, so a short one left in the environment would otherwise
  * fail a deployment that never uses it.
  *
- * A blank `BACKLOG_BOT_*` is missing, and missing is an error: a copied
- * `.env.example` leaves those lines blank.
+ * A blank `BACKLOG_BOT_USER_ID` is missing, and missing is an error: a copied
+ * example `.env.example` leaves that line blank.
  */
 function withEnvironment(config: BacklogAdapterConfig): unknown {
   const env = process.env;

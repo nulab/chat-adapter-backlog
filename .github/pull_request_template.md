@@ -17,7 +17,7 @@ say what you actually exercised: a real Backlog space (which endpoints, which
 plan), a local consumer of `vp pm pack`'s tarball, or nothing but the default suite.
 
 `vp test` runs with no credentials and no network, so a green suite says
-nothing about live behavior. If the opt-in live suite ran, say so.
+nothing about live behavior.
 -->
 
 ## Before merging
