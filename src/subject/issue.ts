@@ -21,7 +21,6 @@ import type {
   ListCommentsOptions,
   SubjectClient,
   SubjectContext,
-  SubjectNames,
   SubjectRoot,
   WebhookAttachment,
 } from './client';
@@ -29,22 +28,6 @@ import type { Backlog, Option } from 'backlog-js';
 import type { Attachment } from 'chat';
 
 type IssueRef = Extract<BacklogSubjectRef, { kind: 'issue' }>;
-
-/**
- * Throws rather than rebuilding what it needs from `SubjectRoot`, because
- * `issueKey`, `issueType` and `priority` are not on that shape, and a
- * placeholder would ship a wrong issue key into a thread's metadata and URL.
- */
-function issueOf(root: SubjectRoot): BacklogRawIssue {
-  if (root.source.kind !== 'issue') {
-    throw new AdapterError(
-      'a pull request root was passed to the issue subject client',
-      'backlog',
-      'INVALID_SUBJECT_ROOT'
-    );
-  }
-  return root.source.issue;
-}
 
 function issueWebUrl(host: string, issueKey: string): string {
   return `https://${host}/view/${issueKey}`;
@@ -83,15 +66,32 @@ export function createIssueSubjectClient(
   }
 
   function rootOf(issue: BacklogRawIssue): SubjectRoot {
+    const url = issueWebUrl(host, issue.issueKey);
     return {
-      ref,
       title: issue.summary,
       body: issue.description,
       status: issue.status,
       assignee: issue.assignee,
       createdUser: issue.createdUser,
       created: issue.created,
-      source: { kind: 'issue', issue },
+      raw: { kind: 'issue', host, issue, changes: [] },
+      channelName: projectKeyOf(issue.issueKey),
+      threadMetadata: {
+        kind: 'issue',
+        host,
+        projectId: context.projectId,
+        issueId,
+        issueKey: issue.issueKey,
+        summary: issue.summary,
+        status: { id: issue.status.id, name: issue.status.name },
+        url,
+      },
+      subject: {
+        type: 'issue',
+        raw: issue,
+        labels: [issue.issueType.name, issue.priority.name],
+        url,
+      },
     };
   }
 
@@ -102,7 +102,7 @@ export function createIssueSubjectClient(
       return rootOf(await readIssue(client.getIssue(issueId)));
     },
 
-    rootFrom(raw: BacklogRawMessage): SubjectRoot | undefined {
+    async rootFrom(raw: BacklogRawMessage): Promise<SubjectRoot | undefined> {
       return raw.kind === 'issue' ? rootOf(raw.issue) : undefined;
     },
 
@@ -146,10 +146,6 @@ export function createIssueSubjectClient(
       return { commentId };
     },
 
-    rootRaw(root: SubjectRoot): BacklogRawMessage {
-      return { kind: 'issue', host, issue: issueOf(root), changes: [] };
-    },
-
     commentAttachments(comment: BacklogRawComment): Attachment[] {
       const attachments: Attachment[] = [];
       for (const change of comment.changeLog) {
@@ -191,43 +187,5 @@ export function createIssueSubjectClient(
     webhookChangeAttachment(_change: BacklogChange): Attachment | undefined {
       return undefined;
     },
-
-    channelName(root: SubjectRoot, _names: SubjectNames): string | undefined {
-      return projectKeyOf(issueOf(root).issueKey);
-    },
-
-    threadMetadata(
-      root: SubjectRoot,
-      _names: SubjectNames
-    ): Record<string, unknown> {
-      const issue = issueOf(root);
-      return {
-        kind: 'issue',
-        host,
-        projectId: context.projectId,
-        issueId,
-        issueKey: issue.issueKey,
-        summary: issue.summary,
-        status: { id: issue.status.id, name: issue.status.name },
-        url: issueWebUrl(host, issue.issueKey),
-      };
-    },
-
-    subjectType: 'issue',
-
-    subjectRaw(root: SubjectRoot): unknown {
-      return issueOf(root);
-    },
-
-    subjectLabels(root: SubjectRoot): string[] {
-      const issue = issueOf(root);
-      return [issue.issueType.name, issue.priority.name];
-    },
-
-    webUrl(root: SubjectRoot, _names: SubjectNames): string | undefined {
-      return issueWebUrl(host, issueOf(root).issueKey);
-    },
-
-    repositoryIdForName: undefined,
   };
 }

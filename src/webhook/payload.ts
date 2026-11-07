@@ -115,7 +115,6 @@ const activitySchema = z.discriminatedUnion('type', [
       number: z.number(),
       repository: z.looseObject({
         id: z.number(),
-        name: z.string().optional(),
       }),
       summary: z.string().optional(),
       description: z.string().nullish(),
@@ -200,25 +199,5 @@ export function subjectOfActivity(
       };
     default:
       return { kind: 'issue', issueId: activity.content.id };
-  }
-}
-
-/**
- * The REST pull-request object carries no repository name, and a pull
- * request's web URL needs one; every pull-request delivery carries it
- * (measured).
- */
-export function repositoryNameOf(
-  activity: SubjectActivity
-): { repositoryId: number; name: string } | undefined {
-  switch (activity.type) {
-    case 18:
-    case 19:
-    case 20: {
-      const { id, name } = activity.content.repository;
-      return name === undefined ? undefined : { repositoryId: id, name };
-    }
-    default:
-      return undefined;
   }
 }

@@ -2,6 +2,8 @@ import { AdapterError, ResourceNotFoundError } from '@chat-adapter/shared';
 
 import {
   download,
+  readGitRepository,
+  readProject,
   readPullRequest,
   readPullRequestAttachments,
   readPullRequestComment,
@@ -22,7 +24,6 @@ import type {
   ListCommentsOptions,
   SubjectClient,
   SubjectContext,
-  SubjectNames,
   SubjectRoot,
   WebhookAttachment,
 } from './client';
@@ -33,18 +34,6 @@ type PullRequestSubjectRef = Extract<
   BacklogSubjectRef,
   { kind: 'pullRequest' }
 >;
-
-/** See `issueOf` in `./issue.ts`. */
-function pullRequestOf(root: SubjectRoot): BacklogRawPullRequest {
-  if (root.source.kind !== 'pullRequest') {
-    throw new AdapterError(
-      'an issue root was passed to the pull request subject client',
-      'backlog',
-      'INVALID_SUBJECT_ROOT'
-    );
-  }
-  return root.source.pullRequest;
-}
 
 /**
  * Names are not unique on a pull request and the list is the only id
@@ -116,25 +105,47 @@ export function createPullRequestSubjectClient(
     return { type: 'file', name, fetchData: () => downloadNamed(name) };
   }
 
-  /** The form a star's `url` carries (measured). */
-  function webUrl(names: SubjectNames): string | undefined {
-    const { projectKey, repositoryName } = names;
-    if (projectKey === undefined || repositoryName === undefined) {
-      return undefined;
-    }
-    return `https://${host}/git/${projectKey}/${repositoryName}/pullRequests/${number}`;
-  }
-
-  function rootOf(pullRequest: BacklogRawPullRequest): SubjectRoot {
+  /**
+   * The two names the web URL needs and the REST object lacks, read on every
+   * root rather than cached (D-PR11). The URL form is the one a star's `url`
+   * carries (measured).
+   */
+  async function rootOf(
+    pullRequest: BacklogRawPullRequest
+  ): Promise<SubjectRoot> {
+    const [project, repository] = await Promise.all([
+      readProject(client.getProject(projectId)),
+      readGitRepository(client.getGitRepository(projectId, repositoryId)),
+    ]);
+    const url = `https://${host}/git/${project.projectKey}/${repository.name}/pullRequests/${number}`;
     return {
-      ref,
       title: pullRequest.summary,
       body: pullRequest.description,
       status: pullRequest.status,
       assignee: pullRequest.assignee,
       createdUser: pullRequest.createdUser,
       created: pullRequest.created,
-      source: { kind: 'pullRequest', pullRequest },
+      raw: { kind: 'pullRequest', host, pullRequest, changes: [] },
+      channelName: project.projectKey,
+      threadMetadata: {
+        kind: 'pullRequest',
+        host,
+        projectId,
+        repositoryId: ref.repositoryId,
+        number,
+        summary: pullRequest.summary,
+        status: { id: pullRequest.status.id, name: pullRequest.status.name },
+        url,
+      },
+      subject: {
+        type: 'pull_request',
+        raw: pullRequest,
+        labels: [
+          pullRequest.status.name,
+          `${pullRequest.base} ← ${pullRequest.branch}`,
+        ],
+        url,
+      },
     };
   }
 
@@ -150,14 +161,14 @@ export function createPullRequestSubjectClient(
     ref,
 
     async fetchRoot(): Promise<SubjectRoot> {
-      return rootOf(
+      return await rootOf(
         await readPullRequest(
           client.getPullRequest(projectId, repositoryId, number)
         )
       );
     },
 
-    rootFrom(raw: BacklogRawMessage): SubjectRoot | undefined {
+    async rootFrom(raw: BacklogRawMessage): Promise<SubjectRoot | undefined> {
       return raw.kind === 'pullRequest' ? rootOf(raw.pullRequest) : undefined;
     },
 
@@ -230,15 +241,6 @@ export function createPullRequestSubjectClient(
       return { pullRequestCommentId: commentId };
     },
 
-    rootRaw(root: SubjectRoot): BacklogRawMessage {
-      return {
-        kind: 'pullRequest',
-        host,
-        pullRequest: pullRequestOf(root),
-        changes: [],
-      };
-    },
-
     commentAttachments(comment: BacklogRawComment): Attachment[] {
       return comment.changeLog.flatMap((change) =>
         change.field === 'attachment' && change.newValue !== null
@@ -274,48 +276,5 @@ export function createPullRequestSubjectClient(
         ? undefined
         : namedAttachment(change.newValue);
     },
-
-    channelName(_root: SubjectRoot, names: SubjectNames): string | undefined {
-      return names.projectKey;
-    },
-
-    threadMetadata(
-      root: SubjectRoot,
-      names: SubjectNames
-    ): Record<string, unknown> {
-      const url = webUrl(names);
-      return {
-        kind: 'pullRequest',
-        host,
-        projectId,
-        repositoryId: ref.repositoryId,
-        number,
-        summary: root.title,
-        status: { id: root.status.id, name: root.status.name },
-        // Omitted rather than `undefined`: a present-but-undefined key does
-        // not survive JSON.
-        ...(url === undefined ? {} : { url }),
-      };
-    },
-
-    subjectType: 'pull_request',
-
-    subjectRaw(root: SubjectRoot): unknown {
-      return pullRequestOf(root);
-    },
-
-    subjectLabels(root: SubjectRoot): string[] {
-      const pullRequest = pullRequestOf(root);
-      return [
-        pullRequest.status.name,
-        `${pullRequest.base} ← ${pullRequest.branch}`,
-      ];
-    },
-
-    webUrl(_root: SubjectRoot, names: SubjectNames): string | undefined {
-      return webUrl(names);
-    },
-
-    repositoryIdForName: ref.repositoryId,
   };
 }

@@ -445,7 +445,6 @@ describe('fetchThread', () => {
     const thread = await fetchThread({
       threadId: THREAD_ID,
       subject: issueSubject(issueClient()),
-      names: {},
     });
 
     expect(thread).toMatchObject({
@@ -477,7 +476,6 @@ describe('fetchSubject', () => {
         changes: [],
       },
       subject,
-      names: {},
       threadId: THREAD_ID,
     });
 
@@ -498,7 +496,6 @@ describe('fetchSubject', () => {
     const resolved = await fetchSubject({
       raw: { kind: 'issue', host: HOST, issue: ROOT, changes: [] },
       subject: issueSubject(stubClient({})),
-      names: {},
       threadId: THREAD_ID,
     });
 
