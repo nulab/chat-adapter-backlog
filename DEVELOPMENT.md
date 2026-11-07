@@ -27,9 +27,10 @@ provisioning a Node and a pnpm of its own beside the ones `vp` selected
 downloads both.
 
 - **Bumping pnpm.** `packageManager` carries a hex integrity hash, which `vp`
-  checks and refuses to install past a mismatch. It is the base64-decoded
-  `dist.integrity` of `npm view pnpm@<version> dist.integrity`, without the
-  `sha512-` prefix.
+  checks and refuses to install past a mismatch. It is the hex encoding of the
+  base64-decoded `dist.integrity` from `npm view pnpm@<version> dist.integrity`
+  (drop the `sha512-` prefix, decode, then hex-encode), written after
+  `sha512.` as `packageManager` spells it.
 - **Bumping Node.** Edit `devEngines.runtime.version`, an exact version, and
   `@types/node` with it (CLAUDE.md, Quality gates). Dependabot cannot see it.
 - **Running another Node once**: `vp env use <version>` for the shell, or
@@ -70,6 +71,13 @@ are applied. `VP_GIT_HOOKS=0 git commit …` skips it for one commit.
 every worktree of the clone switches to the Vite+ hooks at once, and a worktree
 that is on a branch from before this change, or has not run an install yet
 (`.vite-hooks/_` is generated and git-ignored), runs no hook at all.
+
+The hook needs `node` on PATH, because `node_modules/.bin/vp` is pnpm's shim and
+it `exec`s `node`. A terminal with `vp` installed has it; a GUI git client or
+an IDE that does not get `~/.vite-plus/bin` on PATH fails the commit with
+`VITE+ - pre-commit script failed (code 127)`. Either put that directory on
+PATH from `~/.config/vite-plus/hooks-init.sh`, which the hook sources before it
+runs, or commit with `VP_GIT_HOOKS=0`.
 
 ## Tests
 
@@ -137,6 +145,18 @@ real key, and never put it in a URL query string
   No checksum is committed here: `minimumReleaseAge` and the lockfile do not
   reach the runtime, and `devEngines.runtime.version` being exact is what keeps
   a CI run from taking a Node released that day.
+- The global `vp` is the one thing here that no lockfile pins, and its trust
+  root is different from an npm dependency's. CI's `voidzero-dev/setup-vp` is
+  pinned to a commit, and it installs `vp` by running `install.sh` fetched
+  from the `voidzero-dev/vite-plus` git tag of the version `vite-plus` has in
+  `package.json`, which is why that version is exact. The script checks the
+  platform package's npm `dist.integrity` (sha512) and its provenance
+  attestation before installing it. If the tagged script cannot be fetched,
+  `setup-vp` falls back to the latest script on viteplus.dev. Neither
+  `minimumReleaseAge` nor `.npmrc`'s `min-release-age` applies to this
+  download, so a `vp` release is as new as its `vite-plus` bump in
+  `package.json`, which only Dependabot's cooldown holds back; that guarantee
+  is weaker than the one the dependencies get.
 - Dependabot (`.github/dependabot.yml`) opens weekly grouped npm and GitHub
   Actions updates with a 3-day cooldown (7 for majors), matching
   `minimumReleaseAge` so an update is proposed the moment it is installable.

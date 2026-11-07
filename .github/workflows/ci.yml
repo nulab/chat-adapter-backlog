@@ -21,10 +21,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Installs `vp` at the version `vite-plus` has in the lockfile. `vp` then
-      # provisions Node from `devEngines.runtime` and pnpm from
-      # `packageManager`, so neither is written down anywhere else. The
-      # install is its own step, not setup-vp's, to say `--frozen-lockfile`.
+      # Installs `vp` at the version `vite-plus` has in package.json, which is
+      # an exact version on purpose (package.json cannot carry the comment).
+      # setup-vp reads a range only through a lockfile parser that gives up on
+      # pnpm 12's two-document `pnpm-lock.yaml` and falls back to `latest`, and
+      # that would put a vite-plus release on the day it is published into
+      # every job here, past `minimumReleaseAge`. `vp` then provisions Node
+      # from `devEngines.runtime` and pnpm from `packageManager`, so neither is
+      # written down anywhere else. The install is its own step, not
+      # setup-vp's, to say `--frozen-lockfile`.
       - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
           run-install: false
@@ -52,7 +57,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Building and packing are development commands and belong on the Node
-      # `devEngines.runtime` pins, which is what `vp` selects here.
+      # `devEngines.runtime` pins, which is what `vp` selects here. The `vp`
+      # version is the one the `check` job explains.
       - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
           run-install: false
@@ -165,7 +171,8 @@ jobs:
 
       # `node-version` overrides `devEngines.runtime` for this job, and `vp`
       # provisions that Node; pnpm no longer links a second one beside it
-      # (`runtimeOnFail: ignore` in pnpm-workspace.yaml).
+      # (`runtimeOnFail: ignore` in pnpm-workspace.yaml). The `vp` version is
+      # the one the `check` job explains.
       - uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0
         with:
           node-version: ${{ matrix.node }}
@@ -173,27 +180,11 @@ jobs:
 
       - run: vp install --frozen-lockfile
 
-      # Asserted inside the Node process rather than by capturing its output,
-      # so there is nothing to parse and the process being identified is the
-      # one doing the identifying. `devEngines.runtime` pins a different Node
-      # from most of this matrix, so a `vp` that fell back to it would run the
-      # same Node three times and still pass.
-      - name: Verify the running Node is the one this job asked for
-        env:
-          EXPECTED_MAJOR: ${{ matrix.node }}
-        run: |
-          node -e '
-            const expected = process.env.EXPECTED_MAJOR;
-            const actual = process.versions.node;
-            console.log(`node ${actual} from ${process.execPath}`);
-            if (actual.split(".")[0] !== expected) {
-              throw new Error(`ran Node ${actual}, not the Node ${expected} this job asked for`);
-            }
-          '
-
-      # `vp` launches the test runner itself, so the check above only
-      # identifies the Node a shell step gets. src/test/runtime.test.ts repeats
-      # it inside the test process, from `EXPECTED_NODE_MAJOR`.
+      # The Node the tests ran on is asserted by src/test/runtime.test.ts,
+      # inside the test process, from `EXPECTED_NODE_MAJOR`: `vp` launches the
+      # test runner itself, and `devEngines.runtime` pins a different Node from
+      # most of this matrix, so a `vp` that fell back to it would run the same
+      # Node three times and still pass.
       - name: Test
         env:
           EXPECTED_NODE_MAJOR: ${{ matrix.node }}

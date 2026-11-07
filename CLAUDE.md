@@ -235,7 +235,8 @@ pack, so none of them takes a flag.
   build-time 26-ism is caught by `test` alone.
 - One Node runs the gates and `vp` provisions it: `devEngines.runtime` in
   `package.json`, an exact version, is the only place the development Node is
-  written down. `vp`, a bare `node` and `npm` inside a script all get it. pnpm
+  written down. `vp` and the `node` and `npm` shims it installs resolve it, so
+  `prepare`, the only script, gets it too. pnpm
   is the package manager `vp` drives, at the version `packageManager` names
   (its hash is checked); it does not provision anything itself, because
   `pnpm-workspace.yaml` sets `runtimeOnFail: ignore` and `pmOnFail: ignore`.
