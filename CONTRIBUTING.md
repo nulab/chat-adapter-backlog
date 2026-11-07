@@ -59,13 +59,13 @@ The gates are [Vite+](https://viteplus.dev/guide/) built-ins, configured in
 | ---------- | --------------------------------------------------------------------------------------------------------------------- |
 | `vp check` | Format check, lint and type check in one run. This is what CI runs. `vp check --fix` writes the formatting and fixes. |
 | `vp test`  | Run the suite once. Needs no credentials. `vp test watch` is watch mode while writing tests.                          |
-| `vp pack`  | Produce `dist/`. Fails on a `publint`, `attw` or published-types problem.                                             |
+| `vp pack`  | Produce `dist/`. Fails on a `publint` or `attw` problem.                                                              |
 
 The three gates CI enforces, and what each one catches, are in CLAUDE.md
 "Quality gates". Formatting covers the whole repository except the generated
 `docs/sample-messages.md`, `pnpm-lock.yaml`, build output and `examples/**`, which
 the root toolchain does not touch at all (CLAUDE.md, `examples/`). Linting and
-type checking cover `src/`, `scripts/` and the config only.
+type checking cover `src/` and the config only.
 
 ## Pre-commit hook
 
@@ -130,10 +130,10 @@ CLAUDE.md "Test strategy".
 whatever its base, and as a reusable workflow called by the release. Why each
 step is shaped as it is lives in the comments beside it.
 
-| Job     | What it does                                                                                                                |
-| ------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `check` | `vp check` then `vp pack`: format check, lint, type check, then the build with publint, attw and the published-types check. |
-| `test`  | The suite on Node 22, 24 and 26, each asserted to be the Node that actually ran.                                            |
+| Job     | What it does                                                                                     |
+| ------- | ------------------------------------------------------------------------------------------------ |
+| `check` | `vp check` then `vp pack`: format check, lint, type check, then the build with publint and attw. |
+| `test`  | The suite on Node 22, 24 and 26, each asserted to be the Node that actually ran.                 |
 
 Installs are `--frozen-lockfile`, so commit `pnpm-lock.yaml` with any
 `package.json` change.

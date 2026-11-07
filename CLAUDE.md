@@ -50,11 +50,10 @@ so a field the adapter validates cannot drift from the type it publishes.
 Call sites take a reader, never a schema and a type argument: `Validated<T>`
 accepts any subset of `T`'s fields, so a schema passed with the wrong type
 would compile. zod types never reach the published `.d.ts`, so an overlay
-helper type a raw shape references is exported too (the coupling below).
-
-**Files CI couples together.** `scripts/check-published-types.ts` fails
-`vp pack` on a declared type that `src/index.ts` does not export, or on an
-import in the published declarations other than `chat` and `backlog-js`.
+helper type a raw shape references is exported too. Nothing checks either
+mechanically: after `vp pack`, `dist/index.d.ts` importing anything but
+`chat` and `backlog-js`, or declaring a type `src/index.ts` does not export,
+breaks the spec's "Exports" promise.
 
 ## Where each fact lives
 
@@ -196,10 +195,9 @@ vp check && vp test && vp pack
   `exactOptionalPropertyTypes`, `verbatimModuleSyntax` (type-only imports must
   say `import type`), `noUnusedLocals` and `noUnusedParameters` (prefix
   intentionally unused params with `_`).
-- `vp pack` fails on `publint` problems, on `attw` problems at the `esm-only`
-  profile, and on `scripts/check-published-types.ts` (see the coupling above).
-  Touching `exports`, `files`, `scripts` or the build config means running
-  `vp pack`, not just `vp check`.
+- `vp pack` fails on `publint` problems and on `attw` problems at the
+  `esm-only` profile. Touching `exports`, `files`, `scripts` or the build
+  config means running `vp pack`, not just `vp check`.
 - `engines.node` is `">=22"`, so do not use APIs newer than Node 22 in
   shipped code. The test matrix runs the suite on Node 22, 24 and 26, so a
   26-only API fails a job rather than reaching a consumer — but `vp check`

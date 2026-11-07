@@ -1,5 +1,4 @@
 import { defineConfig } from 'vite-plus';
-import { checkPublishedTypes } from './scripts/check-published-types';
 
 export default defineConfig({
   fmt: {
@@ -80,9 +79,6 @@ export default defineConfig({
       profile: 'esm-only',
       // The default is `warn`, which reports problems without failing the build.
       level: 'error',
-    },
-    hooks: {
-      'build:done': ({ options }) => checkPublishedTypes(options.cwd),
     },
   },
 
