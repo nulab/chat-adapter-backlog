@@ -11,6 +11,7 @@ import {
   comment,
   fileData,
   issue,
+  issueComment,
   pullRequest,
   star,
   user,
@@ -18,7 +19,7 @@ import {
 import {
   download,
   readIssue,
-  readIssues,
+  readIssueComments,
   readPullRequest,
   readPullRequestComment,
   readUser,
@@ -137,7 +138,9 @@ describe('comments', () => {
 describe('reading a list', () => {
   it('rejects a list with one invalid element as a whole', async () => {
     await expect(
-      readIssues(Promise.resolve([issue(), { ...issue(), summary: 7 }]))
+      readIssueComments(
+        Promise.resolve([issueComment(), { ...issueComment(), content: 7 }])
+      )
     ).rejects.toMatchObject({ code: 'SCHEMA' });
   });
 });

@@ -7,7 +7,6 @@ import type { BacklogAdapterConfig } from './types';
 const ENV_KEYS = [
   'BACKLOG_HOST',
   'BACKLOG_API_KEY',
-  'BACKLOG_ACCESS_TOKEN',
   'BACKLOG_BOT_USER_ID',
   'BACKLOG_WEBHOOK_SECRET',
 ] as const;
@@ -102,53 +101,20 @@ describe('parseConfig', () => {
     expect(rejection({ ...valid, host })).toMatch(/host/);
   });
 
+  it('rejects a missing apiKey, naming where to set it', () => {
+    const message = rejection(without('apiKey'));
+    expect(message).toMatch(/required/);
+    expect(message).toMatch(/BACKLOG_API_KEY/);
+  });
+
   it('treats an explicit empty apiKey as an error, not a reason to read the variable', () => {
     setEnv({ BACKLOG_API_KEY: 'from-env' });
     expect(rejection({ ...valid, apiKey: '' })).toMatch(/apiKey/);
   });
 
-  it('rejects both credentials given together', () => {
-    expect(rejection({ ...valid, accessToken: 'a' })).toMatch(
-      /exactly one of apiKey or accessToken/
-    );
-  });
-
-  it('rejects neither credential given', () => {
-    expect(rejection(without('apiKey'))).toMatch(
-      /exactly one of apiKey or accessToken/
-    );
-  });
-
-  it('rejects both credential variables set together, naming them', () => {
-    setEnv({
-      BACKLOG_API_KEY: 'env-api-key',
-      BACKLOG_ACCESS_TOKEN: 'env-access-token',
-    });
-    expect(rejection(without('apiKey'))).toMatch(
-      /BACKLOG_API_KEY or BACKLOG_ACCESS_TOKEN/
-    );
-  });
-
-  it('ignores an access token left in the environment beside an explicit apiKey', async () => {
-    setEnv({ BACKLOG_ACCESS_TOKEN: 'stale-oauth-token' });
-    const { credential } = parseConfig(valid);
-    expect(credential.header).toBe('Backlog-API-Key');
-    expect(await credential.resolve()).toBe('test-api-key');
-  });
-
-  it('ignores an api key left in the environment beside an explicit accessToken', async () => {
-    setEnv({ BACKLOG_API_KEY: 'stale-api-key' });
-    const { credential } = parseConfig({
-      ...without('apiKey'),
-      accessToken: 'test-access-token',
-    });
-    expect(credential.header).toBe('Authorization');
-    expect(await credential.resolve()).toBe('Bearer test-access-token');
-  });
-
   it('calls a credential resolver on every use and never at parse time', async () => {
     let calls = 0;
-    const { credential } = parseConfig({
+    const { resolveApiKey } = parseConfig({
       ...valid,
       apiKey: () => {
         calls += 1;
@@ -157,8 +123,8 @@ describe('parseConfig', () => {
     });
 
     expect(calls).toBe(0);
-    expect(await credential.resolve()).toBe('token-1');
-    expect(await credential.resolve()).toBe('token-2');
+    expect(await resolveApiKey()).toBe('token-1');
+    expect(await resolveApiKey()).toBe('token-2');
   });
 
   it('requires a webhookSecret when no webhookVerifier is set', () => {

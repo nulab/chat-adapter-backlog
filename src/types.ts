@@ -310,8 +310,8 @@ export type BacklogWebhookVerifier = (
 
 /**
  * A credential given as a string or as a function the adapter calls before
- * every request, never caching its result, so an OAuth access token can be
- * refreshed without reconstructing the adapter.
+ * every request, never caching its result, so a rotated key is picked up
+ * without reconstructing the adapter.
  */
 export type Resolvable = string | (() => string | Promise<string>);
 
@@ -321,14 +321,13 @@ export type Resolvable = string | (() => string | Promise<string>);
  * `createBacklogAdapter()` with no argument works from the environment alone.
  * The constructor throws `ValidationError` for a value it cannot use.
  *
- * - Exactly one of `apiKey` and `accessToken`.
+ * - `apiKey` is required.
  * - `webhookSecret` is required unless `webhookVerifier` is set.
  * - `botUserId` is required, from config or the environment.
  */
 export interface BacklogAdapterConfig {
   host?: string;
   apiKey?: Resolvable;
-  accessToken?: Resolvable;
   botUserId?: number;
   webhookSecret?: string;
   webhookVerifier?: BacklogWebhookVerifier;

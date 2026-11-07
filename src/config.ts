@@ -2,7 +2,6 @@ import { ValidationError } from '@chat-adapter/shared';
 import { z } from 'zod';
 
 import { HOST_PATTERN } from './ids';
-import type { Credential } from './client/backlog';
 import type {
   BacklogAdapterConfig,
   BacklogWebhookVerifier,
@@ -18,19 +17,23 @@ import type { Logger } from 'chat';
  */
 const MIN_WEBHOOK_SECRET_BYTES = 16;
 
-const resolvable = (field: string) => {
-  const error = `${field} must be a non-empty string or a function`;
-  return z.union(
-    [
-      z.string().min(1, { error }),
-      z.custom<() => string | Promise<string>>(
-        (value) => typeof value === 'function',
-        { error }
-      ),
-    ],
-    { error }
-  );
-};
+const apiKeyInvalid = 'apiKey must be a non-empty string or a function';
+const apiKeyRequired =
+  'apiKey is required: set config.apiKey or BACKLOG_API_KEY';
+
+const apiKey = z.union(
+  [
+    z.string().min(1, { error: apiKeyInvalid }),
+    z.custom<() => string | Promise<string>>(
+      (value) => typeof value === 'function',
+      { error: apiKeyInvalid }
+    ),
+  ],
+  {
+    error: (issue) =>
+      issue.input === undefined ? apiKeyRequired : apiKeyInvalid,
+  }
+);
 
 const botUserIdMessage =
   'botUserId (BACKLOG_BOT_USER_ID) must be a positive integer, at most 2^53-1';
@@ -65,8 +68,7 @@ const configSchema = z
             'host must be a bare hostname such as example.backlog.com, without scheme, port or path',
         })
       ),
-    apiKey: resolvable('apiKey').optional(),
-    accessToken: resolvable('accessToken').optional(),
+    apiKey,
     botUserId: botUserId,
     webhookSecret: z
       .string()
@@ -94,46 +96,23 @@ const configSchema = z
         'webhookSecret is required: set config.webhookSecret, BACKLOG_WEBHOOK_SECRET or config.webhookVerifier',
     }
   )
-  .transform(({ apiKey, accessToken, ...rest }, ctx) => {
-    if (apiKey !== undefined && accessToken === undefined) {
-      const credential: Credential = {
-        header: 'Backlog-API-Key',
-        resolve: async () => resolve(apiKey),
-      };
-      return { ...rest, credential };
-    }
-    if (accessToken !== undefined && apiKey === undefined) {
-      const credential: Credential = {
-        header: 'Authorization',
-        resolve: async () => `Bearer ${await resolve(accessToken)}`,
-      };
-      return { ...rest, credential };
-    }
-    ctx.issues.push({
-      code: 'custom',
-      input: { apiKey, accessToken },
-      message:
-        'exactly one of apiKey or accessToken is required: set config.apiKey, config.accessToken, BACKLOG_API_KEY or BACKLOG_ACCESS_TOKEN',
-    });
-    return z.NEVER;
-  });
+  .transform(({ apiKey, ...rest }) => ({
+    ...rest,
+    resolveApiKey: async () => resolve(apiKey),
+  }));
 
 export type SpaceConfig = z.output<typeof configSchema>;
 
 /**
  * Called by the client on every request rather than once here: resolving at
- * construction would pin an hourly OAuth token for the process's lifetime.
+ * construction would pin a rotated key out of the vault for the process's
+ * lifetime.
  */
 function resolve(value: Resolvable): string | Promise<string> {
   return typeof value === 'function' ? value() : value;
 }
 
 /**
- * The credential falls back to the environment as a pair, not field by field:
- * an explicit one beside the other's leftover variable is a deployment that
- * moved from OAuth to an API key without unsetting the old variable, and
- * reading both would refuse the config the caller had just written.
- *
  * `BACKLOG_WEBHOOK_SECRET` is not read beside a `webhookVerifier`: a verifier
  * replaces the secret, so a short one left in the environment would otherwise
  * fail a deployment that never uses it.
@@ -143,15 +122,10 @@ function resolve(value: Resolvable): string | Promise<string> {
  */
 function withEnvironment(config: BacklogAdapterConfig): unknown {
   const env = process.env;
-  const explicitCredential =
-    config.apiKey !== undefined || config.accessToken !== undefined;
   return {
     ...config,
     host: config.host ?? env.BACKLOG_HOST,
-    apiKey: explicitCredential ? config.apiKey : env.BACKLOG_API_KEY,
-    accessToken: explicitCredential
-      ? config.accessToken
-      : env.BACKLOG_ACCESS_TOKEN,
+    apiKey: config.apiKey ?? env.BACKLOG_API_KEY,
     botUserId: config.botUserId ?? (env.BACKLOG_BOT_USER_ID || undefined),
     webhookSecret:
       config.webhookSecret ??

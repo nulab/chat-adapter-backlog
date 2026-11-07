@@ -11,7 +11,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issue, REST } from '../test/fixtures/rest';
 import { createBacklogClient } from './backlog';
 
-import type { Credential } from './backlog';
 import type { Logger } from 'chat';
 
 const fetchMock = vi.fn<typeof globalThis.fetch>();
@@ -27,18 +26,16 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const apiKey: Credential = {
-  header: 'Backlog-API-Key',
-  resolve: async () => 'test-api-key',
-};
-
 function clientWith(
-  options: { credential?: Credential; logger?: () => Logger } = {}
+  options: {
+    resolveApiKey?: () => Promise<string>;
+    logger?: () => Logger;
+  } = {}
 ) {
   const logger = createMockLogger();
   return createBacklogClient({
     host: REST.host,
-    credential: options.credential ?? apiKey,
+    resolveApiKey: options.resolveApiKey ?? (async () => 'test-api-key'),
     logger: options.logger ?? (() => logger),
   });
 }
@@ -77,29 +74,11 @@ describe('credentials', () => {
     expect(sentUrl()).not.toContain('test-api-key');
   });
 
-  it('sends a bearer credential in the Authorization header', async () => {
-    fetchMock.mockImplementation(async () => json(issue()));
-    const client = clientWith({
-      credential: {
-        header: 'Authorization',
-        resolve: async () => 'Bearer test-token',
-      },
-    });
-
-    await client.getIssue(REST.issueId);
-
-    expect(sentHeaders().get('Authorization')).toBe('Bearer test-token');
-    expect(sentHeaders().has('Backlog-API-Key')).toBe(false);
-  });
-
   it('resolves the credential afresh for every request', async () => {
     fetchMock.mockImplementation(async () => json(issue()));
     const keys = ['first-key', 'second-key'];
     const client = clientWith({
-      credential: {
-        header: 'Backlog-API-Key',
-        resolve: async () => keys.shift() ?? 'exhausted',
-      },
+      resolveApiKey: async () => keys.shift() ?? 'exhausted',
     });
 
     await client.getIssue(REST.issueId);
@@ -109,34 +88,20 @@ describe('credentials', () => {
     expect(sentHeaders(1).get('Backlog-API-Key')).toBe('second-key');
   });
 
-  it.each([
-    [
-      'throws',
-      () => {
-        throw new Error('vault unavailable');
-      },
-    ],
-    ['rejects', () => Promise.reject(new Error('vault unavailable'))],
-  ])(
-    'fails with AuthenticationError and sends nothing when the resolver %s',
-    async (_how, resolve) => {
-      const client = clientWith({
-        credential: { header: 'Backlog-API-Key', resolve },
-      });
+  it('fails with AuthenticationError and sends nothing when the resolver rejects', async () => {
+    const client = clientWith({
+      resolveApiKey: () => Promise.reject(new Error('vault unavailable')),
+    });
 
-      await expect(client.getIssue(REST.issueId)).rejects.toBeInstanceOf(
-        AuthenticationError
-      );
-      expect(fetchMock).not.toHaveBeenCalled();
-    }
-  );
+    await expect(client.getIssue(REST.issueId)).rejects.toBeInstanceOf(
+      AuthenticationError
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
   it('fails with AuthenticationError, not NetworkError, on a credential containing CR/LF', async () => {
     const client = clientWith({
-      credential: {
-        header: 'Backlog-API-Key',
-        resolve: async () => 'key\r\nX-Injected: 1',
-      },
+      resolveApiKey: async () => 'key\r\nX-Injected: 1',
     });
 
     await expect(client.getIssue(REST.issueId)).rejects.toBeInstanceOf(
@@ -257,9 +222,9 @@ describe('rate limiting', () => {
       .mockResolvedValueOnce(json(issue()));
     const resolve = vi.fn(async () => 'test-api-key');
 
-    const request = clientWith({
-      credential: { header: 'Backlog-API-Key', resolve },
-    }).getIssue(REST.issueId);
+    const request = clientWith({ resolveApiKey: resolve }).getIssue(
+      REST.issueId
+    );
     await vi.advanceTimersByTimeAsync(2_000);
     await request;
 

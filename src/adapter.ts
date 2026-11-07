@@ -36,7 +36,6 @@ import {
   fetchSubject as fetchSubjectRead,
   fetchThread as fetchThreadRead,
   getUser as getUserRead,
-  listThreads as listThreadsRead,
   rehydrateAttachment as rehydrateAttachmentRead,
 } from './reads';
 import type { MessageBuilders } from './reads';
@@ -69,8 +68,6 @@ import type {
   FetchResult,
   FileUpload,
   FormattedContent,
-  ListThreadsOptions,
-  ListThreadsResult,
   Logger,
   Message,
   MessageSubject,
@@ -147,7 +144,7 @@ export class BacklogAdapter implements Adapter<
       this.space.logger ?? new ConsoleLogger('info').child('backlog');
     this.backlog = createBacklogClient({
       host: this.space.host,
-      credential: this.space.credential,
+      resolveApiKey: this.space.resolveApiKey,
       logger: () => this.logger,
     });
   }
@@ -665,24 +662,6 @@ export class BacklogAdapter implements Adapter<
       threadId,
       subject,
       names: await this.namesFor(host, projectId, subject),
-    });
-  }
-
-  async listThreads(
-    channelId: string,
-    options?: ListThreadsOptions
-  ): Promise<ListThreadsResult<BacklogRawMessage>> {
-    const { host, projectId } = decodeChannelId(channelId);
-    return listThreadsRead({
-      channelId,
-      options,
-      client: this.clientFor(host),
-      builders: this.messageBuilders(host),
-      // Every thread this lists is an issue: a pull-request list is per
-      // repository, a coordinate a channel id does not carry (D-PR7), so the
-      // subject of each row is known before the row is read.
-      subjectFor: (issueId) =>
-        this.subjectClient(host, projectId, { kind: 'issue', issueId }),
     });
   }
 

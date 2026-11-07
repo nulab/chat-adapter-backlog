@@ -58,7 +58,6 @@ declare module 'vitest' {
 const ENV_KEYS = [
   'BACKLOG_HOST',
   'BACKLOG_API_KEY',
-  'BACKLOG_ACCESS_TOKEN',
   'BACKLOG_BOT_USER_ID',
   'BACKLOG_WEBHOOK_SECRET',
 ] as const;
@@ -177,7 +176,6 @@ describe('BacklogAdapter optional members Backlog cannot support are absent', ()
     const implementedMembers = [
       'stream',
       'fetchMessage',
-      'listThreads',
       'getUser',
       'fetchSubject',
       'fetchChannelInfo',
@@ -294,15 +292,6 @@ describe('BacklogAdapter.client', () => {
 
     expect(headers.get('Backlog-API-Key')).toBe('key');
     expect(headers.get('Authorization')).toBeNull();
-  });
-
-  it('sends an access token as a Bearer Authorization header', async () => {
-    const adapter = createBacklogAdapter({ ...base, accessToken: 'token' });
-
-    const headers = await requestHeaders(adapter);
-
-    expect(headers.get('Authorization')).toBe('Bearer token');
-    expect(headers.get('Backlog-API-Key')).toBeNull();
   });
 });
 
@@ -1033,42 +1022,6 @@ describe('BacklogAdapter read budget', () => {
     expect(backlog.getIssue).not.toHaveBeenCalled();
     expect(backlog.getProject).not.toHaveBeenCalled();
     expect(network).not.toHaveBeenCalled();
-  });
-});
-
-describe('BacklogAdapter.listThreads', () => {
-  it('threads are listed with an offset cursor and a trailing empty page', async () => {
-    const { adapter, backlog } = egressAdapter();
-    const issues = Array.from({ length: 3 }, (_, index) =>
-      issue({
-        id: FIXTURE.issueId + index,
-        issueKey: `${FIXTURE.projectKey}-${index + 1}`,
-        summary: `Issue ${index + 1}`,
-      })
-    );
-    vi.spyOn(backlog.client, 'getIssues').mockImplementation(
-      async ({ offset = 0, count = 20 } = {}) =>
-        issues.slice(offset, offset + count) as never
-    );
-    const channelId = `backlog:${FIXTURE.host}:${FIXTURE.projectId}`;
-
-    const firstPage = await adapter.listThreads(channelId, { limit: 2 });
-    expect(firstPage.threads).toHaveLength(2);
-    expect(firstPage.nextCursor).toBe('2');
-
-    const secondPage = await adapter.listThreads(channelId, {
-      limit: 2,
-      cursor: '2',
-    });
-    expect(secondPage.threads).toHaveLength(1);
-    expect(secondPage.nextCursor).toBeUndefined();
-
-    const thirdPage = await adapter.listThreads(channelId, {
-      limit: 2,
-      cursor: '3',
-    });
-    expect(thirdPage.threads).toHaveLength(0);
-    expect(thirdPage.nextCursor).toBeUndefined();
   });
 });
 
