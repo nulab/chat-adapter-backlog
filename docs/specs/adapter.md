@@ -165,7 +165,7 @@ type BacklogWebhookVerifier = (
 - A fallback applies only when the field is absent from `config`; an explicit
   empty string is a validation error. A blank `BACKLOG_BOT_USER_ID=` is
   reported as missing, not as an invalid value, because a copied
-  `.env.example` leaves that line blank.
+  example `.env.example` (`examples/*`) leaves that line blank.
 - An option the schema does not name is rejected rather than ignored.
 - A credential resolver is invoked on **every** outbound request and its
   result is never cached. One that throws makes that call reject with

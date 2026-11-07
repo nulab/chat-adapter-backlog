@@ -534,9 +534,7 @@ invisible to consumers.
   against this adapter; they encode invariants that are easy to break
   silently. Its other exports are listed in
   `.claude/rules/chat-sdk-core-facts.md`.
-- `vp test` must pass with no credentials and no network. Any live suite is
-  opt-in and self-skipping on absent `BACKLOG_API_KEY` — see the pattern in
-  DEVELOPMENT.md. Keep it lean; a chatty suite will 429 the update bucket.
+- `vp test` must pass with no credentials and no network.
 
 ## `examples/`
 

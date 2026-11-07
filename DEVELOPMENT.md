@@ -85,54 +85,6 @@ Vitest, bundled with Vite+ and imported from `vite-plus/test`, `environment:
 'node'`, files colocated as `src/**/*.test.ts`. How tests are written here is
 CLAUDE.md "Test strategy".
 
-### Opt-in live suite
-
-`src/test/live.test.ts` talks to a real Backlog space and skips itself unless
-its variables are set; what it calls and the write budget it keeps are in that
-file's header. Two things to know before setting them:
-
-- `BACKLOG_BOT_USER_ID` must be the id of the API key's owner:
-  `removeReaction` compares the presenter's id with it.
-- `BACKLOG_LIVE_ISSUE_ID` names an issue the suite comments on. Use a scratch
-  issue: each run leaves a comment with a file on it, which Backlog does not
-  let anyone delete.
-- `BACKLOG_LIVE_PULL_REQUEST` (`<repositoryId>:<number>`) adds the
-  pull-request section. **Nothing it creates can be cleaned up** — Backlog has
-  no endpoint that deletes a pull request or one of its comments — so point it
-  at a scratch pull request, in the same project as the scratch issue.
-
-A new live test follows the same shape and stays small and sequential: the
-update bucket is on the order of 150 requests per user per minute on a paid
-plan and far smaller on a free one (`.claude/rules/backlog-api-facts.md`).
-
-```ts
-const liveCredentialsPresent = Boolean(
-  process.env.BACKLOG_HOST &&
-  process.env.BACKLOG_API_KEY &&
-  process.env.BACKLOG_BOT_USER_ID &&
-  process.env.BACKLOG_LIVE_ISSUE_ID
-);
-
-describe.skipIf(!liveCredentialsPresent)('live Backlog space', () => {
-  // ...
-});
-```
-
-## Backlog credentials
-
-1. Sign up for a space at [backlog.com](https://backlog.com/). Whether the Free
-   plan exposes the API and webhooks is not stated on the pricing page; the
-   30-day trial of a paid plan needs no card.
-2. In **Personal Settings → API**, issue an API key. If the section is missing,
-   a space administrator has to enable API access.
-3. `cp .env.example .env` and fill it in. `.env.example` explains every
-   variable, the two live-suite ones included; README.md "Environment
-   variables" is the consumer-facing table.
-
-`.env` and `.env.*` are gitignored, `.env.example` excepted. Never commit a
-real key, and never put it in a URL query string
-([Authentication & Authorization](https://developer.nulab.com/docs/backlog/auth/)).
-
 ## Supply-chain settings
 
 - The three-day release quarantine and `allowBuilds` are CLAUDE.md "Quality
