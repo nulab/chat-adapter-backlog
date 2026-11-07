@@ -11,36 +11,39 @@ why each CI and release step is written the way it is, next to the step.
 
 ## Setup
 
-pnpm is the only thing to install by hand, at the version `packageManager` in
-`package.json` names. The [standalone install script](https://pnpm.io/installation)
-needs nothing else present:
+The global [`vp`](https://viteplus.dev/guide/global-cli) is the only thing to
+install by hand (the guide has the install script and the Homebrew tap). It
+provisions the rest, so nothing else need be on the machine:
 
 ```sh
-curl -fsSL https://get.pnpm.io/install.sh | env PNPM_VERSION=<packageManager version> sh -
-pnpm install     # provisions Node from devEngines.runtime, then `prepare` -> `vp config`
+vp install     # Node from devEngines.runtime, pnpm from packageManager, then `prepare` -> `vp config`
 ```
 
-That is the whole bootstrap. The first install is slower than later ones
-because it downloads the pinned Node. From then on reach Node through pnpm
-(`pnpm exec node`, `pnpm run …`); a bare `node` in your shell is a different
-Node or none at all (CLAUDE.md, Quality gates).
+`vp` runs pnpm underneath, so `packageManager` in `package.json` stays the
+source of truth for its version, and `pnpm-workspace.yaml` still carries the
+pnpm settings. `runtimeOnFail: ignore` and `pmOnFail: ignore` there stop pnpm
+provisioning a Node and a pnpm of its own beside the ones `vp` selected
+(CLAUDE.md, Quality gates). The first run is slower than later ones because it
+downloads both.
 
-- **Bumping pnpm.** `packageManager` carries a hex integrity hash. Regenerate
-  it with `corepack use pnpm@<version>` rather than by hand — npm's
-  `dist.integrity` is the same digest in base64, which corepack rejects, so
-  base64-decode `npm view pnpm@<version> dist.integrity` to cross-check. The
-  Node pnpm provisions ships without corepack or npm, so this needs a Node from
-  outside the repository.
-- **Bumping Node, or running another Node once**: CLAUDE.md "Quality gates".
+- **Bumping pnpm.** `packageManager` carries a hex integrity hash, which `vp`
+  checks and refuses to install past a mismatch. It is the hex encoding of the
+  base64-decoded `dist.integrity` from `npm view pnpm@<version> dist.integrity`
+  (drop the `sha512-` prefix, decode, then hex-encode), written after
+  `sha512.` as `packageManager` spells it.
+- **Bumping Node.** Edit `devEngines.runtime.version`, an exact version, and
+  `@types/node` with it (CLAUDE.md, Quality gates). Dependabot cannot see it.
+- **Running another Node once**: `vp env use <version>` for the shell, or
+  `vp env exec --node <version> <command>`; it overrides `devEngines.runtime`
+  without editing it.
 - `npm install` in this repository is unsupported: it ignores
-  `pnpm-lock.yaml`, provisions no runtime and leaves a `package-lock.json`
-  that must not be committed.
+  `pnpm-lock.yaml` and leaves a `package-lock.json` that must not be
+  committed.
 
 ## Commands
 
 The gates are [Vite+](https://viteplus.dev/guide/) built-ins, configured in
-`vite.config.ts` and run through pnpm until `vp` is installed another way
-(`pnpm exec vp …`). There are no wrapper scripts; `package.json` keeps only
+`vite.config.ts`. There are no wrapper scripts; `package.json` keeps only
 `prepare`, which installs the git hooks.
 
 | Command    | When to use it                                                                                                        |
@@ -68,6 +71,13 @@ are applied. `VP_GIT_HOOKS=0 git commit …` skips it for one commit.
 every worktree of the clone switches to the Vite+ hooks at once, and a worktree
 that is on a branch from before this change, or has not run an install yet
 (`.vite-hooks/_` is generated and git-ignored), runs no hook at all.
+
+The hook needs `node` on PATH, because `node_modules/.bin/vp` is pnpm's shim and
+it `exec`s `node`. A terminal with `vp` installed has it; a GUI git client or
+an IDE that does not get `~/.vite-plus/bin` on PATH fails the commit with
+`VITE+ - pre-commit script failed (code 127)`. Either put that directory on
+PATH from `~/.config/vite-plus/hooks-init.sh`, which the hook sources before it
+runs, or commit with `VP_GIT_HOOKS=0`.
 
 ## Tests
 
@@ -129,8 +139,24 @@ real key, and never put it in a URL query string
   gates". `.npmrc`'s `min-release-age=3` applies the same quarantine to npm.
   If a fresh version is genuinely needed, say so in the PR rather than
   lowering the threshold.
-- The Node runtime is a lockfile dependency with a checksum per platform, like
-  any other.
+- `vp` downloads Node from nodejs.org and verifies the PGP signature of the
+  release's `SHASUMS256.txt` against Node's release keys, then the archive's
+  SHA-256 ([Node.js signature verification](https://viteplus.dev/guide/env#node-js-signature-verification)).
+  No checksum is committed here: `minimumReleaseAge` and the lockfile do not
+  reach the runtime, and `devEngines.runtime.version` being exact is what keeps
+  a CI run from taking a Node released that day.
+- The global `vp` is the one thing here that no lockfile pins, and its trust
+  root is different from an npm dependency's. CI's `voidzero-dev/setup-vp` is
+  pinned to a commit, and it installs `vp` by running `install.sh` fetched
+  from the `voidzero-dev/vite-plus` git tag of the version `vite-plus` has in
+  `package.json`, which is why that version is exact. The script checks the
+  platform package's npm `dist.integrity` (sha512) and its provenance
+  attestation before installing it. If the tagged script cannot be fetched,
+  `setup-vp` falls back to the latest script on viteplus.dev. Neither
+  `minimumReleaseAge` nor `.npmrc`'s `min-release-age` applies to this
+  download, so a `vp` release is as new as its `vite-plus` bump in
+  `package.json`, which only Dependabot's cooldown holds back; that guarantee
+  is weaker than the one the dependencies get.
 - Dependabot (`.github/dependabot.yml`) opens weekly grouped npm and GitHub
   Actions updates with a 3-day cooldown (7 for majors), matching
   `minimumReleaseAge` so an update is proposed the moment it is installable.
@@ -141,11 +167,11 @@ real key, and never put it in a URL query string
 whatever its base, and as a reusable workflow called by the release. Why each
 step is shaped as it is lives in the comments beside it.
 
-| Job        | What it does                                                                                                                                                                                                               |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `check`    | `vp check`: format check, lint and type check.                                                                                                                                                                             |
-| `consumer` | `vp pack` and `pnpm pack`; installs the tarball with npm outside the repository; runs `scripts/consumer-smoke/smoke.mjs` on Node 22; type checks `documented-usage.ts` against the tarball (CLAUDE.md, State of the repo). |
-| `test`     | The suite on Node 22, 24 and 26, each asserted to be the Node that actually ran.                                                                                                                                           |
+| Job        | What it does                                                                                                                                                                                                                |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `check`    | `vp check`: format check, lint and type check.                                                                                                                                                                              |
+| `consumer` | `vp pack` and `vp pm pack`; installs the tarball with npm outside the repository; runs `scripts/consumer-smoke/smoke.mjs` on Node 22; type checks `documented-usage.ts` against the tarball (CLAUDE.md, State of the repo). |
+| `test`     | The suite on Node 22, 24 and 26, each asserted to be the Node that actually ran.                                                                                                                                            |
 
 Installs are `--frozen-lockfile`, so commit `pnpm-lock.yaml` with any
 `package.json` change.
