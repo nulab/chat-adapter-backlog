@@ -47,8 +47,8 @@ so a field the adapter validates cannot drift from the type it publishes.
 Call sites take a reader, never a schema and a type argument: `Validated<T>`
 accepts any subset of `T`'s fields, so a schema passed with the wrong type
 would compile. zod types never
-reach the published `.d.ts`: `scripts/check-published-types.mjs` fails the
-build on any import there but `chat` and `backlog-js`, and on a declared type
+reach the published `.d.ts`: `scripts/check-published-types.ts` fails
+`vp pack` on any import there but `chat` and `backlog-js`, and on a declared type
 `src/index.ts` does not export — so an overlay helper type a raw shape
 references is exported too.
 
@@ -199,34 +199,44 @@ parsed type.
 
 ## Quality gates
 
-Run all five before declaring work done; CI runs exactly these:
+Run all three before declaring work done; CI runs exactly these:
 
 ```sh
-pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
+pnpm exec vp check && pnpm exec vp test && pnpm exec vp pack
 ```
 
-- `pnpm lint` uses `--max-warnings 0`, so a `console.log` (allowed: `warn`,
-  `error`) fails the build. `typescript/no-explicit-any` is an error outside
-  `*.test.ts`.
-- The pre-commit hook's oxlint step ends in `|| true` — it never blocks a
-  commit. A green commit says nothing about a green CI.
+All three are [Vite+](https://viteplus.dev/guide/) built-ins configured in
+`vite.config.ts`, the one config file for lint, format, type check, test and
+pack, so none of them takes a flag.
+
+- `vp check` is format, lint and type check in one run; a formatting failure
+  stops it before lint and type check, so run `vp check --fix` first.
+  `no-console` is an `error` (allowed: `warn`, `error`), so a `console.log`
+  fails it, and so does `typescript/no-explicit-any` outside `*.test.ts`. The
+  type check is tsgolint's, with `tsconfig.json` as its project.
+- `vp check` lints and type checks `src/`, `scripts/` and the config only.
+  `examples/*` and `scripts/consumer-smoke` are formatted but not linted: their
+  dependencies exist only in the `consumer` job, so a lint here would report
+  every adapter import as unresolved.
+- The pre-commit hook runs `vp check --fix` on the staged files and **blocks the
+  commit** when something is left that `--fix` cannot repair.
 - `tsconfig.json` enables `noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`, `verbatimModuleSyntax` (type-only imports must
   say `import type`), `noUnusedLocals` and `noUnusedParameters` (prefix
   intentionally unused params with `_`).
-- `pnpm build` fails on `publint` problems, on `attw` problems at the
-  `esm-only` profile, and via `scripts/check-published-types.mjs`, which runs
-  after tsdown, on a `dist/index.d.ts` that imports any module but `chat` and
-  `backlog-js`. Touching `exports`, `files`, `scripts` or the build config
-  means running the build, not just the type check.
+- `vp pack` fails on `publint` problems, on `attw` problems at the `esm-only`
+  profile, and, through the `build:done` hook in `vite.config.ts`, on
+  `scripts/check-published-types.ts` finding a `dist/index.d.ts` that imports
+  any module but `chat` and `backlog-js`. Touching `exports`, `files`, `scripts`
+  or the build config means running `vp pack`, not just `vp check`.
 - `engines.node` is `">=22"`, so do not use APIs newer than Node 22 in
   shipped code. The test matrix runs the suite on Node 22, 24 and 26, so a
-  26-only API now fails a job rather than reaching a consumer — but `pnpm typecheck` and `pnpm build` still only ever see the
-  pinned runtime, so a type-level or build-time 26-ism is caught by `test`
-  alone.
+  26-only API now fails a job rather than reaching a consumer — but `vp check`
+  and `vp pack` still only ever see the pinned runtime, so a type-level or
+  build-time 26-ism is caught by `test` alone.
 - One Node runs the gates and pnpm provisions it: `devEngines.runtime` in
   `package.json` (`^26.0.0`), pinned with a checksum in `pnpm-lock.yaml`.
-  `pnpm exec node`, `pnpm run <script>` and a bare `node` inside a script all
+  `pnpm exec node`, `pnpm exec vp …` and a bare `node` inside a script all
   get it. A bare `node` in your own shell is a different Node, or none at all —
   never assume one exists; go through pnpm.
 - `pnpm install` needs nothing but pnpm on PATH. There is no `mise.toml` any
@@ -239,7 +249,7 @@ pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build
   what the CI matrix does. Do not edit `devEngines.runtime` to test another
   major; it changes the lockfile.
 - `@types/node` tracks the runtime's major on purpose. Running it ahead makes
-  `pnpm typecheck` accept APIs that do not exist at run time; holding it behind
+  `vp check` accept APIs that do not exist at run time; holding it behind
   hides APIs that do. Move the two together.
 - `pnpm-workspace.yaml` uses `allowBuilds` (pnpm 11 removed
   `onlyBuiltDependencies`), and `minimumReleaseAge: 4320` means "latest" is the
@@ -258,8 +268,8 @@ Conventional Commits, **with a scope**, because the title becomes a commit
 subject on `main`: `feat(webhook): 401 a request with no path secret`.
 
 Types used here: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `ci`,
-`chore`, `revert`. Two are deliberately absent: `style`, because oxfmt owns
-formatting and a formatting-only change is a `chore` on the scope it touched;
+`chore`, `revert`. Two are deliberately absent: `style`, because Vite+'s
+formatter owns formatting and a formatting-only change is a `chore` on the scope it touched;
 and `build`, because `build` is a _scope_ here — the toolchain change that
 would be `build:` elsewhere is `chore(build)` or `fix(build)`.
 
@@ -269,8 +279,8 @@ would be `build:` elsewhere is `chore(build)` or `fix(build)`.
 | `client`    | the `backlog-js` client: the injected `fetch`, auth, the 429 retry, typed errors, the response schemas                    |
 | `webhook`   | webhook ingress: verification, body parsing, the `processMessage` dispatch                                                |
 | `format`    | markup conversion — the `BaseFormatConverter` subclass and its AST both ways                                              |
-| `build`     | tsdown, `exports`/`files`, `tsconfig.json`, publint/attw                                                                  |
-| `toolchain` | pnpm, the pinned Node runtime, oxlint/oxfmt/vitest configuration, lefthook                                                |
+| `build`     | `exports`/`files`, `tsconfig.json`, the `pack` block of `vite.config.ts`, publint/attw                                    |
+| `toolchain` | pnpm, the pinned Node runtime, Vite+ and the rest of `vite.config.ts` (`lint`, `fmt`, `test`, `staged`), the git hooks    |
 | `ci`        | `.github/workflows/ci.yml` and the Node matrix                                                                            |
 | `release`   | `.github/workflows/release.yml`, `.github/release.yml`, publishing, versioning                                            |
 | `deps`      | dependency and lockfile bumps — what Dependabot opens                                                                     |
@@ -521,7 +531,7 @@ invisible to consumers.
   against this adapter; they encode invariants that are easy to break
   silently. Its other exports are listed in
   `.claude/rules/chat-sdk-core-facts.md`.
-- `pnpm test` must pass with no credentials and no network. Any live suite is
+- `vp test` must pass with no credentials and no network. Any live suite is
   opt-in and self-skipping on absent `BACKLOG_API_KEY` — see the pattern in
   DEVELOPMENT.md. Keep it lean; a chatty suite will 429 the update bucket.
 
@@ -536,9 +546,9 @@ thing CI does with an example as a project is the `consumer` job's: copy it
 out of the repository, point its adapter dependency at the packed tarball,
 `npm install` and `npm run typecheck`. So an example has to compile against
 what the package ships, not against `src/`, and it has no tests for CI to run.
-The root `lint` and `format:check` reach into `examples/` as well (oxfmt
-formats the Markdown too: it aligns tables and normalises bullets, though it
-never reflows prose, so write a README and let `pnpm format` settle it).
+`vp check` formats `examples/` as well, though it does not lint them (the
+formatter handles Markdown too: it aligns tables and normalises bullets, though
+it never reflows prose, so write a README and let `vp check --fix` settle it).
 
 `examples/README.md` is the index and carries the setup all of them share; an
 example's own README does not repeat it.

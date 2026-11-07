@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vite-plus/test';
 
 import {
   assigneeChanged,
@@ -170,7 +170,7 @@ function renderSamples(): string {
     'One anonymised payload per activity type the adapter recognises, in the shape',
     'a real delivery carries. Generated from the fixtures in',
     '`src/test/fixtures/webhooks.ts` by `src/test/sample-messages.test.ts`;',
-    'regenerate it with `pnpm exec vitest run src/test/sample-messages.test.ts -u`',
+    'regenerate it with `vp test src/test/sample-messages.test.ts -u`',
     'rather than editing it by hand. What Backlog delivers, and where a delivery',
     'differs from the activities API, is recorded with its measurements in',
     '`.claude/rules/backlog-webhook-facts.md` and',

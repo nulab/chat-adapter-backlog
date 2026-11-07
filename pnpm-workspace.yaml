@@ -13,8 +13,7 @@ minimumReleaseAge: 4320
 # `neverBuiltDependencies` and `ignoredBuiltDependencies`. Nothing builds by
 # default, and an install script from a package that is not listed here fails
 # the install rather than being skipped quietly.
-allowBuilds:
-  lefthook: true
+allowBuilds: {}
 
 # No `packages`: the root package is a member implicitly and nothing else is.
 # `examples/*` are deliberately not members — each one is a standalone project

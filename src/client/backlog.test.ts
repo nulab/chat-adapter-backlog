@@ -6,7 +6,7 @@ import {
   ResourceNotFoundError,
 } from '@chat-adapter/shared';
 import { createMockLogger } from '@chat-adapter/tests';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vite-plus/test';
 
 import { issue, REST } from '../test/fixtures/rest';
 import { createBacklogClient } from './backlog';

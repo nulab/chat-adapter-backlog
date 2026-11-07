@@ -1,5 +1,5 @@
 import { AdapterError } from '@chat-adapter/shared';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vite-plus/test';
 
 import { createBacklogAdapter } from '../index';
 import { encodeChannelId, encodeMessageId, encodeThreadId } from '../ids';
@@ -13,7 +13,7 @@ import type {
 /**
  * Opt-in suite against a real Backlog space.
  *
- * `pnpm test` must pass with no credentials and no network, so each section
+ * `vp test` must pass with no credentials and no network, so each section
  * skips itself unless its variables are set. It is not part of CI.
  *
  *   BACKLOG_HOST=example.backlog.com \
@@ -21,7 +21,7 @@ import type {
  *   BACKLOG_BOT_USER_ID=999 \
  *   BACKLOG_LIVE_ISSUE_ID=8001 \
  *   BACKLOG_LIVE_PULL_REQUEST=700:12 \
- *   pnpm test
+ *   vp test
  *
  * The budget is deliberate. Backlog allows writes on the order of 150
  * requests per user per minute
@@ -94,7 +94,7 @@ function commentOf(raw: BacklogRawMessage): BacklogRawComment {
   return raw.comment;
 }
 
-describe.skipIf(!configured).sequential('a real Backlog space', () => {
+describe.skipIf(!configured)('a real Backlog space', { concurrent: false }, () => {
   const subject: BacklogSubjectRef = { kind: 'issue', issueId };
   let adapter: ReturnType<typeof createLiveAdapter>;
   let threadId: string;
@@ -183,8 +183,7 @@ describe.skipIf(!configured).sequential('a real Backlog space', () => {
 });
 
 describe
-  .skipIf(!pullRequestConfigured)
-  .sequential('a real Backlog pull request', () => {
+  .skipIf(!pullRequestConfigured)('a real Backlog pull request', { concurrent: false }, () => {
     // `pullRequestConfigured` gates every test, so this is set by the time one
     // runs.
     const coordinates = pullRequestCoordinates as NonNullable<

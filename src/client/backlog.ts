@@ -77,7 +77,9 @@ export function createBacklogClient(
       return response;
     }
 
-    const url = stripQueryString(String(input));
+    const url = stripQueryString(
+      input instanceof Request ? input.url : String(input)
+    );
     const bodyError = await readBodyError(response);
     if (response.status === 429 || bodyError?.code === 13) {
       const decision = decideRetry(

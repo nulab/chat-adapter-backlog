@@ -186,10 +186,10 @@ jobs:
           fi
 
       - name: Build
-        run: pnpm run build
+        run: pnpm exec vp pack
 
       # `--ignore-scripts` because the build has already run and the only
-      # lifecycle script left, `prepare`, installs lefthook's git hooks.
+      # lifecycle script left, `prepare`, installs the git hooks.
       - name: Pack
         id: pack
         run: |

@@ -306,7 +306,7 @@ export interface BacklogPostableExtras {
 export type BacklogWebhookVerifier = (
   request: Request,
   rawBody: string
-) => unknown | Promise<unknown>;
+) => unknown;
 
 /**
  * A credential given as a string or as a function the adapter calls before

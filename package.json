@@ -36,15 +36,7 @@
     "dist"
   ],
   "scripts": {
-    "prepare": "lefthook install",
-    "build": "tsdown && node scripts/check-published-types.mjs",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "oxlint --max-warnings 0",
-    "lint:fix": "oxlint --fix",
-    "format": "oxfmt src examples tsdown.config.ts vitest.config.ts",
-    "format:check": "oxfmt --check src examples tsdown.config.ts vitest.config.ts",
-    "typecheck": "tsc --noEmit"
+    "prepare": "vp config"
   },
   "peerDependencies": {
     "chat": "^4.41.0"
@@ -55,13 +47,9 @@
     "@chat-adapter/tests": "^4.44.0",
     "@types/node": "^26.6.6",
     "chat": "^4.44.0",
-    "lefthook": "^2.2.2",
-    "oxfmt": "^0.74.0",
-    "oxlint": "^1.91.0",
     "publint": "^0.3.25",
-    "tsdown": "^0.23.5",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.12"
+    "vite-plus": "^1.5.0"
   },
   "packageManager": "pnpm@12.2.1+sha512.f55ca68aacb9eb5ab69c66f828a98af89a32286703aef1f8da131ca7eab4d677f34bfa85e186467a919c0799df8b6f4aa240f7dc2919b33b3273190104162616",
   "engines": {

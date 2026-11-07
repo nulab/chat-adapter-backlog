@@ -11,12 +11,12 @@ not recover from it.
 ## Verification
 
 <!--
-Beyond the five gates CI runs
-(`pnpm lint && pnpm format:check && pnpm typecheck && pnpm test && pnpm build`),
+Beyond the three gates CI runs
+(`pnpm exec vp check && pnpm exec vp test && pnpm exec vp pack`),
 say what you actually exercised: a real Backlog space (which endpoints, which
 plan), a local consumer of `pnpm pack`'s tarball, or nothing but the default suite.
 
-`pnpm test` runs with no credentials and no network, so a green suite says
+`vp test` runs with no credentials and no network, so a green suite says
 nothing about live behavior. If the opt-in live suite ran, say so.
 -->
 

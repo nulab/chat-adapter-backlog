@@ -1,5 +1,5 @@
 import { createMockLogger } from '@chat-adapter/tests';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vite-plus/test';
 
 import { verifyWebhookRequest } from './verify';
 

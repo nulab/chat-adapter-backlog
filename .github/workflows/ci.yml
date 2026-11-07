@@ -25,9 +25,9 @@ permissions:
   contents: read
 
 jobs:
-  lint:
+  check:
     runs-on: ubuntu-latest
-    name: Lint
+    name: Check
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,27 +44,8 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm run lint
-
-      - name: Format check
-        run: pnpm run format:check
-
-  typecheck:
-    runs-on: ubuntu-latest
-    name: Type check
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          standalone: true
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Type check
-        run: pnpm run typecheck
+      - name: Check
+        run: pnpm exec vp check
 
   consumer:
     runs-on: ubuntu-latest
@@ -102,11 +83,11 @@ jobs:
       # on PATH.
       - run: pnpm install --frozen-lockfile
 
-      # `pnpm build` is the fifth gate, run here rather than in a job of its
+      # `vp pack` is the third gate, run here rather than in a job of its
       # own: the tarball has to be packed from a tree this job produced, so a
       # separate build job would only run the same command twice.
       - name: Build
-        run: pnpm run build
+        run: pnpm exec vp pack
 
       # `--out`, not the default filename: `pnpm pack` names the tarball after
       # `version`, and `version` is `0.0.0` on `main` only because release.yml
@@ -249,7 +230,7 @@ jobs:
       # installs the Node that `devEngines.runtime` pins, which lands a
       # `node_modules/.bin/node` that shadows PATH for every `pnpm run` and
       # `pnpm exec` — no flag, environment variable or setting overrides it,
-      # so a matrix without this would run Node 26 four times. The flag skips
+      # so a matrix without this would run Node 26 three times. The flag skips
       # fetching and linking the runtime and leaves the rest of the install
       # alone, so the lockfile still verifies under `--frozen-lockfile` and
       # the Node this job asked for is the only one on PATH.
@@ -259,13 +240,10 @@ jobs:
       # step below does. `pnpm exec` and `pnpm run` verify installed
       # dependencies against the lockfile first, and a runtime deliberately
       # left out by `--no-runtime` reads as a dependency that is missing: pnpm
-      # downloads and links Node 26, then services the command with it. That
-      # is not hypothetical — it is what failed this matrix on 22, 24 and 26
-      # while 20 happened to escape it, so the repair is not even consistent
-      # enough to work around.
+      # downloads and links Node 26, then services the command with it.
       #
-      # Invoking the runner's entry point with a bare `node` keeps one Node in
-      # play: the one actions/setup-node put on PATH.
+      # Invoking the entry point with a bare `node` keeps one Node in play:
+      # the one actions/setup-node put on PATH.
       #
       # Asserted inside the Node process rather than by capturing its output,
       # so there is nothing to parse and the process being identified is the
@@ -288,7 +266,10 @@ jobs:
             }
           '
 
-      # `pnpm test` is `vitest run`; this is that, with the Node this job
-      # selected instead of the one pnpm would relink.
+      # `vp` has Node-management logic of its own, so the check above only
+      # identifies the Node that started it. src/test/runtime.test.ts repeats
+      # it inside the test process, from `EXPECTED_NODE_MAJOR`.
       - name: Test
-        run: node node_modules/vitest/vitest.mjs run
+        env:
+          EXPECTED_NODE_MAJOR: ${{ matrix.node }}
+        run: node node_modules/vite-plus/bin/vp test

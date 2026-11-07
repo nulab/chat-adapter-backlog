@@ -109,8 +109,6 @@ for (const variable of ['BACKLOG_BOT_USER_ID']) {
   process.env[variable] = value;
 }
 
-// `console.error`, not `console.log`: oxlint's `no-console` allows `warn` and
-// `error` only, and `--max-warnings 0` makes the difference a failing lint.
 console.error(
   `${PACKAGE} resolved from ${installedRootUrl} and constructed on Node ${process.versions.node}`
 );
