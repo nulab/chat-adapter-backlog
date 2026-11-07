@@ -16,7 +16,7 @@ replies by commenting.
 
 - Issues and pull requests are threads; the project is the channel
 - Post, edit and delete comments; upload and download attachments
-- Mentions by notification, by `@name` in the text, or by assignment to the bot
+- Mentions by notification or by assignment to the bot
 - Markdown (GFM) converts to and from Chat SDK's AST
 - `client()` gives you the underlying [`backlog-js`](https://github.com/nulab/backlog-js) client for every other endpoint
 - One bounded retry on a 429, and typed `@chat-adapter/shared` errors
@@ -47,7 +47,7 @@ const backlog = createBacklogAdapter(); // reads the BACKLOG_* variables
 const chat = new Chat({
   adapters: { backlog }, // the key must be "backlog": thread ids start with "backlog:"
   state: createMemoryState(),
-  userName: backlog.userName,
+  userName: 'backlog-bot',
 });
 
 chat.onNewMention(async (thread, message) => {
@@ -76,13 +76,12 @@ only when the option is missing; an explicit empty string is a `ValidationError`
 | `BACKLOG_API_KEY`        | one of the two           | Personal API key of the bot user.                                          |
 | `BACKLOG_ACCESS_TOKEN`   | one of the two           | OAuth 2.0 access token, instead of a key.                                  |
 | `BACKLOG_BOT_USER_ID`    | yes                      | Numeric id of the bot user.                                                |
-| `BACKLOG_BOT_USER_NAME`  | yes                      | The bot's display name, exposed as `adapter.userName`.                     |
 | `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter; at least 16 bytes.  |
 
 ### Options
 
 ```ts
-createBacklogAdapter({ host, apiKey, botUserId, botUserName, webhookSecret });
+createBacklogAdapter({ host, apiKey, botUserId, webhookSecret });
 ```
 
 | Option                   | Type                                          | Default                  | Notes                                                                    |
@@ -90,7 +89,6 @@ createBacklogAdapter({ host, apiKey, botUserId, botUserName, webhookSecret });
 | `host`                   | `string`                                      | `BACKLOG_HOST`           | Spaces also live on `backlog.jp` and `backlogtool.com`.                  |
 | `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | `BACKLOG_API_KEY` / `BACKLOG_ACCESS_TOKEN` | Exactly one. A function is called on every request, so a token can rotate. |
 | `botUserId`              | `number`                                      | `BACKLOG_BOT_USER_ID`    | Required. Recognises the bot's own comments and assignment to it.        |
-| `botUserName`            | `string`                                      | `BACKLOG_BOT_USER_NAME`  | Required. Exposed as `adapter.userName`.                                 |
 | `webhookSecret`          | `string`                                      | `BACKLOG_WEBHOOK_SECRET` | Required unless `webhookVerifier` is set.                                |
 | `webhookVerifier`        | `(request, rawBody) => unknown`               | —                        | Replaces the secret check; a truthy result accepts the delivery.         |
 | `logger`                 | `Logger`                                      | `ConsoleLogger("info")`  | Replaced by `chat.getLogger("backlog")` on `initialize`.                 |
@@ -98,9 +96,8 @@ createBacklogAdapter({ host, apiKey, botUserId, botUserName, webhookSecret });
 One adapter serves one Backlog space; a second space is a second adapter behind
 its own webhook URL.
 
-Both `botUserId` and `botUserName` must be configured, directly or through
-`BACKLOG_BOT_USER_ID` and `BACKLOG_BOT_USER_NAME`. Find the numeric `id` and
-`name` once with `GET /users/myself` using the bot's API key, and copy the
+`botUserId` must be configured, directly or through `BACKLOG_BOT_USER_ID`.
+Find it once with `GET /users/myself` using the bot's API key, and copy the
 numeric `id`, not the login `userId`:
 
 ```sh
@@ -113,7 +110,7 @@ curl -H "Backlog-API-Key: $BACKLOG_API_KEY" https://$BACKLOG_HOST/api/v2/users/m
    permission to comment.
 2. Issue an API key as that user (**Personal Settings → API**; if the section
    is missing, an administrator must enable API access), then configure its
-   numeric `id` and display `name` as described under Configuration.
+   numeric `id` as described under Configuration.
 3. Generate a secret: `openssl rand -hex 32`.
 4. In each project, add a webhook (**Project Settings → Integrations →
    Webhook**). Point it at
@@ -201,8 +198,7 @@ The full grammar is in the spec's
 ### Mentions
 
 A message is a mention when the webhook lists the bot among the notified users,
-when its text contains `@<botUserName>`, or when it assigns the subject to the
-bot. Read `message.isMention` rather than matching the text yourself. The rules
+or when it assigns the subject to the bot. Read `message.isMention` rather than matching the text yourself. The rules
 are in
 [Mention detection](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#54-mention-detection-d9).
 

@@ -28,7 +28,7 @@ export type BulkUpdateLink = BulkUpdateActivity['content']['link'][number];
 export interface InboundContext {
   host: string;
   botUserId: number;
-  botUserName: string | undefined;
+  botUserName?: string | undefined;
   format: (text: string) => MessageData['formatted'];
 }
 

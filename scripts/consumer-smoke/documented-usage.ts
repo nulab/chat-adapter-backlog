@@ -21,7 +21,7 @@ import { Chat, type PostableMarkdown } from 'chat';
 const backlog = createBacklogAdapter();
 
 const chat = new Chat({
-  userName: backlog.userName,
+  userName: 'backlog-bot',
   adapters: { backlog },
   state: createMemoryState(),
 });

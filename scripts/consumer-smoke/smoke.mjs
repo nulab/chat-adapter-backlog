@@ -77,7 +77,6 @@ assert.equal(
 const adapter = adapterModule.createBacklogAdapter();
 
 assert.equal(adapter.name, 'backlog');
-assert.equal(adapter.userName, process.env.BACKLOG_BOT_USER_NAME);
 
 const silentLogger = {
   debug() {},
@@ -95,7 +94,7 @@ assert.equal(
   'initialize reached the network'
 );
 
-for (const variable of ['BACKLOG_BOT_USER_NAME', 'BACKLOG_BOT_USER_ID']) {
+for (const variable of ['BACKLOG_BOT_USER_ID']) {
   const value = process.env[variable];
   delete process.env[variable];
   assert.throws(
@@ -113,5 +112,5 @@ for (const variable of ['BACKLOG_BOT_USER_NAME', 'BACKLOG_BOT_USER_ID']) {
 // `console.error`, not `console.log`: oxlint's `no-console` allows `warn` and
 // `error` only, and `--max-warnings 0` makes the difference a failing lint.
 console.error(
-  `${PACKAGE} resolved from ${installedRootUrl} and constructed as ${adapter.userName} on Node ${process.versions.node}`
+  `${PACKAGE} resolved from ${installedRootUrl} and constructed on Node ${process.versions.node}`
 );

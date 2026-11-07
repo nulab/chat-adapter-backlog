@@ -57,9 +57,8 @@ tarball, installs it with npm outside the repository — lifecycle scripts
 included, so a `preinstall` that would break a consumer's install (#99) fails
 there — and runs `scripts/consumer-smoke/smoke.mjs` on Node 20, where the
 entry has to resolve through `exports` and `createBacklogAdapter()` gets no
-argument at all — the five `BACKLOG_*` variables are the whole configuration,
-including the required `BACKLOG_BOT_USER_ID` and `BACKLOG_BOT_USER_NAME`;
-`initialize` must reach no network at all (spec D23).
+argument at all — the four `BACKLOG_*` variables are the whole configuration,
+including the required `BACKLOG_BOT_USER_ID`; `initialize` must reach no network at all (spec D23).
 So `exports`, `files`, the env fallbacks and the floor of `engines.node` fail
 here rather than at a consumer. Changing any of those four means changing that
 consumer in the same commit; its assertions are one file, in the order a
@@ -590,9 +589,9 @@ Two rules about what an example may do, both load-bearing:
 State is `@chat-adapter/state-memory`, and no example subscribes to a thread.
 
 Environment variable names are shared across examples, not invented per
-example: five of the six the adapter reads (`BACKLOG_HOST`, `BACKLOG_API_KEY`,
-`BACKLOG_BOT_USER_ID`, `BACKLOG_BOT_USER_NAME`, `BACKLOG_WEBHOOK_SECRET` — the
-id and the name both required, set in every `.env.example`) plus
+example: four of the five the adapter reads (`BACKLOG_HOST`, `BACKLOG_API_KEY`,
+`BACKLOG_BOT_USER_ID`, `BACKLOG_WEBHOOK_SECRET` — the id required, set in every
+`.env.example`) plus
 meaningful names for the rest — `DONE_STATUS_ID`, `REQUIRED_CUSTOM_FIELD_ID`,
 `BUG_ISSUE_TYPE_NAME`, `INTAKE_CONTACT_USER_ID`, `AI_MODEL`,
 `AI_GATEWAY_API_KEY`. No `EXAMPLE_` prefix.

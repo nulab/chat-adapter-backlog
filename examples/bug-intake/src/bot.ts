@@ -31,7 +31,7 @@ const env = z
 const backlog = createBacklogAdapter();
 
 export const chat = new Chat({
-  userName: backlog.userName,
+  userName: 'bug-intake',
   adapters: { backlog },
   state: createMemoryState(),
 });

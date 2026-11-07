@@ -17,7 +17,6 @@ describe('package entry point', () => {
       host: 'example.backlog.com',
       apiKey: 'key',
       botUserId: 999,
-      botUserName: 'Chatbot',
       webhookSecret: 'test-webhook-secret',
     });
 

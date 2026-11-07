@@ -128,7 +128,6 @@ This example adds none of its own:
 | `BACKLOG_HOST`           | Space host, no scheme or path — for example `example.backlog.com`. |
 | `BACKLOG_API_KEY`        | The bot user's API key.                                            |
 | `BACKLOG_BOT_USER_ID`    | The bot user's numeric id.                                         |
-| `BACKLOG_BOT_USER_NAME`  | The bot user's display name.                                       |
 | `BACKLOG_WEBHOOK_SECRET` | The secret carried in the hook URL you register.                   |
 
 All five are validated at cold start, so a missing variable or a non-numeric id

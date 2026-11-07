@@ -152,8 +152,10 @@ export class BacklogAdapter implements Adapter<
     });
   }
 
+  // Empty: the core reads it only for a text match the adapter overrides by
+  // always setting isMention (chat-sdk-core-facts.md, D23).
   get userName(): string {
-    return this.space.botUserName;
+    return '';
   }
 
   async initialize(chat: ChatInstance): Promise<void> {
@@ -486,7 +488,6 @@ export class BacklogAdapter implements Adapter<
     return {
       host,
       botUserId: this.space.botUserId,
-      botUserName: this.space.botUserName,
       format: (text) => converter.toAst(text),
     };
   }

@@ -68,15 +68,6 @@ const configSchema = z
     apiKey: resolvable('apiKey').optional(),
     accessToken: resolvable('accessToken').optional(),
     botUserId: botUserId,
-    // Not trimmed: the core matches the display name as written.
-    botUserName: z
-      .string({
-        error:
-          'botUserName is required: set config.botUserName or BACKLOG_BOT_USER_NAME',
-      })
-      .refine((name) => name.trim().length > 0, {
-        error: 'botUserName (BACKLOG_BOT_USER_NAME) must not be blank',
-      }),
     webhookSecret: z
       .string()
       .refine(
@@ -162,7 +153,6 @@ function withEnvironment(config: BacklogAdapterConfig): unknown {
       ? config.accessToken
       : env.BACKLOG_ACCESS_TOKEN,
     botUserId: config.botUserId ?? (env.BACKLOG_BOT_USER_ID || undefined),
-    botUserName: config.botUserName ?? (env.BACKLOG_BOT_USER_NAME || undefined),
     webhookSecret:
       config.webhookSecret ??
       (config.webhookVerifier === undefined

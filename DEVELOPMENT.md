@@ -99,7 +99,6 @@ const liveCredentialsPresent = Boolean(
   process.env.BACKLOG_HOST &&
   process.env.BACKLOG_API_KEY &&
   process.env.BACKLOG_BOT_USER_ID &&
-  process.env.BACKLOG_BOT_USER_NAME &&
   process.env.BACKLOG_LIVE_ISSUE_ID
 );
 

@@ -60,7 +60,6 @@ const ENV_KEYS = [
   'BACKLOG_API_KEY',
   'BACKLOG_ACCESS_TOKEN',
   'BACKLOG_BOT_USER_ID',
-  'BACKLOG_BOT_USER_NAME',
   'BACKLOG_WEBHOOK_SECRET',
 ] as const;
 
@@ -103,7 +102,6 @@ function validConfig() {
     host: 'example.backlog.com',
     apiKey: 'test-api-key',
     botUserId: 999,
-    botUserName: 'Chatbot',
     webhookSecret: 'test-webhook-secret',
   };
 }
@@ -111,10 +109,6 @@ function validConfig() {
 describe('BacklogAdapter construction', () => {
   it('refuses a config its schema rejects', () => {
     expect(() => new BacklogAdapter({})).toThrow(ValidationError);
-  });
-
-  it('reports the configured bot name as its userName', () => {
-    expect(new BacklogAdapter(validConfig()).userName).toBe('Chatbot');
   });
 });
 
@@ -275,7 +269,6 @@ describe('BacklogAdapter.client', () => {
   const base = {
     host: 'example.backlog.com',
     botUserId: 999,
-    botUserName: 'Chatbot',
     webhookSecret: 'test-webhook-secret',
   } as const;
 
@@ -318,7 +311,6 @@ function webhookAdapterConfig(overrides: Partial<BacklogAdapterConfig> = {}) {
     host: FIXTURE.host,
     apiKey: 'test-api-key',
     botUserId: FIXTURE.bot.id,
-    botUserName: FIXTURE.bot.name,
     webhookSecret: FIXTURE.webhookSecret,
     ...overrides,
   };
@@ -1187,7 +1179,7 @@ describe('BacklogAdapter wiring with a real Chat instance', () => {
     const chat = new Chat({
       adapters: { backlog: adapter },
       state: new MemoryStateAdapter(),
-      userName: FIXTURE.bot.name,
+      userName: 'backlog-bot',
     });
     chat.onNewMention(async (thread, message) => {
       await thread.post(`Thanks for the mention, ${message.author.fullName}!`);
@@ -1198,7 +1190,8 @@ describe('BacklogAdapter wiring with a real Chat instance', () => {
     const response = await adapter.handleWebhook(
       webhookRequest(
         issueCommented({
-          text: `@${FIXTURE.bot.name} please help`,
+          text: 'please help',
+          notifications: [{ user: FIXTURE.bot, reason: 2 }],
           createdUser: FIXTURE.alice,
         })
       )
@@ -1221,7 +1214,6 @@ connectWebhookContract({
       host: FIXTURE.host,
       apiKey: 'connect-key',
       botUserId: FIXTURE.bot.id,
-      botUserName: FIXTURE.bot.name,
       webhookVerifier,
     }),
   makeWebhookRequest: () => webhookRequest(issueCommented(), { token: null }),

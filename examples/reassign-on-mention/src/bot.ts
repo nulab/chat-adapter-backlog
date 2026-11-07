@@ -27,7 +27,7 @@ const backlog = createBacklogAdapter();
 export const chat = new Chat({
   adapters: { backlog },
   state: createMemoryState(),
-  userName: backlog.userName,
+  userName: 'reassign-on-mention',
 });
 
 chat.onNewMention(async (thread, message) => {

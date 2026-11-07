@@ -38,7 +38,7 @@ const backlog = createBacklogAdapter();
 export const chat = new Chat({
   adapters: { backlog },
   state: createMemoryState(),
-  userName: backlog.userName,
+  userName: 'custom-field-done-gate',
 });
 
 const log = chat.getLogger('done-gate');

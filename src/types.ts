@@ -323,14 +323,13 @@ export type Resolvable = string | (() => string | Promise<string>);
  *
  * - Exactly one of `apiKey` and `accessToken`.
  * - `webhookSecret` is required unless `webhookVerifier` is set.
- * - `botUserId` and `botUserName` are required, from config or the environment.
+ * - `botUserId` is required, from config or the environment.
  */
 export interface BacklogAdapterConfig {
   host?: string;
   apiKey?: Resolvable;
   accessToken?: Resolvable;
   botUserId?: number;
-  botUserName?: string;
   webhookSecret?: string;
   webhookVerifier?: BacklogWebhookVerifier;
   logger?: Logger;

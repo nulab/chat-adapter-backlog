@@ -99,7 +99,7 @@ fine — each ignores the events it has nothing to say about.
 
 ### 4. Environment variables
 
-These five are read by `createBacklogAdapter()` and are the same in every
+These four are read by `createBacklogAdapter()` and are the same in every
 example:
 
 | Variable                 | Meaning                                                            |
@@ -107,7 +107,6 @@ example:
 | `BACKLOG_HOST`           | Space host, no scheme or path — for example `example.backlog.com`. |
 | `BACKLOG_API_KEY`        | The bot user's API key.                                            |
 | `BACKLOG_BOT_USER_ID`    | The bot user's numeric id (required).                              |
-| `BACKLOG_BOT_USER_NAME`  | The bot user's display name (required).                            |
 | `BACKLOG_WEBHOOK_SECRET` | The secret from step 2, also present in the hook URL you register. |
 
 Each example adds a few of its own on top, documented in its README and listed
