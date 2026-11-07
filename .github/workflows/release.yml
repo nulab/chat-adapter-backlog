@@ -89,7 +89,7 @@ jobs:
           node_version=$(pnpm exec node --version)
           echo "node_version=${node_version#v}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ steps.pinned.outputs.node_version }}
           package-manager-cache: false
@@ -269,7 +269,7 @@ jobs:
       # (12.1.0 on 2026-09-22) — `.npmrc`'s `min-release-age` is a project
       # setting and is not read in global mode. The floor is asserted below
       # instead of assumed.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ needs.pack.outputs.node_version }}
           registry-url: https://registry.npmjs.org
