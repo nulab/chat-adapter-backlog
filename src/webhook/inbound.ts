@@ -113,15 +113,11 @@ function assemble(
     author: authorOf(host, botUserId, activity.createdUser),
     metadata: { dateSent: new Date(activity.created), edited: false },
     attachments: parts.attachments,
-    // An explicit `false` would stop the core from matching `@<userName>` in
-    // the text, because it fills `isMention` with `??` (measured).
-    ...(detectMention({
+    isMention: detectMention({
       botUserId,
       assigneeId: parts.assigneeId,
       notifications: activity.notifications,
-    })
-      ? { isMention: true }
-      : {}),
+    }),
   });
 }
 
