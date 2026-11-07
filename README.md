@@ -132,7 +132,7 @@ The activity types you select are the only on/off switch. Leave out 18–20 and
 no pull request reaches a handler. Leaving out 14 avoids fanning a bulk update
 out into one handler run per issue, but then an update made from the issue
 list, even of a single issue, reaches no handler at all. See
-[Activity-type mapping](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#53-activity-type-mapping).
+[Activity-type mapping](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/spec.md#53-activity-type-mapping).
 
 ## Webhook authenticity
 
@@ -153,7 +153,7 @@ list, even of a single issue, reaches no handler at all. See
   handed the body, so with one the body is read first.
 
 The reasoning is in the spec's
-[Security](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#11-security)
+[Security](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/spec.md#11-security)
 section.
 
 ## Usage
@@ -192,14 +192,14 @@ decodeUserId(message.author.userId).userId; // the numeric Backlog user id
 ```
 
 The full grammar is in the spec's
-[Grammar](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#21-grammar).
+[Grammar](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/spec.md#21-grammar).
 
 ### Mentions
 
 A message is a mention when the webhook lists the bot among the notified users,
 or when it assigns the subject to the bot at creation. Read
 `message.isMention` rather than matching the text yourself. The rules are in
-[Mention detection](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#54-mention-detection-d9).
+[Mention detection](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/spec.md#54-mention-detection-d9).
 
 To mention someone, write Backlog's mention syntax — `<@U<userId>>`, `<@T<teamId>>`
 or `<@project>` — or pass `notifiedUserId` to notify without a visible name:
@@ -249,7 +249,7 @@ the call does not return. A longer reset or a second 429 rejects with
 `AdapterRateLimitError`. Give a serverless function comfortably more than 60
 seconds (on Vercel, `export const maxDuration = 90`), or a reply cut off
 mid-wait disappears silently. See
-[429 retry](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#84-429-retry-d5).
+[429 retry](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/spec.md#84-429-retry-d5).
 
 ### Testing your bot
 
@@ -282,9 +282,9 @@ Mock `adapter.client()` where a handler calls Backlog directly.
   typing indicators have no Backlog counterpart.
 
 Member-by-member coverage is in
-[Adapter contract coverage](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#4-adapter-contract-coverage),
+[Adapter contract coverage](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/spec.md#4-adapter-contract-coverage),
 and how text and cards are rendered in
-[Formatting](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md#9-formatting).
+[Formatting](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/spec.md#9-formatting).
 
 ## Examples
 
@@ -295,7 +295,7 @@ Deployable bots built on this adapter are in
 
 See [CONTRIBUTING.md](https://github.com/nulab/chat-adapter-backlog/blob/main/CONTRIBUTING.md).
 The behaviour and its design decisions are specified in
-[docs/specs/adapter.md](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/specs/adapter.md).
+[docs/spec.md](https://github.com/nulab/chat-adapter-backlog/blob/main/docs/spec.md).
 
 ## License
 

@@ -8,7 +8,7 @@ conventions and the release. Three other places carry the rest, and this file
 does not repeat them: [CLAUDE.md](./CLAUDE.md) (`AGENTS.md` is a symlink to
 it) holds the rules for writing code, tests and comments, where each fact
 lives, and the files CI couples together, for human contributors and agents
-alike; [docs/specs/adapter.md](./docs/specs/adapter.md) holds the behaviour and
+alike; [docs/spec.md](./docs/spec.md) holds the behaviour and
 its design decisions; the comments in `.github/workflows/*.yml` and
 `pnpm-workspace.yaml` hold why each CI, release and pnpm setting is what it is,
 next to the setting.
@@ -63,7 +63,7 @@ The gates are [Vite+](https://viteplus.dev/guide/) built-ins, configured in
 
 The three gates CI enforces, and what each one catches, are in CLAUDE.md
 "Quality gates". Formatting covers the whole repository except the generated
-`sample-messages.md`, `pnpm-lock.yaml`, build output and `examples/**`, which
+`docs/sample-messages.md`, `pnpm-lock.yaml`, build output and `examples/**`, which
 the root toolchain does not touch at all (CLAUDE.md, `examples/`). Linting and
 type checking cover `src/`, `scripts/` and the config only, and skip
 `scripts/consumer-smoke`: its dependencies exist only in the `consumer` job, so
