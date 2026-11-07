@@ -79,7 +79,7 @@
   },
   "dependencies": {
     "@chat-adapter/shared": "^4.44.0",
-    "backlog-js": "^0.20.2",
+    "backlog-js": "^1.0.2",
     "zod": "^4.6.7"
   }
 }
