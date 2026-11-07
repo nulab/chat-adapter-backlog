@@ -51,8 +51,9 @@ The gates are [Vite+](https://viteplus.dev/guide/) built-ins, configured in
 
 The three gates CI enforces, and what each one catches, are in CLAUDE.md
 "Quality gates". Formatting covers the whole repository except the generated
-`sample-messages.md`, `pnpm-lock.yaml` and build output; linting and type
-checking skip `examples/*` and `scripts/consumer-smoke`.
+`sample-messages.md`, `pnpm-lock.yaml`, build output and `examples/**`, which
+the root toolchain does not touch at all (CLAUDE.md, `examples/`); linting and
+type checking also skip `scripts/consumer-smoke`.
 
 ## Pre-commit hook
 
@@ -140,15 +141,14 @@ real key, and never put it in a URL query string
 whatever its base, and as a reusable workflow called by the release. Why each
 step is shaped as it is lives in the comments beside it.
 
-| Job        | What it does                                                                                                                                                                                                                                      |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `check`    | `vp check`: format check, lint and type check.                                                                                                                                                                                                    |
-| `consumer` | `vp pack` and `pnpm pack`; installs the tarball with npm outside the repository; runs `scripts/consumer-smoke/smoke.mjs` on Node 22; type checks `documented-usage.ts` and every `examples/*` against the tarball (CLAUDE.md, State of the repo). |
-| `test`     | The suite on Node 22, 24 and 26, each asserted to be the Node that actually ran.                                                                                                                                                                  |
+| Job        | What it does                                                                                                                                                                                                               |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `check`    | `vp check`: format check, lint and type check.                                                                                                                                                                             |
+| `consumer` | `vp pack` and `pnpm pack`; installs the tarball with npm outside the repository; runs `scripts/consumer-smoke/smoke.mjs` on Node 22; type checks `documented-usage.ts` against the tarball (CLAUDE.md, State of the repo). |
+| `test`     | The suite on Node 22, 24 and 26, each asserted to be the Node that actually ran.                                                                                                                                           |
 
 Installs are `--frozen-lockfile`, so commit `pnpm-lock.yaml` with any
-`package.json` change. An example is checked by hand the way its README says:
-`npm install` and `npm run typecheck` inside its own directory.
+`package.json` change.
 
 ## Releasing
 

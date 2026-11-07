@@ -38,8 +38,6 @@ jobs:
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
-    with:
-      skip-examples: true
 
   # Everything that runs this repository's code — the install, its lifecycle
   # scripts, the build — happens here, without `id-token: write` or

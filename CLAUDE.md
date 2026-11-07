@@ -65,10 +65,8 @@ consumer in the same commit; its assertions are one file, in the order a
 consumer meets them.
 
 The same job then compiles `scripts/consumer-smoke/documented-usage.ts` with
-`tsc --noEmit` against the installed declarations, and — except in the run
-`release.yml` calls, where `skip-examples` turns it off so an upstream release
-cannot block a publish through an example — type checks every `examples/*`
-against the same tarball. That file is the usage README.md documents, written
+`tsc --noEmit` against the installed declarations. That file is the usage
+README.md documents, written
 out by hand rather than extracted: a README sample that changes shape changes
 it in the same commit, or the job keeps passing on the old shape while the
 README shows one that may not compile. Its `chat`, `@chat-adapter/state-memory`
@@ -215,9 +213,10 @@ pack, so none of them takes a flag.
   fails it, and so does `typescript/no-explicit-any` outside `*.test.ts`. The
   type check is tsgolint's, with `tsconfig.json` as its project.
 - `vp check` lints and type checks `src/`, `scripts/` and the config only.
-  `examples/*` and `scripts/consumer-smoke` are formatted but not linted: their
-  dependencies exist only in the `consumer` job, so a lint here would report
-  every adapter import as unresolved.
+  `scripts/consumer-smoke` is formatted but not linted: its dependencies exist
+  only in the `consumer` job, so a lint here would report every adapter import
+  as unresolved. `examples/*` is outside the root toolchain altogether (see
+  `examples/`).
 - The pre-commit hook runs `vp check --fix` on the staged files and **blocks the
   commit** when something is left that `--fix` cannot repair.
 - `tsconfig.json` enables `noUncheckedIndexedAccess`,
@@ -541,14 +540,13 @@ invisible to consumers.
 depends on the published adapter (`"@nulab/chat-adapter-backlog": "^0.1.0"`),
 installs on its own, and deploys from its own directory. Copying one out of
 this repository has to leave it working, which is the rule that settles most
-questions about them. `pnpm-workspace.yaml` names no packages, and the one
-thing CI does with an example as a project is the `consumer` job's: copy it
-out of the repository, point its adapter dependency at the packed tarball,
-`npm install` and `npm run typecheck`. So an example has to compile against
-what the package ships, not against `src/`, and it has no tests for CI to run.
-`vp check` formats `examples/` as well, though it does not lint them (the
-formatter handles Markdown too: it aligns tables and normalises bullets, though
-it never reflows prose, so write a README and let `vp check --fix` settle it).
+questions about them. `pnpm-workspace.yaml` names no packages.
+
+**Examples are illustrations, not verified by CI or the root toolchain.** Root
+lint, type check and format skip `examples/**`, and CI neither installs nor
+type checks them. An LLM reviews an example when it changes, and an example
+falling behind the adapter is not itself a problem: it only has to be
+recognisable as an example.
 
 `examples/README.md` is the index and carries the setup all of them share; an
 example's own README does not repeat it.
@@ -575,7 +573,7 @@ That is also why `src/bot.ts` keeps the side effects and `src/<logic>.ts` keeps
 the rule — the thing a reader came for should not be tangled in the wiring.
 
 Package name `chat-adapter-backlog-example-<name>`, `private: true`, and the
-three scripts `typecheck` / `deploy` / `deploy:prod`. `vercel.json` sets
+the two scripts `deploy` / `deploy:prod`. `vercel.json` sets
 `framework: null` and `installCommand: "npm install"`, and orchestrates
 nothing else. npm because pnpm inside a clone finds the root
 `pnpm-workspace.yaml` and installs the repository instead; an explicit command

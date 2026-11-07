@@ -148,7 +148,6 @@ is deliberately not a dependency of this example.
 
 ```sh
 npm install
-npm run typecheck
 npm run deploy      # npx vercel deploy
 ```
 

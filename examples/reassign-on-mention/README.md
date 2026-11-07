@@ -115,7 +115,6 @@ Locally:
 
 ```sh
 npm install
-npm run typecheck
 npm run deploy      # npx vercel deploy
 ```
 
