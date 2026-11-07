@@ -50,21 +50,12 @@ import type {
 } from './types';
 import type { Adapter, ChatInstance, FormattedContent, Message } from 'chat';
 
-/**
- * `@chat-adapter/tests@4.39.0`'s own `matchers.d.ts` augments
- * `declare module "vitest" { interface Assertion<T = any> { ... } }`, which
- * does not merge under this repo's installed `vitest@4.1.11`: `Assertion`
- * there only re-exports `@vitest/expect`'s `Assertion`, and vitest 4 moved
- * the actual custom-matcher extension point to the (initially empty)
- * `Matchers<T>` interface `Assertion` extends — verified by reproducing both
- * augmentation targets against this toolchain, where only `Matchers` merged.
- * Re-declaring `toHaveDispatched` here against the interface vitest 4
- * actually extends is a type-only shim; the runtime matcher itself still
- * comes from `@chat-adapter/tests/setup` via `vitest.config.ts`.
- */
+// `@chat-adapter/tests` declares its matchers on vitest 5's `Matchers<R, T>`, which
+// cannot merge with the `Matchers<T>` of the vitest 4 installed here, so
+// `toHaveDispatched` is declared again on `Assertion`. Drop this when vitest moves to 5.
 declare module 'vitest' {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- must match `Matchers<T = any>` exactly for declaration merging (see comment above).
-  interface Matchers<T = any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- must match `Assertion<T = any>` exactly for declaration merging.
+  interface Assertion<T = any> {
     toHaveDispatched(handler: ChatHandler): T;
   }
 }
