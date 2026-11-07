@@ -195,7 +195,6 @@ export const readGitRepository =
 export const readUploadedFile =
   reader<Entity.File.FileInfo>(uploadedFileSchema);
 export const readIssue = reader<BacklogRawIssue>(issueSchema);
-export const readIssues = listReader<BacklogRawIssue>(issueSchema);
 export const readIssueComment = reader<BacklogIssueComment>(issueCommentSchema);
 export const readIssueComments =
   listReader<BacklogIssueComment>(issueCommentSchema);

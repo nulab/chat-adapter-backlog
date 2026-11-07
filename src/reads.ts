@@ -1,8 +1,4 @@
-import {
-  AdapterError,
-  ResourceNotFoundError,
-  ValidationError,
-} from '@chat-adapter/shared';
+import { ResourceNotFoundError, ValidationError } from '@chat-adapter/shared';
 import {
   decodeChannelId,
   decodeMessageId,
@@ -14,7 +10,7 @@ import {
   encodeUserId,
   isMessageInThread,
 } from './ids';
-import { readIssues, readProject, readUser } from './client/responses';
+import { readProject, readUser } from './client/responses';
 import { parseAttachmentPath } from './subject/url';
 
 import type {
@@ -25,7 +21,6 @@ import type {
 import type {
   BacklogChange,
   BacklogRawComment,
-  BacklogRawIssue,
   BacklogRawMessage,
 } from './types';
 import type { Backlog } from 'backlog-js';
@@ -36,8 +31,6 @@ import type {
   FetchDirection,
   FetchOptions,
   FetchResult,
-  ListThreadsOptions,
-  ListThreadsResult,
   Message,
   MessageData,
   MessageSubject,
@@ -391,79 +384,6 @@ export async function fetchChannelInfo(
       projectKey: project.projectKey,
     },
   };
-}
-
-export interface ListThreadsInput {
-  channelId: string;
-  options: ListThreadsOptions | undefined;
-  client: Backlog;
-  builders: Omit<MessageBuilders, 'projectId' | 'subject'>;
-  subjectFor: (issueId: number) => SubjectClient;
-}
-
-/**
- * Get Issue List returns whole issues, so each row's `fetchRoot()` would spend
- * a Get Issue on data the page already carries.
- */
-function listedIssueRoot(
-  host: string,
-  subject: SubjectClient,
-  issue: BacklogRawIssue
-): SubjectRoot {
-  const root = subject.rootFrom({ kind: 'issue', host, issue, changes: [] });
-  if (root === undefined) {
-    // Unreachable for an issue client. Not a `fetchRoot()` fallback, which
-    // would hide the mistake behind one read per row.
-    throw new AdapterError(
-      'a listed issue did not describe its own thread root',
-      'backlog',
-      'INVALID_SUBJECT_ROOT'
-    );
-  }
-  return root;
-}
-
-/**
- * Issues only, not pull requests (D-PR7): a pull-request list is per
- * repository, a coordinate a channel id does not carry, and it draws on a
- * different rate-limit bucket, which one cursor would hide. The page is not
- * sorted or filtered either: Get Issue List spends the search bucket, and a
- * caller who asked for one page must get that page.
- */
-export async function listThreads(
-  input: ListThreadsInput
-): Promise<ListThreadsResult<BacklogRawMessage>> {
-  const { channelId, options, client, builders, subjectFor } = input;
-  const { host, projectId } = decodeChannelId(channelId);
-  const limit = clampLimit(options?.limit);
-  const offset = parseCursor(options?.cursor) ?? 0;
-
-  const issues = await readIssues(
-    client.getIssues({ projectId: [projectId], count: limit, offset })
-  );
-
-  const threads = issues.map((issue) => {
-    const subject = subjectFor(issue.id);
-    const messageBuilders: MessageBuilders = {
-      ...builders,
-      projectId,
-      subject,
-    };
-    return {
-      id: encodeThreadId({ host, projectId, subject: subject.ref }),
-      rootMessage: buildRootMessage(
-        messageBuilders,
-        listedIssueRoot(host, subject, issue)
-      ),
-      lastReplyAt: new Date(issue.updated),
-    };
-  });
-
-  const result: ListThreadsResult<BacklogRawMessage> = { threads };
-  if (issues.length >= limit) {
-    result.nextCursor = String(offset + issues.length);
-  }
-  return result;
 }
 
 export interface GetUserInput {

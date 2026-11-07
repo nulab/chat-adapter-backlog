@@ -2,7 +2,6 @@ import { ValidationError } from '@chat-adapter/shared';
 import { z } from 'zod';
 
 import { HOST_PATTERN } from './ids';
-import type { Credential } from './client/backlog';
 import type {
   BacklogAdapterConfig,
   BacklogWebhookVerifier,
@@ -65,8 +64,7 @@ const configSchema = z
             'host must be a bare hostname such as example.backlog.com, without scheme, port or path',
         })
       ),
-    apiKey: resolvable('apiKey').optional(),
-    accessToken: resolvable('accessToken').optional(),
+    apiKey: resolvable('apiKey'),
     botUserId: botUserId,
     webhookSecret: z
       .string()
@@ -94,46 +92,23 @@ const configSchema = z
         'webhookSecret is required: set config.webhookSecret, BACKLOG_WEBHOOK_SECRET or config.webhookVerifier',
     }
   )
-  .transform(({ apiKey, accessToken, ...rest }, ctx) => {
-    if (apiKey !== undefined && accessToken === undefined) {
-      const credential: Credential = {
-        header: 'Backlog-API-Key',
-        resolve: async () => resolve(apiKey),
-      };
-      return { ...rest, credential };
-    }
-    if (accessToken !== undefined && apiKey === undefined) {
-      const credential: Credential = {
-        header: 'Authorization',
-        resolve: async () => `Bearer ${await resolve(accessToken)}`,
-      };
-      return { ...rest, credential };
-    }
-    ctx.issues.push({
-      code: 'custom',
-      input: { apiKey, accessToken },
-      message:
-        'exactly one of apiKey or accessToken is required: set config.apiKey, config.accessToken, BACKLOG_API_KEY or BACKLOG_ACCESS_TOKEN',
-    });
-    return z.NEVER;
-  });
+  .transform(({ apiKey, ...rest }) => ({
+    ...rest,
+    resolveApiKey: async () => resolve(apiKey),
+  }));
 
 export type SpaceConfig = z.output<typeof configSchema>;
 
 /**
  * Called by the client on every request rather than once here: resolving at
- * construction would pin an hourly OAuth token for the process's lifetime.
+ * construction would pin a rotated key out of the vault for the process's
+ * lifetime.
  */
 function resolve(value: Resolvable): string | Promise<string> {
   return typeof value === 'function' ? value() : value;
 }
 
 /**
- * The credential falls back to the environment as a pair, not field by field:
- * an explicit one beside the other's leftover variable is a deployment that
- * moved from OAuth to an API key without unsetting the old variable, and
- * reading both would refuse the config the caller had just written.
- *
  * `BACKLOG_WEBHOOK_SECRET` is not read beside a `webhookVerifier`: a verifier
  * replaces the secret, so a short one left in the environment would otherwise
  * fail a deployment that never uses it.
@@ -143,15 +118,10 @@ function resolve(value: Resolvable): string | Promise<string> {
  */
 function withEnvironment(config: BacklogAdapterConfig): unknown {
   const env = process.env;
-  const explicitCredential =
-    config.apiKey !== undefined || config.accessToken !== undefined;
   return {
     ...config,
     host: config.host ?? env.BACKLOG_HOST,
-    apiKey: explicitCredential ? config.apiKey : env.BACKLOG_API_KEY,
-    accessToken: explicitCredential
-      ? config.accessToken
-      : env.BACKLOG_ACCESS_TOKEN,
+    apiKey: config.apiKey ?? env.BACKLOG_API_KEY,
     botUserId: config.botUserId ?? (env.BACKLOG_BOT_USER_ID || undefined),
     webhookSecret:
       config.webhookSecret ??

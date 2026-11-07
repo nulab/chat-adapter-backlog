@@ -17,15 +17,9 @@ type Fetch = typeof globalThis.fetch;
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
-/** The request header one credential goes on, and its value, resolved per call. */
-export interface Credential {
-  header: string;
-  resolve: () => Promise<string>;
-}
-
 export interface CreateBacklogClientOptions {
   host: string;
-  credential: Credential;
+  resolveApiKey: () => Promise<string>;
   /**
    * An accessor rather than a `Logger`, because `initialize` replaces the
    * adapter's logger after this client has been built and cached.
@@ -58,7 +52,7 @@ const errorBodySchema = z.object({
 export function createBacklogClient(
   options: CreateBacklogClientOptions
 ): Backlog {
-  const { host, credential, logger } = options;
+  const { host, resolveApiKey, logger } = options;
 
   async function attemptFetch(
     input: Parameters<Fetch>[0],
@@ -66,7 +60,7 @@ export function createBacklogClient(
     attempt: number
   ): Promise<Response> {
     const headers = new Headers(init?.headers);
-    await applyCredential(headers);
+    await applyApiKey(headers);
 
     let response: Response;
     try {
@@ -123,14 +117,14 @@ export function createBacklogClient(
   }
 
   /**
-   * Resolved again on every attempt and never memoised, so an OAuth token
-   * refreshed between calls is picked up. `backlog-js` would reject a CR/LF
+   * Resolved again on every attempt and never memoised, so a key
+   * rotated between calls is picked up. `backlog-js` would reject a CR/LF
    * credential at construction, but this client is built without one, so
    * `Headers` is what refuses it here.
    */
-  async function applyCredential(headers: Headers): Promise<void> {
+  async function applyApiKey(headers: Headers): Promise<void> {
     try {
-      headers.set(credential.header, await credential.resolve());
+      headers.set('Backlog-API-Key', await resolveApiKey());
     } catch (cause) {
       throw mapCredentialResolverError(cause);
     }

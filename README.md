@@ -73,8 +73,7 @@ only when the option is missing; an explicit empty string is a `ValidationError`
 | Variable                 | Required                 | Meaning                                                                    |
 | ------------------------ | ------------------------ | -------------------------------------------------------------------------- |
 | `BACKLOG_HOST`           | yes                      | Space host without a scheme, e.g. `example.backlog.com`.                   |
-| `BACKLOG_API_KEY`        | one of the two           | Personal API key of the bot user.                                          |
-| `BACKLOG_ACCESS_TOKEN`   | one of the two           | OAuth 2.0 access token, instead of a key.                                  |
+| `BACKLOG_API_KEY`        | yes                     | Personal API key of the bot user.                                          |
 | `BACKLOG_BOT_USER_ID`    | yes                      | Numeric id of the bot user.                                                |
 | `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter; at least 16 bytes.  |
 
@@ -87,7 +86,7 @@ createBacklogAdapter({ host, apiKey, botUserId, webhookSecret });
 | Option                   | Type                                          | Default                  | Notes                                                                    |
 | ------------------------ | --------------------------------------------- | ------------------------ | ------------------------------------------------------------------------ |
 | `host`                   | `string`                                      | `BACKLOG_HOST`           | Spaces also live on `backlog.jp` and `backlogtool.com`.                  |
-| `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | `BACKLOG_API_KEY` / `BACKLOG_ACCESS_TOKEN` | Exactly one. A function is called on every request, so a token can rotate. |
+| `apiKey`                 | `string \| (() => string \| Promise<string>)` | `BACKLOG_API_KEY`        | Required. A function is called on every request, so a key can rotate.    |
 | `botUserId`              | `number`                                      | `BACKLOG_BOT_USER_ID`    | Required. Recognises the bot's own comments and assignment to it.        |
 | `webhookSecret`          | `string`                                      | `BACKLOG_WEBHOOK_SECRET` | Required unless `webhookVerifier` is set.                                |
 | `webhookVerifier`        | `(request, rawBody) => unknown`               | —                        | Replaces the secret check; a truthy result accepts the delivery.         |
@@ -260,7 +259,7 @@ Mock `adapter.client()` where a handler calls Backlog directly.
 - A comment edited within the second it was posted reads as `edited: false`,
   because Backlog's timestamps are second-granular.
 - A pull-request comment cannot be deleted, nor can an issue comment that
-  attached a file or changed a field. `listThreads` lists issues only.
+  attached a file or changed a field.
 - `channel.post()` is rejected. Create an issue with `client().postIssue()`.
 - Creating, merging or closing a pull request has no Backlog API.
 - A reaction is a single Backlog star. The emoji is ignored.
@@ -269,7 +268,8 @@ Mock `adapter.client()` where a handler calls Backlog directly.
   posts a single space.
 - Adding the bot to an existing comment's recipients is ignored; address the
   bot when posting the comment.
-- `listThreads` and issue listing draw on Backlog's lower search limit.
+- Issue listing through `client().getIssues()` draws on Backlog's lower search
+  limit.
 - Projects that use Backlog notation are not supported: posts appear as
   Markdown source there, and incoming notation is read as Markdown. Switch the
   project to Markdown in its settings.

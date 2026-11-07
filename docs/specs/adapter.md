@@ -31,13 +31,13 @@ classes. One adapter serves one space (D1).
 **Not supported**, by decision rather than deferral: direct messages,
 ephemeral messages, modals, buttons, slash commands, scheduled messages,
 nested replies, emoji reactions, typing indicators, a realtime transport,
-OAuth token acquisition or refresh, registering webhooks on the consumer's
+registering webhooks on the consumer's
 behalf, any persistent state of the adapter's own (subscriptions and dedupe
 belong to the Chat SDK `StateAdapter`), creating an issue through
 `channel.post` (D24), creating, closing or merging pull requests (Backlog has
-no status API), a git repository as a channel (D-PR1), listing pull
-requests through `listThreads` (D-PR7), and projects that use Backlog
-notation (D32).
+no status API), a git repository as a channel (D-PR1), `listThreads` (D13), an OAuth
+access token as a credential (D33), and projects that use Backlog notation
+(D32).
 
 ## 2. Conceptual model
 
@@ -138,8 +138,7 @@ type Resolvable = string | (() => string | Promise<string>);
 
 interface BacklogAdapterConfig {
   host?: string;
-  apiKey?: Resolvable;      // exactly one of apiKey / accessToken
-  accessToken?: Resolvable;
+  apiKey?: Resolvable;      // required, from config or the environment
   botUserId?: number;
   webhookSecret?: string;   // required unless webhookVerifier is set
   webhookVerifier?: BacklogWebhookVerifier;
@@ -151,8 +150,7 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
 | Option | Default | Env fallback | Validation |
 | --- | --- | --- | --- |
 | `host` | — | `BACKLOG_HOST` | Matches the `host` grammar after lowercasing; a scheme, port, path or whitespace is rejected. |
-| `apiKey` | — | `BACKLOG_API_KEY` | Non-empty when a string. Exactly one of `apiKey` / `accessToken`. |
-| `accessToken` | — | `BACKLOG_ACCESS_TOKEN` | As above. Refreshing it is the caller's job, through the resolver form. |
+| `apiKey` | — | `BACKLOG_API_KEY` | Required. Non-empty when a string (D33). |
 | `botUserId` | — | `BACKLOG_BOT_USER_ID` | Required. A `posint`; the env value must be one in decimal. |
 | `webhookSecret` | — | `BACKLOG_WEBHOOK_SECRET`, not read when `webhookVerifier` is set | At least **16 bytes** (UTF-8), validated even beside a verifier (D2). |
 | `webhookVerifier` | — | none | Replaces the secret check (D2). |
@@ -162,9 +160,6 @@ type BacklogWebhookVerifier = (request: Request, rawBody: string) => unknown | P
   empty string is a validation error. A blank `BACKLOG_BOT_USER_ID=` is
   reported as missing, not as an invalid value, because a copied
   `.env.example` leaves that line blank.
-- `apiKey` and `accessToken` fall back as a **pair**: either one in `config`
-  suppresses both variables. Both given, from any source, is an error, never
-  a silent preference for one.
 - An option the schema does not name is rejected rather than ignored.
 - A credential resolver is invoked on **every** outbound request and its
   result is never cached. One that throws makes that call reject with
@@ -292,9 +287,9 @@ says otherwise.
 | `fetchMessage(threadId, messageId)` | implemented | §7.2. |
 | `fetchSubject(raw)` | implemented | §7.4. |
 | `fetchChannelInfo(channelId)` | implemented | §7.5. |
-| `listThreads(channelId, options?)` | implemented; issues only | §7.6 (D-PR7). |
-| `getUser(userId)` | implemented | §7.7. |
+| `getUser(userId)` | implemented | §7.6. |
 | `rehydrateAttachment(attachment)` | implemented | §6.6. |
+| `listThreads` | absent | No consumer needs it and the core never calls it to route (D13). A project's issues are listed through `client().getIssues`, which spends **search**. |
 | `postChannelMessage` | absent | Core falls back to `postMessage(channelId)`, a `ValidationError`; an issue is created through `client().postIssue` (D24). |
 | `markAsRead` | absent | Core throws `NotImplementedError(…, "read-receipts")` (D24). |
 | `fetchChannelMessages` | absent | Core falls back to `fetchMessages(channelId)`, a `ValidationError`: a project has no single comment stream. |
@@ -658,19 +653,7 @@ The core calls it lazily from `message.subject` and turns an error into `null`.
 `{ id: channelId, name: project.name, isDM: false, metadata: { host, projectId, projectKey } }`.
 It touches no cache.
 
-### 7.6 `listThreads(channelId, { limit?, cursor? })`
-
-[Get Issue List](https://developer.nulab.com/docs/backlog/api/2/get-issue-list/)
-with `projectId[]`, `count` (`limit` as in §7.1) and `offset` (the cursor, same
-pattern). The endpoint spends the **search** limit. Order is Backlog's default
-for the endpoint, closed issues included (D13). Each issue →
-`{ id: threadId, rootMessage, lastReplyAt: new Date(issue.updated) }`, with no
-`replyCount`. `nextCursor = String(offset + issues.length)` when the page is
-full, so a trailing empty page is possible. Pull requests are not listed
-(D-PR7); `client().getPullRequests(projectId, repositoryId, …)` lists them
-and spends `read`.
-
-### 7.7 `getUser(userId)`
+### 7.6 `getUser(userId)`
 
 [Get User](https://developer.nulab.com/docs/backlog/api/2/get-user/) →
 `{ userId: <host>:<id>, userName: user.userId ?? user.name, fullName: user.name, isBot: id === botUserId, email: user.mailAddress ?? undefined }`;
@@ -697,7 +680,6 @@ spends:
 | `fetchMessages` | `getIssueComments` / `getPullRequestComments`; `getIssue` / `getPullRequest` for the root | read |
 | `fetchMessage`, `fetchThread`, `fetchSubject` | `getIssueComment`, `getIssue`, `getPullRequest`, `getPullRequestComments`; `getGitRepository` on a name-cache miss | read |
 | `fetchChannelInfo` | `getProject` | read |
-| `listThreads` | `getIssues` | **search** |
 | `getUser` | `getUser` | read |
 | `fetchData` | `getIssueAttachment` / `getPullRequestAttachment`; `getPullRequestAttachments` to resolve an id by name | read |
 
@@ -710,8 +692,8 @@ The adapter neither classifies requests into these limits nor tracks them
 Every request, the adapter's and a consumer's through `client()`, goes through
 the `fetch` injected into the client:
 
-- **Credentials** are resolved per request and sent as the `Backlog-API-Key`
-  or `Authorization: Bearer` header
+- **The API key** is resolved per request and sent as the `Backlog-API-Key`
+  header
   ([Authentication](https://developer.nulab.com/docs/backlog/auth/)), never as
   the `apiKey` query parameter. A resolved value the header refuses (CR/LF) is
   an `AuthenticationError`, and no request is made.
@@ -866,7 +848,7 @@ evidence for a measured reason is in the rules file named.
 | D10 | Types 1–4, 14 and 18–20 are processed and the rest ignored; `allEvent` is never registered | Only issue and pull-request activity maps to a thread. Type 17 carries the original comment under the id already dispatched, and dedupe holds only for `dedupeTtlMs`, so a recipient added later would redeliver the same message (`backlog-webhook-facts.md`). The accepted cost: adding the bot as a recipient to an existing comment is never a mention. | `allEvent`; dispatching 17. |
 | D11 | Uploads in two steps; downloads through the client; `rehydrateAttachment` from the API URL | A Backlog attachment needs authentication, and a URL is the only handle that survives a queue. | Public URLs (none exist); `fetchMetadata` blobs. |
 | D12 | Root and update messages cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Editing what the bot posted does not extend to rewriting a person's issue, and an update has no resource. | `editMessage(:r)` as Update Issue. |
-| D13 | `listThreads` keeps Backlog's order and filters nothing | Sorting or filtering in the adapter would hide the search-limit cost. | "Open issues first". |
+| D13 | Superseded: `listThreads` is not implemented | No consumer needs it: the core never calls it to route, no example uses it, and `@chat-adapter/github` has none. It spent the **search** limit, yet it had to be tested and kept. | `listThreads` over Get Issue List with an offset cursor, in Backlog's order and unfiltered (built and removed); "open issues first"; pull requests interleaved or listed alone (D-PR7). |
 | D14 | Superseded by D32. The formatting rule is cached per project for the process's lifetime; synchronous members read only the cache | A third of the projects on a measured space use notation (`backlog-api-facts.md`), and the setting rarely changes. | A TTL; `fetchChannelInfo` rewriting the cache (built and removed); Markdown only. |
 | D15 | `chat` peer `^4.40.0`, `@chat-adapter/shared` `^4.40.0`, `backlog-js` `^0.20.1`, `engines.node >=20`; the package's own semver from `0.1.0` | 4.40.0 is the contract verified; a caret range spares a consumer on a later minor a second core. | Exact pins; tracking `chat`'s version line. |
 | D18 | No `processMessageUpdated` | A comment edit emits no webhook (`backlog-webhook-facts.md`). | Polling for edits. |
@@ -882,13 +864,14 @@ evidence for a measured reason is in the rules file named.
 | D30 | No webhook body-size limit of the adapter's own, and no 413 | Hosting platforms already cap request bodies, and no consumer needed a second, configurable cap (maintainer decision, 2026-09-27). | A `maxWebhookBodyBytes` option with a 413. |
 | D31 | `deleteMessage` on an issue comment with a non-empty `changeLog` throws `UNSUPPORTED_OPERATION`, after one Get Comment | Backlog answers 200 but keeps any comment that records a change, emptying its content, and keeps an attached file on the issue (`backlog-api-facts.md`); resolving would fabricate a deletion, as in D-PR3. | Sending Delete Comment and resolving; refusing only a comment that added an attachment. |
 | D32 | Markdown (GFM) only: the project's `textFormattingRule` is not read, and a project using Backlog notation is not supported | Notation projects exist (`backlog-api-facts.md`), but no consumer has asked for them, and the converter built for them covered only the common constructs: no `\` escaping (#92), inline code and table alignment dropped, several macros left unconverted, heading and list rules that disagreed between directions (#94), one input in 31 not surviving a round trip. Backlog's Markdown is GFM, which `chat` already parses and prints (maintainer decision, 2026-09-27). | Keeping the partial notation support; adding notation's `\` escape to it (#92); warning on a notation project (a Get Project per project for a message nobody asked for). |
+| D33 | The credential is an API key, as a string or a resolver; there is no OAuth access token | A Backlog bot authenticates with its own key, and nothing in the examples, the quick start or the smoke test used OAuth. Refreshing a token was the consumer's job anyway. One credential removes the pair-wise environment fallback, the exactly-one rule and a second header. | An OAuth access token beside the key, sent as `Authorization: Bearer` (built and removed: no consumer used it, and token refresh was the consumer's anyway). |
 | D-PR1 | A pull-request thread's channel is its project | Webhooks carry `project.id`, and a project holds both kinds of thread. | The repository as channel. |
 | D-PR2 | The kind is explicit in every id, as one nested `BacklogSubjectRef` | Issues and pull requests have different endpoint families, coordinates and comment id sequences (`backlog-pull-request-facts.md`). | A flat optional-field shape; issues as the unmarked default. |
 | D-PR3 | `deleteMessage` on a pull-request thread throws `UNSUPPORTED_OPERATION` before any call | The endpoint does not exist (`backlog-pull-request-facts.md`); a `ValidationError` would blame a correct call; success would be fabricated. | `ValidationError`; a no-op; omitting `deleteMessage` (it is required). |
 | D-PR4 | No option selecting kinds | The webhook subscription already is that switch. | A `subjects` config. |
 | D-PR5 | Type 21 is ignored and not registered | It was never observed: merge and close arrive as type 19, and nothing deletes a pull request (`backlog-pull-request-facts.md`). | Dispatching a deletion on 21. |
 | D-PR6 | A pull request linked to an issue is its own thread | The link can change, and routing by it would move a thread. | Routing into the linked issue's thread. |
-| D-PR7 | `listThreads` lists issues only | A pull-request list is per repository, a coordinate a channel id lacks. | Interleaving every repository's pull requests; listing pull requests only. |
+| D-PR7 | Superseded: `listThreads` is not implemented (D13) | A pull-request list is per repository, a coordinate a channel id lacks, so the one member that listed issues only has gone with it. | `listThreads` listing issues only (built and removed); interleaving every repository's pull requests; listing pull requests only. |
 | D-PR8 | `fetchSubject().type` is `"pull_request"` | The `@chat-adapter/github` convention bot authors already branch on. | `"pullRequest"`. |
 | D-PR9 | The root part is `r` for both kinds | A kind-named tag would mislead on the other kind. | `i`; no tag. |
 | D-PR10 | A pull-request comment's attachment resolves its id by name, the newest match winning, when read | Neither the webhook nor REST carries its id (`backlog-pull-request-facts.md`). | No `fetchData`; one list call per comment. |
