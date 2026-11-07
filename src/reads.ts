@@ -85,7 +85,6 @@ export function authorOf(
   };
 }
 
-/** Everything a `Message` needs beyond the record it is built from. */
 export interface MessageBuilders {
   host: string;
   projectId: number;

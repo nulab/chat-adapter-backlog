@@ -20,7 +20,6 @@ export interface BacklogApiErrorDetail {
   url?: string;
 }
 
-/** One entry of a Backlog error body, per https://developer.nulab.com/docs/backlog/error-response/. */
 export interface BacklogErrorBodyEntry {
   message: string;
   code: number;
@@ -29,11 +28,8 @@ export interface BacklogErrorBodyEntry {
 
 export interface MapBacklogErrorInput {
   status?: number;
-  /** The first entry of `errors[]`, when the body parsed as the documented envelope. */
   bodyError?: BacklogErrorBodyEntry;
-  /** The request URL with its query string already stripped. */
   url?: string;
-  /** Seconds to report on a rate-limit error that gives up without retrying. */
   retryAfterSeconds?: number;
 }
 

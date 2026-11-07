@@ -11,10 +11,6 @@ import type {
 import type { Backlog, Option } from 'backlog-js';
 import type { Attachment } from 'chat';
 
-/**
- * A thread's root as data: everything `reads.ts` needs, read once, so no
- * caller asks the client about it again.
- */
 export interface SubjectRoot {
   title: string;
   body: string;
@@ -22,7 +18,6 @@ export interface SubjectRoot {
   assignee: BacklogUser | null;
   createdUser: BacklogUser;
   created: string;
-  /** The root message's `raw`. */
   raw: BacklogRawMessage;
   channelName: string;
   threadMetadata: Record<string, unknown>;

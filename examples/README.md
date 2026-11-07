@@ -57,8 +57,8 @@ Two things people get wrong here, both worth stating twice:
 
 - `BACKLOG_BOT_USER_ID` is the **numeric** `id`, not the login name. The
   adapter uses it to recognise its own activity, so a wrong value means the bot
-  answers itself. Set it: left out, every cold start spends a request reading
-  it again.
+  answers itself. Set it, with `BACKLOG_BOT_USER_NAME`: the adapter refuses to
+  start without both.
 - The bot needs permission to comment, and — for the examples that reassign an
   issue — to update issues in the project.
 

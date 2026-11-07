@@ -1,6 +1,6 @@
 # `@nulab/chat-adapter-backlog` — adapter specification
 
-What a consumer of the Backlog adapter for Chat SDK (`chat@4.40.0`) can
+What a consumer of the Backlog adapter for Chat SDK (`chat@4.41.0`) can
 observe, and the decisions that shaped it (§12). The tests are written from
 this document; when code and spec disagree, one of them is wrong. Code cites a
 decision by its id (`D23`), never by section number.
@@ -12,7 +12,7 @@ adapter does. The measurements, with dates and payload excerpts, are in
 Backlog claim cites a [developer.nulab.com](https://developer.nulab.com/docs/backlog/)
 page.
 
-Conventions: "the core" is the `Chat` class in `chat@4.40.0`; "the client" is
+Conventions: "the core" is the `Chat` class in `chat@4.41.0`; "the client" is
 the adapter's `backlog-js` client (§8); "the space" is the one Backlog space an
 adapter is configured for. `MUST` / `MUST NOT` are requirements.
 
@@ -251,7 +251,7 @@ Every error is one of `@chat-adapter/shared`'s — `ValidationError`,
 
 ## 4. Adapter contract coverage
 
-`Adapter<BacklogThreadId, BacklogRawMessage>` in `chat@4.40.0` has 17 required
+`Adapter<BacklogThreadId, BacklogRawMessage>` in `chat@4.41.0` has 17 required
 and 27 optional members. "Core calls it" names the runtime call site; "never"
 means only a consumer or the test kit calls it. Every member accepts an issue
 thread or a pull-request thread and behaves the same for both unless its row
@@ -849,7 +849,7 @@ evidence for a measured reason is in the rules file named.
 | D12 | Root and update messages cannot be edited, deleted or starred; `fetchMessage(:u:)` is `null` | Editing what the bot posted does not extend to rewriting a person's issue, and an update has no resource. | `editMessage(:r)` as Update Issue. |
 | D13 | Superseded: `listThreads` is not implemented | No consumer needs it: the core never calls it to route, no example uses it, and `@chat-adapter/github` has none. It spent the **search** limit, yet it had to be tested and kept. | `listThreads` over Get Issue List with an offset cursor, in Backlog's order and unfiltered (built and removed); "open issues first"; pull requests interleaved or listed alone (D-PR7). |
 | D14 | Superseded by D32. The formatting rule is cached per project for the process's lifetime; synchronous members read only the cache | A third of the projects on a measured space use notation (`backlog-api-facts.md`), and the setting rarely changes. | A TTL; `fetchChannelInfo` rewriting the cache (built and removed); Markdown only. |
-| D15 | `chat` peer `^4.40.0`, `@chat-adapter/shared` `^4.40.0`, `backlog-js` `^0.20.1`, `engines.node >=20`; the package's own semver from `0.1.0` | 4.40.0 is the contract verified; a caret range spares a consumer on a later minor a second core. | Exact pins; tracking `chat`'s version line. |
+| D15 | `chat` peer `^4.41.0`, `@chat-adapter/shared` `^4.41.0`, `backlog-js` `^0.20.1`, `engines.node >=20`; the package's own semver from `0.1.0` | 4.41.0 is the contract verified; a caret range spares a consumer on a later minor a second core. | Exact pins; tracking `chat`'s version line. |
 | D18 | No `processMessageUpdated` | A comment edit emits no webhook (`backlog-webhook-facts.md`). | Polling for edits. |
 | D19 | Every authentic delivery is taken to be from the configured space | No body field identifies a space, and `projectKey` changes on a rename (`backlog-webhook-facts.md`). | Cross-checking `projectKey` (drops events after a rename). |
 | D22 | A type 14 fans out to one message per `content.link[]` entry, always; its `notifications[]` is carried whole | Each entry is a real comment `fetchMessages` returns, so ignoring 14 loses changes, and leaving it out of the subscription is the switch. An entry of `notifications[]` names no issue, so pairing by order would rest on nothing Backlog documents (`backlog-webhook-facts.md`). | Ignoring 14; a config flag; one summary message; capping the batch; a single-entry batch as a type 2; pairing `notifications[i]` with `link[i]`; dropping `notifications` from `raw.payload`. |

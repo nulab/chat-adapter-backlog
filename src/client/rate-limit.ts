@@ -22,10 +22,8 @@ function finiteHeaderNumber(header: string | null): number | undefined {
 }
 
 export interface RetryDecision {
-  /** `true` when the caller should wait `waitMs` and retry the same request. */
   shouldRetry: boolean;
   waitMs: number;
-  /** Seconds to report on `AdapterRateLimitError` when `shouldRetry` is `false`. */
   retryAfterSeconds: number;
   /**
    * Returned rather than re-read from the response by the caller so the

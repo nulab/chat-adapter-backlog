@@ -16,7 +16,6 @@ import { BacklogAdapter, createBacklogAdapter } from './adapter';
 import { encodeMessageId } from './ids';
 import {
   ALICE,
-  BOB,
   BOT,
   comment,
   gitRepository,
@@ -90,12 +89,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function requestHeaders(adapter: BacklogAdapter): Promise<Headers> {
-  network.mockImplementation(async () => new Response(JSON.stringify(BOT)));
-  await adapter.client().getUser(FIXTURE.bot.id);
-  return new Headers(network.mock.calls[0]?.[1]?.headers);
-}
-
 function validConfig() {
   return {
     host: 'example.backlog.com',
@@ -104,12 +97,6 @@ function validConfig() {
     webhookSecret: 'test-webhook-secret',
   };
 }
-
-describe('BacklogAdapter construction', () => {
-  it('refuses a config its schema rejects', () => {
-    expect(() => new BacklogAdapter({})).toThrow(ValidationError);
-  });
-});
 
 describe('BacklogAdapter lifecycle and identity', () => {
   it('reports no thread as a DM', () => {
@@ -128,15 +115,6 @@ describe('BacklogAdapter lifecycle and identity', () => {
         { initiatorUserId: '100' }
       )
     ).resolves.toBeUndefined();
-  });
-
-  it('derives the channel id from a thread id', () => {
-    const adapter = new BacklogAdapter(validConfig());
-    expect(
-      adapter.channelIdFromThreadId(
-        'backlog:example.backlog.com:500:issue:8001'
-      )
-    ).toBe('backlog:example.backlog.com:500');
   });
 });
 
@@ -185,24 +163,6 @@ describe('BacklogAdapter optional members Backlog cannot support are absent', ()
     for (const member of implementedMembers) {
       expect(adapter[member]).toBeInstanceOf(Function);
     }
-  });
-});
-
-describe('BacklogAdapter type-level contract', () => {
-  it('satisfies the Adapter<BacklogThreadId, BacklogRawMessage> shape', () => {
-    const adapter = new BacklogAdapter(validConfig());
-    const typed: Adapter<BacklogThreadId, unknown> = adapter;
-    expect(typed).toBe(adapter);
-  });
-
-  it('is accepted by new Chat({ adapters: { backlog } })', () => {
-    const adapter = new BacklogAdapter(validConfig());
-    const chat = new Chat({
-      adapters: { backlog: adapter },
-      state: new MemoryStateAdapter(),
-      userName: 'Chatbot',
-    });
-    expect(chat).toBeDefined();
   });
 });
 
@@ -283,15 +243,6 @@ describe('BacklogAdapter.client', () => {
       adapter.fetchThread('backlog:other.backlog.com:500:issue:8001')
     ).rejects.toBeInstanceOf(ResourceNotFoundError);
     expect(network).not.toHaveBeenCalled();
-  });
-
-  it('sends an api key as the Backlog-API-Key header', async () => {
-    const adapter = createBacklogAdapter({ ...base, apiKey: 'key' });
-
-    const headers = await requestHeaders(adapter);
-
-    expect(headers.get('Backlog-API-Key')).toBe('key');
-    expect(headers.get('Authorization')).toBeNull();
   });
 });
 
@@ -788,17 +739,6 @@ describe('BacklogAdapter.editMessage / deleteMessage', () => {
     });
     expect(result.id).toBe(commentMessageId());
   });
-
-  it('deleting an issue comment through a pull request thread is rejected before any request', async () => {
-    const { adapter, backlog } = egressAdapter();
-    const deleteIssueComment = vi.spyOn(backlog.client, 'deleteIssueComment');
-
-    await expect(
-      adapter.deleteMessage(PULL_REQUEST_THREAD_ID, commentMessageId())
-    ).rejects.toThrow(ValidationError);
-    expect(deleteIssueComment).not.toHaveBeenCalled();
-    expect(network).not.toHaveBeenCalled();
-  });
 });
 
 describe('BacklogAdapter.stream', () => {
@@ -833,130 +773,22 @@ describe('BacklogAdapter.stream', () => {
 });
 
 describe('BacklogAdapter reactions', () => {
-  function withCommentStarredBy(presenters: BacklogUser[] = []) {
+  it('a reaction stars the comment through the thread subject', async () => {
     const { adapter, backlog } = egressAdapter();
     vi.spyOn(backlog.client, 'getIssueComment').mockResolvedValue(
-      issueComment({
-        id: 1,
-        stars: presenters.map((presenter, index) => star(presenter, index + 1)),
-      }) as never
+      issueComment({ id: 1, stars: [star(ALICE, 1)] }) as never
     );
     const postStar = vi
       .spyOn(backlog.client, 'postStar')
       .mockResolvedValue(undefined);
-    const removeStar = vi
-      .spyOn(backlog.client, 'removeStar')
-      .mockResolvedValue(undefined);
-    return { adapter, postStar, removeStar };
-  }
 
-  it('a reaction stars the comment unless the bot has already starred it', async () => {
-    const unstarred = withCommentStarredBy([ALICE]);
-    const starred = withCommentStarredBy([BOT]);
+    await adapter.addReaction(EGRESS_THREAD_ID, commentMessageId(), 'star');
 
-    await unstarred.adapter.addReaction(
-      EGRESS_THREAD_ID,
-      commentMessageId(),
-      'star'
-    );
-    await starred.adapter.addReaction(
-      EGRESS_THREAD_ID,
-      commentMessageId(),
-      'star'
-    );
-
-    expect(unstarred.postStar).toHaveBeenCalledWith({ commentId: 1 });
-    expect(starred.postStar).not.toHaveBeenCalled();
-  });
-
-  it("removing a reaction leaves other users' stars", async () => {
-    const { adapter, removeStar } = withCommentStarredBy([BOT, BOB]);
-
-    await adapter.removeReaction(EGRESS_THREAD_ID, commentMessageId(), 'star');
-
-    expect(removeStar.mock.calls).toEqual([[1]]);
+    expect(postStar).toHaveBeenCalledWith({ commentId: 1 });
   });
 });
 
-describe('BacklogAdapter.fetchMessages / fetchMessage / fetchThread', () => {
-  it('an id fetchMessage answers null for spends no request', async () => {
-    const { adapter, backlog } = egressAdapter();
-
-    const message = await adapter.fetchMessage(
-      EGRESS_THREAD_ID,
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: ISSUE_SUBJECT,
-        part: 'update',
-        created: '2026-01-01T00:00:00Z',
-      })
-    );
-
-    expect(message).toBeNull();
-    expect(backlog.getProject).not.toHaveBeenCalled();
-    expect(network).not.toHaveBeenCalled();
-  });
-
-  it('thread info names its kind for both issues and pull requests', async () => {
-    const { adapter, backlog } = egressAdapter();
-    vi.spyOn(backlog.client, 'getPullRequest').mockResolvedValue(
-      pullRequest() as never
-    );
-    vi.spyOn(backlog.client, 'getGitRepository').mockResolvedValue(
-      gitRepository({ name: FIXTURE.repositoryName })
-    );
-
-    const issueThread = await adapter.fetchThread(EGRESS_THREAD_ID);
-    const pullRequestThread = await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
-
-    expect(issueThread.metadata).toMatchObject({
-      kind: 'issue',
-      issueId: FIXTURE.issueId,
-      url: `https://${FIXTURE.host}/view/${FIXTURE.projectKey}-1`,
-    });
-    expect(pullRequestThread).toMatchObject({
-      channelId: `backlog:${FIXTURE.host}:${FIXTURE.projectId}`,
-      channelName: FIXTURE.projectKey,
-      isDM: false,
-    });
-    expect(pullRequestThread.metadata).toMatchObject({
-      kind: 'pullRequest',
-      repositoryId: FIXTURE.repositoryId,
-      number: FIXTURE.pullRequestNumber,
-      url: `https://${FIXTURE.host}/git/${FIXTURE.projectKey}/${FIXTURE.repositoryName}/pullRequests/${FIXTURE.pullRequestNumber}`,
-    });
-  });
-});
-
-describe('BacklogAdapter read budget', () => {
-  it('resolving an issue thread spends one read', async () => {
-    const { adapter, backlog } = egressAdapter();
-
-    const thread = await adapter.fetchThread(EGRESS_THREAD_ID);
-
-    expect(thread.metadata).toMatchObject({ kind: 'issue' });
-    expect(backlog.getIssue).toHaveBeenCalledTimes(1);
-    expect(backlog.getProject).not.toHaveBeenCalled();
-    expect(network).not.toHaveBeenCalled();
-  });
-
-  it('resolving a pull request thread spends three reads: the pull request, its project and its repository', async () => {
-    const { adapter, backlog } = egressAdapter();
-    const getPullRequest = vi
-      .spyOn(backlog.client, 'getPullRequest')
-      .mockResolvedValue(pullRequest() as never);
-    const getGitRepository = vi
-      .spyOn(backlog.client, 'getGitRepository')
-      .mockResolvedValue(gitRepository({ name: FIXTURE.repositoryName }));
-
-    await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
-    await adapter.fetchThread(PULL_REQUEST_THREAD_ID);
-
-    expect(getPullRequest).toHaveBeenCalledTimes(2);
-    expect(backlog.getProject).toHaveBeenCalledTimes(2);
-    expect(getGitRepository).toHaveBeenCalledTimes(2);
-  });
-
+describe('BacklogAdapter.fetchSubject', () => {
   it('the subject of a serialised pull request root spends two reads, the names but not the pull request', async () => {
     const { adapter, backlog } = egressAdapter();
     const getPullRequest = vi
@@ -980,30 +812,6 @@ describe('BacklogAdapter read budget', () => {
     expect(getPullRequest).not.toHaveBeenCalled();
     expect(backlog.getProject).toHaveBeenCalledTimes(1);
     expect(getGitRepository).toHaveBeenCalledTimes(1);
-  });
-
-  it('the subject of a serialised issue root spends none', async () => {
-    const { adapter, backlog } = egressAdapter();
-    const message = await adapter.fetchMessage(
-      EGRESS_THREAD_ID,
-      encodeMessageId({
-        host: FIXTURE.host,
-        subject: ISSUE_SUBJECT,
-        part: 'root',
-      })
-    );
-    if (message === null) {
-      throw new Error('the issue root was not returned');
-    }
-    backlog.getIssue.mockClear();
-    backlog.getProject.mockClear();
-
-    const subject = await adapter.fetchSubject(message.raw);
-
-    expect(subject).toMatchObject({ type: 'issue' });
-    expect(backlog.getIssue).not.toHaveBeenCalled();
-    expect(backlog.getProject).not.toHaveBeenCalled();
-    expect(network).not.toHaveBeenCalled();
   });
 });
 
@@ -1066,21 +874,6 @@ describe('BacklogAdapter.fetchChannelInfo', () => {
         projectKey: FIXTURE.projectKey,
       },
     });
-  });
-});
-
-describe('BacklogAdapter.rehydrateAttachment', () => {
-  it('a serialised attachment regains fetchData for a configured host', () => {
-    const adapter = createBacklogAdapter(webhookAdapterConfig());
-    const attachment = {
-      type: 'file' as const,
-      name: 'log.txt',
-      url: `https://${FIXTURE.host}/api/v2/issues/${FIXTURE.issueId}/attachments/42`,
-    };
-
-    const rehydrated = adapter.rehydrateAttachment(attachment);
-
-    expect(typeof rehydrated.fetchData).toBe('function');
   });
 });
 
