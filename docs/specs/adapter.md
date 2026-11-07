@@ -271,7 +271,7 @@ says otherwise.
 | --- | --- | --- | --- |
 | `name` | implemented | `"backlog"`. The key in `new Chat({ adapters: { backlog } })` MUST equal it (thread-id prefix routing). | dedupe key, `Thread.toJSON`, logs |
 | `userName` | implemented | §3.3. | fallback mention regex, `SentMessage.author` |
-| `initialize(chat)` | implemented | Stores the `ChatInstance`, swaps the logger for `chat.getLogger("backlog")`, and resolves the bot identity (§3.2). Never rejects. | first webhook / `chat.initialize()` |
+| `initialize(chat)` | implemented | Stores the `ChatInstance`, swaps the logger for `chat.getLogger("backlog")`, and makes no request (§3.2). | first webhook / `chat.initialize()` |
 | `handleWebhook(request, options?)` | implemented | §5. | `chat.webhooks.backlog(req)` |
 | `encodeThreadId` / `decodeThreadId` | implemented | §2; exact round trip of `{ host, projectId, subject }`. | never |
 | `channelIdFromThreadId` | implemented | The first three segments, `backlog:<host>:<projectId>`. | `createThread`, lock key, history |
@@ -326,8 +326,8 @@ secret from a wrong one (D2).
 | 4 | `type ∈ {1, 2, 3, 4, 14, 18, 19, 20}` (D10) | 200 `Ignored` | info `webhook ignored` `{host, type}` |
 | 5 | The schema for that type (§5.2) | 400 `Invalid payload` | as row 3 |
 | 6 | `initialize()` has run | 503 `Adapter not initialized` | error `webhook rejected: adapter not initialized` |
-| 8 | `createdUser.id` is not the bot | 200 `OK`, nothing dispatched | debug `self message skipped` |
-| 9 | — | 200 `OK`, returned **before** processing completes | — |
+| 7 | `createdUser.id` is not the bot | 200 `OK`, nothing dispatched | debug `self message skipped` |
+| 8 | — | 200 `OK`, returned **before** processing completes | — |
 
 A 5xx is the only answer that could make Backlog redeliver; whether it does is
 undocumented and was not observed (§5.5). The request method is not checked:
@@ -706,7 +706,6 @@ spends:
 
 | Member | Calls | Limit |
 | --- | --- | --- |
-| `initialize`, `handleWebhook` | `getMyself` when the bot id is not configured (D23) | read |
 | `fetchThread`, `fetchSubject` on a pull request | `getProject`, once per project per process (§7.3) | read |
 | `postMessage` | `postSpaceAttachment` per file; `postIssueComments` / `postPullRequestComments` | update |
 | `editMessage` | `patchIssueComment` / `patchPullRequestComments` | update |
@@ -829,8 +828,7 @@ A single-column table's dash row turns the line above into a setext heading.
 - `debug` for per-request flow (a skipped self message); `info` for ignored
   activity types; `warn` for rejected webhooks, a name lookup that left a URL
   out and the two rate-limit outcomes; `error` for processing
-  failures after the 200 (their only carrier), a webhook before `initialize`,
-  and one whose bot identity could not be learned.
+  failures after the 200 (their only carrier), and a webhook before `initialize`.
 - Structured fields only — `host`, `projectId`, `repositoryId`, `type`,
   `threadId`, `issuePaths`, `remaining`, `resetAt`, `waitMs`, `attempt`, and
   `error` as the caught error's message. Never a body, comment text, token,

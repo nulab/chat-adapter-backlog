@@ -92,7 +92,7 @@ await adapter.initialize({ getLogger: () => silentLogger });
 assert.equal(
   networkAttempts,
   0,
-  'initialize reached the network although botUserId was configured'
+  'initialize reached the network'
 );
 
 for (const variable of ['BACKLOG_BOT_USER_NAME', 'BACKLOG_BOT_USER_ID']) {
@@ -100,7 +100,10 @@ for (const variable of ['BACKLOG_BOT_USER_NAME', 'BACKLOG_BOT_USER_ID']) {
   delete process.env[variable];
   assert.throws(
     () => adapterModule.createBacklogAdapter(),
-    (error) => error.name === 'ValidationError' && error.message.includes(variable),
+    (error) =>
+      error.name === 'ValidationError' &&
+      error.message.includes('required') &&
+      error.message.includes(variable),
     `construction accepted a missing ${variable}`
   );
   assert.equal(networkAttempts, 0, 'construction reached the network');

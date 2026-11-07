@@ -75,8 +75,8 @@ only when the option is missing; an explicit empty string is a `ValidationError`
 | `BACKLOG_HOST`           | yes                      | Space host without a scheme, e.g. `example.backlog.com`.                   |
 | `BACKLOG_API_KEY`        | one of the two           | Personal API key of the bot user.                                          |
 | `BACKLOG_ACCESS_TOKEN`   | one of the two           | OAuth 2.0 access token, instead of a key.                                  |
-| `BACKLOG_BOT_USER_ID`    | yes                      | Numeric id of the bot user. |
-| `BACKLOG_BOT_USER_NAME`  | yes                      | The bot's display name, exposed as `adapter.userName`.                   |
+| `BACKLOG_BOT_USER_ID`    | yes                      | Numeric id of the bot user.                                                |
+| `BACKLOG_BOT_USER_NAME`  | yes                      | The bot's display name, exposed as `adapter.userName`.                     |
 | `BACKLOG_WEBHOOK_SECRET` | unless a verifier is set | Secret carried in the webhook URL's `token` parameter; at least 16 bytes.  |
 
 ### Options
@@ -89,8 +89,8 @@ createBacklogAdapter({ host, apiKey, botUserId, botUserName, webhookSecret });
 | ------------------------ | --------------------------------------------- | ------------------------ | ------------------------------------------------------------------------ |
 | `host`                   | `string`                                      | `BACKLOG_HOST`           | Spaces also live on `backlog.jp` and `backlogtool.com`.                  |
 | `apiKey` / `accessToken` | `string \| (() => string \| Promise<string>)` | `BACKLOG_API_KEY` / `BACKLOG_ACCESS_TOKEN` | Exactly one. A function is called on every request, so a token can rotate. |
-| `botUserId`              | `number`                                      | `BACKLOG_BOT_USER_ID` | Required. Recognises the bot's own comments and assignment to it.                  |
-| `botUserName`            | `string`                                      | `BACKLOG_BOT_USER_NAME` | Required. Exposed as `adapter.userName`. |
+| `botUserId`              | `number`                                      | `BACKLOG_BOT_USER_ID`    | Required. Recognises the bot's own comments and assignment to it.        |
+| `botUserName`            | `string`                                      | `BACKLOG_BOT_USER_NAME`  | Required. Exposed as `adapter.userName`.                                 |
 | `webhookSecret`          | `string`                                      | `BACKLOG_WEBHOOK_SECRET` | Required unless `webhookVerifier` is set.                                |
 | `webhookVerifier`        | `(request, rawBody) => unknown`               | —                        | Replaces the secret check; a truthy result accepts the delivery.         |
 | `logger`                 | `Logger`                                      | `ConsoleLogger("info")`  | Replaced by `chat.getLogger("backlog")` on `initialize`.                 |
@@ -100,10 +100,11 @@ its own webhook URL.
 
 Both `botUserId` and `botUserName` must be configured, directly or through
 `BACKLOG_BOT_USER_ID` and `BACKLOG_BOT_USER_NAME`. Find the numeric `id` and
-`name` once with `GET /users/myself` using the bot's API key, for example:
+`name` once with `GET /users/myself` using the bot's API key, and copy the
+numeric `id`, not the login `userId`:
 
 ```sh
-curl "https://<host>/api/v2/users/myself?apiKey=…"
+curl -H "Backlog-API-Key: $BACKLOG_API_KEY" https://$BACKLOG_HOST/api/v2/users/myself
 ```
 
 ## Webhook setup

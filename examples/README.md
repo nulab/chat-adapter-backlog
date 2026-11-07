@@ -48,7 +48,10 @@ Vercel project. Do this once; an example's own README picks up from here.
 
 Follow **Webhook setup** in the [root README](../README.md#webhook-setup):
 create a bot user, add it to the project, issue an API key as that user, and
-find its numeric id using the repository README Configuration instructions.
+find its numeric id (the `id`, not the login `userId`) with
+`curl -H "Backlog-API-Key: $BACKLOG_API_KEY" https://$BACKLOG_HOST/api/v2/users/myself`,
+as described under
+[Configuration](https://github.com/nulab/chat-adapter-backlog/blob/main/README.md#configuration).
 
 Two things people get wrong here, both worth stating twice:
 

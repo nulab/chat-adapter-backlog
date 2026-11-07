@@ -44,7 +44,6 @@ Each endpoint's page is `https://developer.nulab.com/docs/backlog/api/2/<slug>/`
 | `GET /projects/:projectIdOrKey/users` | read | `getProjectUsers(idOrKey)`; no `excludeGroupMembers` param |
 | `GET /projects/:projectIdOrKey/statuses` | read | `getProjectStatuses(idOrKey)` |
 | `GET /users/:userId` | read | `getUser(userId)` |
-| `GET /users/myself` | read | `getMyself()` |
 | `GET /users/:userId/icon` | **icon** | `getUserIcon(userId)` → `FileData` |
 | `GET /projects/:projectIdOrKey/webhooks[/:webhookId]` | read | `getWebhooks`, `getWebhook` |
 | `POST`/`PATCH`/`DELETE /projects/:projectIdOrKey/webhooks[/:webhookId]` | update | `postWebhook`, `patchWebhook`, `deleteWebhook` |

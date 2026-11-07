@@ -57,8 +57,8 @@ const configured = Boolean(
   host &&
   apiKey &&
   liveIssueId &&
-  process.env.BACKLOG_BOT_USER_ID &&
-  process.env.BACKLOG_BOT_USER_NAME
+  process.env['BACKLOG_BOT_USER_ID'] &&
+  process.env['BACKLOG_BOT_USER_NAME']
 );
 
 function parsePullRequestCoordinates(

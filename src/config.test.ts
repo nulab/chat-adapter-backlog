@@ -228,7 +228,9 @@ describe('parseConfig', () => {
     ['botUserId', 'BACKLOG_BOT_USER_ID'],
     ['botUserName', 'BACKLOG_BOT_USER_NAME'],
   ] as const)('requires %s from config or %s', (field, variable) => {
-    expect(rejection(without(field))).toContain(variable);
+    const message = rejection(without(field));
+    expect(message).toContain('required');
+    expect(message).toContain(variable);
   });
 
   it.each([
@@ -238,7 +240,9 @@ describe('parseConfig', () => {
     'rejects a blank %s variable copied from .env.example',
     (field, variable) => {
       setEnv({ [variable]: '' });
-      expect(rejection(without(field))).toContain(variable);
+      const message = rejection(without(field));
+      expect(message).toContain('required');
+      expect(message).toContain(variable);
     }
   );
 

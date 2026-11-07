@@ -21,7 +21,6 @@ import {
  */
 const env = z
   .object({
-    BACKLOG_BOT_USER_NAME: z.string().min(1),
     BUG_ISSUE_TYPE_NAME: z.string().min(1).default('Bug'),
     DONE_STATUS_ID: z.coerce.number().int().positive().default(4),
     INTAKE_CONTACT_USER_ID: z.coerce.number().int().positive(),
@@ -32,7 +31,7 @@ const env = z
 const backlog = createBacklogAdapter();
 
 export const chat = new Chat({
-  userName: env.BACKLOG_BOT_USER_NAME,
+  userName: backlog.userName,
   adapters: { backlog },
   state: createMemoryState(),
 });

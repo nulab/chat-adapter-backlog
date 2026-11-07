@@ -36,6 +36,9 @@ const botUserIdMessage =
   'botUserId (BACKLOG_BOT_USER_ID) must be a positive integer, at most 2^53-1';
 
 // `z.int()` stops at 2^53-1: a larger id would not survive a user id string.
+const botUserIdRequired =
+  'botUserId is required: set config.botUserId or BACKLOG_BOT_USER_ID';
+
 const botUserId = z.union(
   [
     z.int({ error: botUserIdMessage }).positive({ error: botUserIdMessage }),
@@ -45,7 +48,10 @@ const botUserId = z.union(
       .transform(Number)
       .pipe(z.int({ error: botUserIdMessage })),
   ],
-  { error: botUserIdMessage }
+  {
+    error: (issue) =>
+      issue.input === undefined ? botUserIdRequired : botUserIdMessage,
+  }
 );
 
 const configSchema = z
@@ -62,7 +68,7 @@ const configSchema = z
     apiKey: resolvable('apiKey').optional(),
     accessToken: resolvable('accessToken').optional(),
     botUserId: botUserId,
-    // Not trimmed: this is the display name Backlog wrote.
+    // Not trimmed: the core matches the display name as written.
     botUserName: z
       .string({
         error:

@@ -13,13 +13,12 @@ import {
 /**
  * Read and validated at module load, so a missing variable or a non-numeric id
  * fails the first cold start instead of sending `NaN` to Backlog on the first
- * mention. `createBacklogAdapter()` reads the same environment itself; these
- * two are the ones this file also needs by name.
+ * mention. `createBacklogAdapter()` reads the same environment itself; the bot
+ * id is the one this file also needs by name.
  */
 const env = z
   .object({
     BACKLOG_BOT_USER_ID: z.coerce.number().int().positive(),
-    BACKLOG_BOT_USER_NAME: z.string().min(1),
   })
   .parse(process.env);
 
@@ -28,7 +27,7 @@ const backlog = createBacklogAdapter();
 export const chat = new Chat({
   adapters: { backlog },
   state: createMemoryState(),
-  userName: env.BACKLOG_BOT_USER_NAME,
+  userName: backlog.userName,
 });
 
 chat.onNewMention(async (thread, message) => {
