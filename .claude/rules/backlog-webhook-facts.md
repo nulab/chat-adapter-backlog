@@ -374,8 +374,8 @@ label a user sees, and only three fields carry an id:
   `activityTypeIds[]` (Number). Role: Administrator or Project Administrator
   (https://developer.nulab.com/docs/backlog/api/2/add-webhook/). Get, List,
   Update and Delete live under the same path; Delete returns 200 with the
-  deleted object. `backlog-js` types `name` and `hookUrl` as optional although
-  the API requires them.
+  deleted object. `backlog-js` 1.0.2 still types `name` and `hookUrl` as optional in
+  `PostWebhookParams` although the API requires them (re-verified 2026-11-08).
 - Subscribing to `[1, 2, 3, 4, 14, 17]` covers every issue-related activity,
   including bulk updates and post-hoc notifications. `allEvent: true` also
   delivers wiki, file, git, pull-request and document events.
@@ -396,7 +396,7 @@ label a user sees, and only three fields carry an id:
 
 Names: https://developer.nulab.com/docs/backlog/api/2/get-recent-updates/
 (filter range `type(1-49)`; ids 27–33 undocumented). Shapes: `backlog-js`
-0.20.1 `Entity.Activity` — which is the **activity** shape. A webhook body for
+1.0.2 `Entity.Activity.Activity` (re-verified 2026-11-08) — which is the **activity** shape. A webhook body for
 1, 2, 3 or 17 additionally carries the issue snapshot (`assignee`, `status`,
 `priority`, …) and spells the links key `externalFileLinks`; see "Webhook
 versus Get Recent Updates".
