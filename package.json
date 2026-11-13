@@ -49,7 +49,7 @@
     "chat": "^4.44.0",
     "publint": "^0.3.25",
     "typescript": "^7.0.2",
-    "vite-plus": "1.5.0"
+    "vite-plus": "1.5.1"
   },
   "packageManager": "pnpm@12.18.0+sha512.9d7882d5dc82147ecfc4e062aa34834e0ad0296710a1837a1115ae012127d36b7109e321ac1598a1dd0a65597681b1e99917e12ed0d749eae91187943363beb3",
   "engines": {
